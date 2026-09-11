@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Layers,
   Sliders,
@@ -11,9 +11,13 @@ import {
   CheckCircle2,
   Lock
 } from 'lucide-react';
+import { ApiError, fetchCapabilities } from '../services/api';
 
 export const Capabilities: React.FC = () => {
-  const capabilities = [
+  const [capabilities, setCapabilities] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { let active = true; fetchCapabilities().then(items => { if (active) setCapabilities(items); }).catch((reason: unknown) => { if (active) setError(reason instanceof ApiError ? reason.message : 'Unable to load capabilities.'); }); return () => { active = false; }; }, []);
+  const _configuredCapabilities = [
     {
       id: 'full_incident_rca',
       title: 'Full Incident Root Cause Analysis',
@@ -94,6 +98,7 @@ export const Capabilities: React.FC = () => {
     },
   ];
 
+  const cards = capabilities.map((cap: any) => ({ ...cap, title: cap.name, stages: cap.skills?.length ? cap.skills : [cap.category], joinPattern: cap.requires?.connectors?.length ? `Requires ${cap.requires.connectors.join(', ')}` : 'Configured capability', orchestrator: cap.model_profile, max_steps: cap.max_steps ?? '—' }));
   return (
     <div className="view-container">
       {/* Clean & Elegant Hero Banner */}
@@ -106,8 +111,8 @@ export const Capabilities: React.FC = () => {
             Declarative root cause workflows, multi-agent pipelines, and stage-specific reasoning model profiles.
           </p>
           <div className="hero-meta-strip">
-            <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>3</b> Active Workflows
+              <span className="hero-stat-chip">
+                <span className="dot pulse" /> <b>{capabilities.length}</b> Authorized Workflows
             </span>
             <span className="hero-stat-chip">
               <b>5</b> Stage Model Profiles
@@ -129,7 +134,7 @@ export const Capabilities: React.FC = () => {
 
       {/* Simplified & Structured Capability Topologies */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%' }}>
-        {capabilities.map((cap, index) => (
+        {error ? <div className="card empty-state"><p>{error}</p><button className="btn btn-secondary" onClick={() => window.location.reload()}>Retry</button></div> : capabilities.length === 0 ? <div className="card empty-state"><p>Loading authorized capabilities…</p></div> : cards.map((cap, index) => (
           <article key={cap.id} className="card" style={{ padding: '18px 20px', height: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: '280px' }}>
@@ -155,7 +160,7 @@ export const Capabilities: React.FC = () => {
                   <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '4px' }}>
                     Execution Flow:
                   </span>
-                  {cap.stages.map((st, i) => (
+                  {cap.stages.map((st: string, i: number) => (
                     <React.Fragment key={st}>
                       <span className="capability-flow-node">
                         {st}

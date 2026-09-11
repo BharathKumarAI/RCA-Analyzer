@@ -7,14 +7,16 @@ interface SessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   principal: Principal;
-  onUpdatePrincipal: (p: Principal) => void;
+  onUpdatePrincipal?: (p: Principal) => void;
+  onSessionChanged?: () => void;
 }
 
 export const SessionModal: React.FC<SessionModalProps> = ({
   isOpen,
   onClose,
   principal,
-  onUpdatePrincipal,
+  onUpdatePrincipal: _onUpdatePrincipal,
+  onSessionChanged,
 }) => {
   const [tokenInput, setTokenInput] = useState(getSessionToken() || '');
   const [saved, setSaved] = useState(false);
@@ -23,11 +25,10 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const handleSave = () => {
     setSessionToken(tokenInput);
+    onSessionChanged?.();
     setSaved(true);
-    setTimeout(() => {
-      setSaved(false);
-      onClose();
-    }, 800);
+    setSaved(false);
+    onClose();
   };
 
   return (

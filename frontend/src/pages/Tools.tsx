@@ -31,254 +31,40 @@ import {
   Bot,
   Network,
   Share2,
-  Workflow
+  Workflow,
+  User,
 } from 'lucide-react';
 import { ToolDefinition, ScopeLevel, ConnectorCategory, IntegrationKind } from '../types/api';
+import { fetchTools } from '../services/api';
+import { CONNECTOR_TEMPLATES } from './toolsData';
 
 interface ToolsProps {
   tools: ToolDefinition[];
 }
 
-const CONNECTOR_TEMPLATES: Array<{
-  type: string;
-  name: string;
-  system_name: string;
-  category: ConnectorCategory;
-  description: string;
-  integration_kind: IntegrationKind;
-  protocol: string;
-  auth_method: string;
-  default_endpoint: string;
-  default_secret: string;
-  default_scope: ScopeLevel;
-  can_override: boolean;
-  default_config: Record<string, any>;
-  default_mcp?: ToolDefinition['mcp_config'];
-  default_a2a?: ToolDefinition['a2a_config'];
-}> = [
-  {
-    type: 'jira',
-    name: 'Jira Cloud Incident Triage',
-    system_name: 'jira',
-    category: 'Ticketing',
-    description: 'Read-only ticket ingestion, JQL polling, custom field mapping, and RCA extraction.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Bearer Token',
-    default_endpoint: 'https://atlassian.net/rest/api/3',
-    default_secret: 'JIRA_API_TOKEN',
-    default_scope: 'platform_default',
-    can_override: true,
-    default_config: {
-      polling_cron: '*/15 * * * *',
-      reporting_cron: '0 17 * * 5',
-      timezone: 'America/Chicago',
-      customfields: {
-        fix_team: 'customfield_10290',
-        environment: 'customfield_10291',
-        fix_application: 'customfield_10292',
-        severity: 'customfield_10285',
-        rca: 'customfield_10320'
-      }
-    }
-  },
-  {
-    type: 'splunk',
-    name: 'Splunk Infrastructure & Log Mining',
-    system_name: 'splunk',
-    category: 'Observability',
-    description: 'Time-bounded log querying, saved searches, event correlation, and metric anomaly extraction.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Bearer Token',
-    default_endpoint: 'https://splunk-api.prod.internal:8089',
-    default_secret: 'SPLUNK_HEC_TOKEN',
-    default_scope: 'platform_default',
-    can_override: true,
-    default_config: {
-      allowed_indexes: ['adms', 'billing', 'system', 'metrics'],
-      search_app_url: 'https://splunk-ui.prod.internal:8000/en-US/app/search/search',
-      data_sources: { metrics: true, events: true, logs: true }
-    }
-  },
-  {
-    type: 'signalfx',
-    name: 'SignalFx APM & Distributed Tracing',
-    system_name: 'signalfx',
-    category: 'Observability',
-    description: 'Distributed trace waterfall analysis, span error auto-detection, and service graphs.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Bearer Token (X-SF-Token)',
-    default_endpoint: 'https://signalfx-api.prod.internal/v2',
-    default_secret: 'SIGNALFX_API_TOKEN',
-    default_scope: 'platform_default',
-    can_override: true,
-    default_config: {
-      monitored_namespaces: ['npe-qlab01', 'npe-qlab02', 'npe-qlab03', 'plab01'],
-      data_sources: { metrics: true, events: true, traces: true, logs: true }
-    }
-  },
-  {
-    type: 'confluence',
-    name: 'Confluence Knowledge & Architecture',
-    system_name: 'confluence',
-    category: 'Knowledge & RAG',
-    description: 'Knowledge base refresh, runbook ingestion, and architecture context mapping.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Bearer Token',
-    default_endpoint: 'https://atlassian.net/wiki/rest/api',
-    default_secret: 'CONFLUENCE_API_TOKEN',
-    default_scope: 'platform_default',
-    can_override: true,
-    default_config: {
-      refresh_schedule: 'Daily at 9:00 PM CT',
-      cron: '0 21 * * *',
-      timezone: 'America/Chicago'
-    }
-  },
-  {
-    type: 'qtest',
-    name: 'qTest Test Case & Verification',
-    system_name: 'qtest',
-    category: 'Quality Assurance',
-    description: 'Test case execution results, acceptance criteria link discovery, and failure tracking.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Bearer Token',
-    default_endpoint: 'https://qtest.corp.internal/api/v3',
-    default_secret: 'QTEST_API_TOKEN',
-    default_scope: 'project_override',
-    can_override: true,
-    default_config: {
-      project_id: 'PRISM-SAG-01',
-      monitored_environments: ['QLAB01', 'QLAB02', 'QLAB03', 'QLAB06', 'PLAB01'],
-      jira_link_discovery: true
-    }
-  },
-  {
-    type: 'gitlab',
-    name: 'GitLab Source & CI/CD Pipelines',
-    system_name: 'gitlab',
-    category: 'Source & CI/CD',
-    description: 'Commit log discovery, deployment timeline inspection, and pipeline error logs.',
-    integration_kind: 'native',
-    protocol: 'HTTPS',
-    auth_method: 'Personal Access Token (PRIVATE-TOKEN)',
-    default_endpoint: 'https://gitlab.corp.internal/api/v4',
-    default_secret: 'GITLAB_PAT_TOKEN',
-    default_scope: 'project_override',
-    can_override: true,
-    default_config: {
-      projects: ['samson_core', 'customer_hub', 'consumer_rabbitmq'],
-      track_deployments: true,
-      track_pipeline_logs: true
-    }
-  },
-  {
-    type: 'oracle',
-    name: 'Oracle Samson Database Analytics',
-    system_name: 'samson',
-    category: 'Databases',
-    description: 'Direct read-only SQL querying, schema table discovery, data freshness probe.',
-    integration_kind: 'native',
-    protocol: 'Oracle Net (TNS/OCI)',
-    auth_method: 'Database Credentials (User/Password Secret)',
-    default_endpoint: 'oracle-scan.corp.internal:1521/SAMSON_SRV',
-    default_secret: 'ORACLE_SAMSON_SECRET',
-    default_scope: 'project_only',
-    can_override: true,
-    default_config: {
-      host: 'oracle-scan.corp.internal',
-      port: 1521,
-      sid: 'SAMSON01',
-      service_name: 'samson.unix.internal',
-      username: 'SAMSON_RO',
-      schema: 'SAMSON_APP',
-      default_row_limit: 500,
-      read_only_enforced: true,
-      connection_pool: { min: 2, max: 10 }
-    }
-  },
-  {
-    type: 'kubernetes',
-    name: 'Kubernetes Cluster & Pod Telemetry',
-    system_name: 'kubernetes',
-    category: 'Container Orchestration',
-    description: 'Application-level pod status, CrashLoopBackOff detection, deployment rollouts, and node quotas.',
-    integration_kind: 'native',
-    protocol: 'HTTPS (v1)',
-    auth_method: 'Kubeconfig / Service Account Token',
-    default_endpoint: 'https://k8s-cluster.corp.internal:6443',
-    default_secret: 'K8S_SERVICE_ACCOUNT_TOKEN',
-    default_scope: 'platform_default',
-    can_override: false,
-    default_config: {
-      cluster_name: 'npe-k8s-us-central1',
-      monitored_namespaces: ['npe-qlab01', 'npe-qlab02', 'npe-qlab03', 'plab01'],
-      operations: ['get_pod_status', 'get_pod_events', 'check_deployment', 'check_node_status', 'check_resource_quota']
-    }
-  },
-  {
-    type: 'mcp_generic',
-    name: 'Model Context Protocol (MCP) Server',
-    system_name: 'custom_mcp',
-    category: 'Observability',
-    description: 'Standardized Model Context Protocol server exposing tool schemas over SSE or Stdio.',
-    integration_kind: 'mcp',
-    protocol: 'MCP (SSE)',
-    auth_method: 'MCP Bearer Token',
-    default_endpoint: 'mcp://service-mcp.internal:9090',
-    default_secret: 'MCP_SERVICE_TOKEN',
-    default_scope: 'platform_default',
-    can_override: true,
-    default_config: {},
-    default_mcp: {
-      transport: 'sse',
-      tools_exposed: ['query_status', 'search_data', 'stream_events']
-    }
-  },
-  {
-    type: 'a2a_generic',
-    name: 'Agent-to-Agent (A2A) Delegation Bridge',
-    system_name: 'a2a_agent_bridge',
-    category: 'Host & Runtime Health',
-    description: 'Google ADK native AgentTool delegation or A2A REST protocol for multi-agent investigation.',
-    integration_kind: 'a2a',
-    protocol: 'ADK AgentTool',
-    auth_method: 'Mutual TLS & RS256 JWT',
-    default_endpoint: 'http://agent-service.internal:8000/a2a/v1',
-    default_secret: 'AGENT_DELEGATION_SECRET',
-    default_scope: 'project_override',
-    can_override: true,
-    default_config: {},
-    default_a2a: {
-      target_agent_id: 'specialist-investigator-agent',
-      target_capability: 'specialized_investigation',
-      delegation_protocol: 'adk_agent_tool',
-      dual_custody_approved: true,
-      content_hash: 'sha256:d189b882ac0012'
-    }
-  }
-];
-
 export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
-  // Load from localStorage if present
-  const [toolsList, setToolsList] = useState<ToolDefinition[]>(() => {
-    try {
-      const saved = localStorage.getItem('rca_connectors_config_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length >= 13) {
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore
+  const [toolsList, setToolsList] = useState<ToolDefinition[]>(initialTools);
+
+  // Sync live probe status if initialTools changes
+  React.useEffect(() => {
+    if (initialTools && initialTools.length > 0) {
+      setToolsList(prev => {
+        const base = prev;
+        return base.map(t => {
+          const live = initialTools.find(it => it.id === t.id || it.system_name === t.system_name);
+          if (live) {
+            return {
+              ...t,
+              status: live.status || t.status,
+              latency_ms: live.latency_ms || t.latency_ms,
+              last_ping: live.last_ping || t.last_ping
+            };
+          }
+          return t;
+        });
+      });
     }
-    return initialTools;
-  });
+  }, [initialTools]);
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; msg: string; latency_ms?: number } | null>(null);
@@ -293,14 +79,6 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Sync to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('rca_connectors_config_v3', JSON.stringify(toolsList));
-    } catch {
-      // ignore
-    }
-  }, [toolsList]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -309,20 +87,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
 
   const handleToggleEnabled = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    setToolsList(prev =>
-      prev.map(t => {
-        if (t.id === id) {
-          const next = !t.enabled;
-          showToast(`${t.name} is now ${next ? 'ENABLED' : 'DISABLED'}`);
-          return {
-            ...t,
-            enabled: next,
-            status: next ? 'connected' : 'disabled'
-          };
-        }
-        return t;
-      })
-    );
+    showToast(`Connector state is managed by deployment policy.`);
   };
 
   const handleTestConnection = (tool: ToolDefinition, e?: React.MouseEvent) => {
@@ -332,39 +97,36 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
 
     const isDisabled = !tool.enabled && tool.status === 'disabled';
 
-    setTimeout(() => {
+    fetchTools().then(current => {
+      setToolsList(current);
       setTestingId(null);
-      if (isDisabled) {
+      if (isDisabled || !current.find(item => item.id === tool.id)?.enabled) {
         setTestResult({
           id: tool.id,
           success: false,
           msg: `Connector disabled by deployment policy or administrative toggle.`
         });
       } else {
-        const latency = Math.floor(Math.random() * 35) + 12;
+        const currentTool = current.find(item => item.id === tool.id);
         const protocolStr = tool.type === 'mcp' ? `MCP (${tool.mcp_config?.transport || 'SSE'})` : tool.type === 'a2a' ? `A2A (${tool.a2a_config?.delegation_protocol || 'AgentTool'})` : tool.protocol || 'HTTPS';
         setTestResult({
           id: tool.id,
           success: true,
-          msg: `Connection verified: 200 OK via ${protocolStr} with secret ${tool.secret_reference || 'reference'}.`,
-          latency_ms: latency
+          msg: `Deployment reported ${currentTool?.status || 'unknown'} via ${protocolStr}.`,
+          latency_ms: currentTool?.latency_ms
         });
       }
-    }, 600);
+    }).catch(error => { setTestingId(null); setTestResult({ id: tool.id, success: false, msg: error instanceof Error ? error.message : 'Unable to probe connector' }); });
   };
 
   const handleSaveConfig = (updated: ToolDefinition) => {
-    setToolsList(prev =>
-      prev.map(t => (t.id === updated.id ? updated : t))
-    );
-    setConfiguringTool(null);
-    showToast(`Updated configuration for ${updated.name}`);
+    void updated;
+    showToast('Connector configuration is deployment managed.');
   };
 
   const handleCreateConnector = (newTool: ToolDefinition) => {
-    setToolsList(prev => [newTool, ...prev]);
-    setIsCreating(false);
-    showToast(`Successfully bound connector: ${newTool.name}`);
+    void newTool;
+    showToast('Connector registration is unavailable in this release.');
   };
 
   // Filter logic
@@ -707,6 +469,11 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
 
       {/* Connectors & Integrations Grid */}
       <div className="card-list">
+        {filtered.length === 0 && (
+          <div className="card" style={{ padding: '36px', textAlign: 'center', color: 'var(--dim)' }}>
+            No connectors are currently reported by the deployment.
+          </div>
+        )}
         {filtered.map((tool, index) => {
           const numStr = String(index + 1).padStart(3, '0');
 
@@ -889,6 +656,11 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                       </span>
                     )}
                     <span className="meta-pill highlight">{tool.rate_limit}</span>
+                    {tool.service_user && (
+                      <span className="meta-pill" title={`Service account user: ${tool.service_user}`}>
+                        <User size={11} style={{ color: 'var(--acc)' }} /> {tool.service_user}
+                      </span>
+                    )}
                     {tool.secret_reference && (
                       <span className="meta-pill">
                         <Key size={11} /> {tool.secret_reference}
@@ -897,6 +669,23 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                     {tool.endpoint && (
                       <span className="meta-pill" style={{ fontFamily: 'var(--font-mono)', fontSize: '10px' }}>
                         {tool.endpoint}
+                      </span>
+                    )}
+                    {tool.ui_base_url && (
+                      <a
+                        href={tool.ui_base_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="meta-pill"
+                        title={`Open Web Portal: ${tool.ui_base_url}`}
+                        style={{ textDecoration: 'none', color: 'var(--acc)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <ExternalLink size={10} /> Web Portal
+                      </a>
+                    )}
+                    {(tool.timeout_seconds !== undefined || tool.retry_attempts !== undefined) && (
+                      <span className="meta-pill" title="Connection timeouts & retry boundaries">
+                        <Clock size={11} /> {tool.timeout_seconds || 30}s • {tool.retry_attempts || 3} retries
                       </span>
                     )}
                   </div>
@@ -961,11 +750,17 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                       border: '1px solid var(--line)',
                       marginBottom: '8px'
                     }}>
+                      {(tool.custom_config.project_key || tool.project_key) && (
+                        <span><b>Project:</b> <code>{tool.custom_config.project_key || tool.project_key}</code></span>
+                      )}
                       {tool.custom_config.polling_cron && (
                         <span><b>Poll:</b> <code>{tool.custom_config.polling_cron}</code></span>
                       )}
                       {tool.custom_config.reporting_cron && (
                         <span><b>Report:</b> <code>{tool.custom_config.reporting_cron}</code></span>
+                      )}
+                      {tool.custom_config.process_attachments && (
+                        <span style={{ color: '#10b981' }}><b>Attachments:</b> Ingested</span>
                       )}
                       {tool.custom_config.allowed_indexes && (
                         <span><b>Indexes:</b> {tool.custom_config.allowed_indexes.join(', ')}</span>
@@ -973,11 +768,32 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                       {tool.custom_config.monitored_namespaces && (
                         <span><b>Namespaces:</b> {tool.custom_config.monitored_namespaces.length} active</span>
                       )}
+                      {tool.custom_config.monitored_topics && (
+                        <span><b>Topics:</b> {tool.custom_config.monitored_topics.join(', ')}</span>
+                      )}
+                      {tool.custom_config.bootstrap_servers && (
+                        <span><b>Brokers:</b> <code>{tool.custom_config.bootstrap_servers}</code></span>
+                      )}
+                      {tool.custom_config.spaces && (
+                        <span><b>Spaces:</b> {tool.custom_config.spaces.join(', ')}</span>
+                      )}
+                      {tool.custom_config.projects && (
+                        <span><b>Repos:</b> {tool.custom_config.projects.join(', ')}</span>
+                      )}
                       {tool.custom_config.schema && (
                         <span><b>Schema:</b> <code>{tool.custom_config.schema}</code></span>
                       )}
+                      {tool.custom_config.sid && (
+                        <span><b>SID:</b> <code>{tool.custom_config.sid}</code></span>
+                      )}
                       {tool.custom_config.cluster_name && (
                         <span><b>Cluster:</b> {tool.custom_config.cluster_name}</span>
+                      )}
+                      {tool.custom_config.domain_id && (
+                        <span><b>Domain:</b> <code>{tool.custom_config.domain_id}</code></span>
+                      )}
+                      {tool.custom_config.allowed_hosts && (
+                        <span><b>Hosts:</b> {tool.custom_config.allowed_hosts.length} configured</span>
                       )}
                     </div>
                   )}
@@ -1098,7 +914,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
   testingId,
   testResult
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'endpoints' | 'auth' | 'mcp_a2a' | 'custom'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'endpoints' | 'auth' | 'params' | 'mcp_a2a' | 'custom'>('general');
   const [form, setForm] = useState<ToolDefinition>({ ...tool });
   const [customConfigStr, setCustomConfigStr] = useState<string>(
     tool.custom_config ? JSON.stringify(tool.custom_config, null, 2) : '{}'
@@ -1114,6 +930,29 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
     } catch (e: any) {
       setJsonError(e.message);
     }
+  };
+
+  const updateCustomParam = (key: string, value: any) => {
+    setForm(prev => {
+      const nextCustom = { ...(prev.custom_config || {}), [key]: value };
+      setCustomConfigStr(JSON.stringify(nextCustom, null, 2));
+      return { ...prev, custom_config: nextCustom };
+    });
+  };
+
+  const updateNestedCustomParam = (section: string, key: string, value: any) => {
+    setForm(prev => {
+      const sectionObj = (prev.custom_config && prev.custom_config[section]) || {};
+      const nextCustom = {
+        ...(prev.custom_config || {}),
+        [section]: {
+          ...sectionObj,
+          [key]: value
+        }
+      };
+      setCustomConfigStr(JSON.stringify(nextCustom, null, 2));
+      return { ...prev, custom_config: nextCustom };
+    });
   };
 
   const handleSave = () => {
@@ -1138,7 +977,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
         border: '1px solid var(--line)',
         borderRadius: '12px',
         width: '100%',
-        maxWidth: '780px',
+        maxWidth: '820px',
         maxHeight: '90vh',
         display: 'flex',
         flexDirection: 'column',
@@ -1186,14 +1025,16 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
           gap: '4px',
           padding: '8px 20px',
           borderBottom: '1px solid var(--line)',
-          background: 'var(--bg)'
+          background: 'var(--bg)',
+          overflowX: 'auto'
         }}>
           {[
             { id: 'general', label: 'General & Scope' },
-            { id: 'endpoints', label: 'Endpoints & Protocol' },
+            { id: 'endpoints', label: 'Endpoints & Limits' },
             { id: 'auth', label: 'Auth & Secrets' },
+            { id: 'params', label: 'Connector Parameters' },
             ...(form.type === 'mcp' || form.type === 'a2a' ? [{ id: 'mcp_a2a', label: form.type === 'mcp' ? 'MCP Protocol Settings' : 'A2A Agent Delegation' }] : []),
-            { id: 'custom', label: 'Custom Configuration' }
+            { id: 'custom', label: 'Raw JSON Config' }
           ].map(tab => (
             <button
               key={tab.id}
@@ -1207,7 +1048,8 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
                 border: activeTab === tab.id ? '1px solid var(--acc)' : '1px solid transparent',
                 background: activeTab === tab.id ? 'var(--card)' : 'transparent',
                 color: activeTab === tab.id ? 'var(--acc)' : 'var(--muted)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
             >
               {tab.label}
@@ -1374,7 +1216,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Primary Endpoint / API URL / MCP Command
+                  Primary Endpoint / API URL / Command
                 </label>
                 <input
                   type="text"
@@ -1395,13 +1237,13 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  UI Presentation URL (Optional)
+                  UI Presentation URL (Portal / Console Link)
                 </label>
                 <input
                   type="text"
                   value={form.ui_base_url || ''}
                   onChange={e => setForm(p => ({ ...p, ui_base_url: e.target.value }))}
-                  placeholder="https://splunk-ui.internal:8000 or https://atlassian.net"
+                  placeholder="https://splunk-ui.internal:8000 or https://company.atlassian.net"
                   style={{
                     padding: '8px 10px',
                     borderRadius: '6px',
@@ -1439,6 +1281,8 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
                     <option value="A2A REST Protocol">A2A REST Protocol</option>
                     <option value="Oracle Net (TNS/OCI)">Oracle Net (TNS/OCI)</option>
                     <option value="SSH">SSH / CLI</option>
+                    <option value="Kafka Native (TCP)">Kafka Native (TCP)</option>
+                    <option value="Tuxedo /WS">Tuxedo /WS</option>
                   </select>
                 </div>
 
@@ -1480,6 +1324,67 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
                   />
                 </div>
               </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Retry Backoff (Seconds)
+                  </label>
+                  <input
+                    type="number"
+                    value={form.retry_backoff_seconds ?? 5}
+                    onChange={e => setForm(p => ({ ...p, retry_backoff_seconds: parseInt(e.target.value) || 0 }))}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Max Response Bytes
+                  </label>
+                  <input
+                    type="number"
+                    value={form.max_response_bytes ?? 10485760}
+                    onChange={e => setForm(p => ({ ...p, max_response_bytes: parseInt(e.target.value) || 0 }))}
+                    placeholder="10485760 (10 MB)"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Rate Limit Policy
+                  </label>
+                  <input
+                    type="text"
+                    value={form.rate_limit || ''}
+                    onChange={e => setForm(p => ({ ...p, rate_limit: e.target.value }))}
+                    placeholder="e.g. 300 req / min"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px'
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -1497,49 +1402,539 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
                 gap: '8px'
               }}>
                 <Shield size={16} style={{ color: 'var(--acc)' }} />
-                <span><b>Zero Plaintext Guarantee:</b> Plaintext credentials are strictly prohibited. Configure environment variable or Google Secret Manager references.</span>
+                <span><b>Zero Plaintext Guarantee:</b> Plaintext credentials are strictly prohibited. Store secrets in Secret Manager or environment variables and bind via secret reference name.</span>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Authentication Method
-                </label>
-                <input
-                  type="text"
-                  value={form.auth_method || ''}
-                  onChange={e => setForm(p => ({ ...p, auth_method: e.target.value }))}
-                  placeholder="Bearer Token, MCP Bearer Token, Mutual TLS, Kubeconfig"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px'
-                  }}
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Authentication Method
+                  </label>
+                  <input
+                    type="text"
+                    value={form.auth_method || ''}
+                    onChange={e => setForm(p => ({ ...p, auth_method: e.target.value }))}
+                    placeholder="Bearer Token, MCP Bearer Token, Mutual TLS, Kubeconfig"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Secret Reference Name
+                  </label>
+                  <input
+                    type="text"
+                    value={form.secret_reference || ''}
+                    onChange={e => setForm(p => ({ ...p, secret_reference: e.target.value }))}
+                    placeholder="e.g. JIRA_API_TOKEN, SPLUNK_HEC_TOKEN, SAMSON_DB_PASSWORD"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                </div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Secret Reference Name
-                </label>
-                <input
-                  type="text"
-                  value={form.secret_reference || ''}
-                  onChange={e => setForm(p => ({ ...p, secret_reference: e.target.value }))}
-                  placeholder="e.g. JIRA_API_TOKEN, KAFKA_MCP_TOKEN, AGENT_SECRET"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Service Account / User Identity (service_user)
+                  </label>
+                  <input
+                    type="text"
+                    value={form.service_user || ''}
+                    onChange={e => setForm(p => ({ ...p, service_user: e.target.value }))}
+                    placeholder="e.g. svc-rca-jira@corp.internal, splunk-api-svc"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                    Token Header Format
+                  </label>
+                  <input
+                    type="text"
+                    value={form.token_header_format || ''}
+                    onChange={e => setForm(p => ({ ...p, token_header_format: e.target.value }))}
+                    placeholder="e.g. Bearer {token} or Splunk {token}"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)'
+                    }}
+                  />
+                </div>
               </div>
+
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                border: '1px solid var(--line)',
+                background: 'var(--bg)'
+              }}>
+                <input
+                  type="checkbox"
+                  id="modal-verify-ssl"
+                  checked={form.verify_ssl ?? true}
+                  onChange={e => setForm(p => ({ ...p, verify_ssl: e.target.checked }))}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="modal-verify-ssl" style={{ fontSize: '12px', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Verify TLS/SSL Certificates (verify_ssl)</span>
+                  <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Enforce strict certificate authority verification. Disable only for private sandbox self-signed certificates.</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'params' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{
+                background: 'rgba(59,130,246,0.06)',
+                padding: '12px',
+                borderRadius: '8px',
+                border: '1px solid rgba(59,130,246,0.2)',
+                fontSize: '12px',
+                color: 'var(--text)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <Sliders size={16} style={{ color: 'var(--acc)' }} />
+                <span><b>Live Connector Parameters:</b> Structured parameters configured here synchronize directly with the connector runtime engine and raw JSON configuration.</span>
+              </div>
+
+              {/* Jira Incident Triage Specific Params */}
+              {(form.system_name === 'jira' || form.category === 'Ticketing') && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Jira Cloud / Server Incident Settings
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Primary Project Key</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.project_key || form.project_key || ''}
+                        onChange={e => {
+                          updateCustomParam('project_key', e.target.value);
+                          setForm(p => ({ ...p, project_key: e.target.value }));
+                        }}
+                        placeholder="e.g. SAG, PROD_CORE"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Timezone</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.timezone || 'America/Chicago'}
+                        onChange={e => updateCustomParam('timezone', e.target.value)}
+                        placeholder="America/Chicago or UTC"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Polling Cron Schedule</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.polling_cron || '*/15 * * * *'}
+                        onChange={e => updateCustomParam('polling_cron', e.target.value)}
+                        placeholder="*/15 * * * *"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Reporting Cron Schedule</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.reporting_cron || '0 17 * * 5'}
+                        onChange={e => updateCustomParam('reporting_cron', e.target.value)}
+                        placeholder="0 17 * * 5 (Friday 5PM)"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                    <input
+                      type="checkbox"
+                      id="jira-process-attachments"
+                      checked={form.custom_config?.process_attachments ?? true}
+                      onChange={e => updateCustomParam('process_attachments', e.target.checked)}
+                    />
+                    <label htmlFor="jira-process-attachments" style={{ fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                      Automatically extract and summarize ticket file attachments
+                    </label>
+                  </div>
+
+                  {/* Jira Custom Field ID Mapping */}
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--muted)', marginTop: '8px' }}>
+                    Jira Custom Field ID Mappings:
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                    {[
+                      { key: 'severity', label: 'Severity' },
+                      { key: 'environment', label: 'Environment' },
+                      { key: 'fix_team', label: 'Fix Team' },
+                      { key: 'fix_application', label: 'Fix Application' },
+                      { key: 'rca', label: 'RCA Field' },
+                      { key: 'reporting_team', label: 'Reporting Team' }
+                    ].map(f => (
+                      <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <label style={{ fontSize: '10.5px', color: 'var(--muted)' }}>{f.label}</label>
+                        <input
+                          type="text"
+                          value={form.custom_config?.customfields?.[f.key] || ''}
+                          onChange={e => updateNestedCustomParam('customfields', f.key, e.target.value)}
+                          placeholder="customfield_..."
+                          style={{ padding: '5px 7px', borderRadius: '4px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '11px', fontFamily: 'var(--font-mono)' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Splunk Specific Params */}
+              {(form.system_name === 'splunk' || form.name.toLowerCase().includes('splunk')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Splunk Search & Log Mining Settings
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                      Allowed Indexes (Comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={Array.isArray(form.custom_config?.allowed_indexes) ? form.custom_config.allowed_indexes.join(', ') : form.custom_config?.allowed_indexes || ''}
+                      onChange={e => updateCustomParam('allowed_indexes', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                      placeholder="adms, billing, system, metrics, security_audit, gateway_logs"
+                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Event Results</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.max_results ?? 100}
+                        onChange={e => updateCustomParam('max_results', parseInt(e.target.value) || 100)}
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Query Window (Seconds)</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.max_window_seconds ?? 86400}
+                        onChange={e => updateCustomParam('max_window_seconds', parseInt(e.target.value) || 86400)}
+                        placeholder="86400 (24h)"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.custom_config?.wild_card_allowed ?? true}
+                        onChange={e => updateCustomParam('wild_card_allowed', e.target.checked)}
+                      />
+                      <span>Allow Wildcard Searches</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.custom_config?.data_sources?.metrics ?? true}
+                        onChange={e => updateNestedCustomParam('data_sources', 'metrics', e.target.checked)}
+                      />
+                      <span>Metrics</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.custom_config?.data_sources?.logs ?? true}
+                        onChange={e => updateNestedCustomParam('data_sources', 'logs', e.target.checked)}
+                      />
+                      <span>Logs</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.custom_config?.data_sources?.events ?? true}
+                        onChange={e => updateNestedCustomParam('data_sources', 'events', e.target.checked)}
+                      />
+                      <span>Events</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Database / Samson DB Specific Params */}
+              {(form.category === 'Databases' || form.system_name?.includes('oracle') || form.system_name?.includes('db')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Database Connection & Sandbox Isolation Settings
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Database Host / Cluster</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.host || form.custom_config?.database?.host || ''}
+                        onChange={e => updateCustomParam('host', e.target.value)}
+                        placeholder="db-samson-prd01.corp.internal"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Port</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.port || form.custom_config?.database?.port || 1521}
+                        onChange={e => updateCustomParam('port', parseInt(e.target.value) || 1521)}
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Service Name / SID</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.sid || form.custom_config?.service_name || ''}
+                        onChange={e => updateCustomParam('sid', e.target.value)}
+                        placeholder="SAMSONPRD.CORP"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Default Schema</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.schema || ''}
+                        onChange={e => updateCustomParam('schema', e.target.value)}
+                        placeholder="PROD_CORE"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Statement Timeout (Seconds)</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.statement_timeout_seconds ?? 15}
+                        onChange={e => updateCustomParam('statement_timeout_seconds', parseInt(e.target.value) || 15)}
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Query Result Rows</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.max_row_limit ?? 500}
+                        onChange={e => updateCustomParam('max_row_limit', parseInt(e.target.value) || 500)}
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Kafka Message Streaming Specific Params */}
+              {(form.category === 'Message Streaming' || form.system_name?.includes('kafka')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Kafka Event Stream & Consumer Settings
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Cluster ID</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.cluster_id || ''}
+                        onChange={e => updateCustomParam('cluster_id', e.target.value)}
+                        placeholder="lks-prod-corp"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Consumer Group</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.consumer_group || ''}
+                        onChange={e => updateCustomParam('consumer_group', e.target.value)}
+                        placeholder="rca-analyzer-inspector"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Topics (Comma-separated)</label>
+                    <input
+                      type="text"
+                      value={Array.isArray(form.custom_config?.allowed_topics) ? form.custom_config.allowed_topics.join(', ') : form.custom_config?.allowed_topics || ''}
+                      onChange={e => updateCustomParam('allowed_topics', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                      placeholder="orders.events.v1, payments.deadletter.v1, notifications.stream"
+                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Kubernetes Specific Params */}
+              {(form.category === 'Container Orchestration' || form.system_name?.includes('k8s') || form.system_name?.includes('kubernetes')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Kubernetes Cluster Inspection Settings
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Cluster Context</label>
+                      <input
+                        type="text"
+                        value={form.custom_config?.cluster_context || ''}
+                        onChange={e => updateCustomParam('cluster_context', e.target.value)}
+                        placeholder="gke-prod-cluster-us-central1"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Pod Log Tail Lines</label>
+                      <input
+                        type="number"
+                        value={form.custom_config?.pod_log_tail_lines || 200}
+                        onChange={e => updateCustomParam('pod_log_tail_lines', parseInt(e.target.value) || 200)}
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Namespaces (Comma-separated)</label>
+                    <input
+                      type="text"
+                      value={Array.isArray(form.custom_config?.allowed_namespaces) ? form.custom_config.allowed_namespaces.join(', ') : form.custom_config?.allowed_namespaces || ''}
+                      onChange={e => updateCustomParam('allowed_namespaces', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                      placeholder="production, istio-system, ingress-nginx, payment-services"
+                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Confluence Knowledge Specific Params */}
+              {(form.category === 'Knowledge & RAG' || form.system_name?.includes('confluence')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Confluence Knowledge Base Settings
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Spaces (Comma-separated)</label>
+                    <input
+                      type="text"
+                      value={Array.isArray(form.custom_config?.allowed_spaces) ? form.custom_config.allowed_spaces.join(', ') : form.custom_config?.allowed_spaces || ''}
+                      onChange={e => updateCustomParam('allowed_spaces', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                      placeholder="ENG, SRE, POSTMORTEM, ARCH"
+                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Unix Host / Tuxedo Specific Params */}
+              {(form.category === 'Host & Runtime Health' || form.system_name?.includes('unix') || form.system_name?.includes('tuxedo')) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
+                    Host & Runtime Execution Settings
+                  </div>
+
+                  {form.custom_config?.tuxdir !== undefined ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>TUXDIR</label>
+                        <input
+                          type="text"
+                          value={form.custom_config?.tuxdir || ''}
+                          onChange={e => updateCustomParam('tuxdir', e.target.value)}
+                          placeholder="/opt/oracle/tuxedo12c"
+                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Domain ID</label>
+                        <input
+                          type="text"
+                          value={form.custom_config?.domain_id || ''}
+                          onChange={e => updateCustomParam('domain_id', e.target.value)}
+                          placeholder="TUX_CORE_PRD"
+                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Target Hosts (Comma-separated)</label>
+                      <input
+                        type="text"
+                        value={Array.isArray(form.custom_config?.target_hosts) ? form.custom_config.target_hosts.join(', ') : form.custom_config?.target_hosts || ''}
+                        onChange={e => updateCustomParam('target_hosts', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                        placeholder="app-srv-01.corp.internal, app-srv-02.corp.internal"
+                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1709,7 +2104,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
               </div>
 
               <textarea
-                rows={12}
+                rows={14}
                 value={customConfigStr}
                 onChange={e => handleCustomJsonChange(e.target.value)}
                 style={{
@@ -1806,9 +2201,19 @@ const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate })
   const [projectCanOverride, setProjectCanOverride] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [endpoint, setEndpoint] = useState('');
+  const [uiBaseUrl, setUiBaseUrl] = useState('');
+  const [serviceUser, setServiceUser] = useState('');
   const [protocol, setProtocol] = useState('HTTPS');
   const [authMethod, setAuthMethod] = useState('Bearer Token');
   const [secretReference, setSecretReference] = useState('');
+  const [timeoutSeconds, setTimeoutSeconds] = useState(30);
+  const [retryAttempts, setRetryAttempts] = useState(3);
+  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState(5);
+  const [maxResponseBytes, setMaxResponseBytes] = useState(10485760);
+  const [verifySsl, setVerifySsl] = useState(true);
+  const [tokenHeaderFormat, setTokenHeaderFormat] = useState('Bearer {token}');
+  const [rateLimit, setRateLimit] = useState('300 req / min');
+  const [customConfig, setCustomConfig] = useState<Record<string, any>>({});
 
   // MCP specific fields
   const [mcpTransport, setMcpTransport] = useState<'sse' | 'stdio' | 'websocket' | 'streamable_http'>('sse');
@@ -1831,10 +2236,18 @@ const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate })
       setScopeLevel(tmpl.default_scope);
       setProjectCanOverride(tmpl.can_override);
       setEndpoint(tmpl.default_endpoint);
+      setUiBaseUrl(tmpl.default_ui_base_url || '');
+      setServiceUser(tmpl.default_service_user || '');
       setProtocol(tmpl.protocol);
       setAuthMethod(tmpl.auth_method);
       setSecretReference(tmpl.default_secret);
       setIntegrationKind(tmpl.integration_kind);
+      setTimeoutSeconds(tmpl.default_timeout_seconds || 30);
+      setRetryAttempts(tmpl.default_retry_attempts || 3);
+      setRetryBackoffSeconds(tmpl.default_retry_backoff || 5);
+      setRateLimit(tmpl.default_rate_limit || '300 req / min');
+      setCustomConfig(tmpl.default_config ? JSON.parse(JSON.stringify(tmpl.default_config)) : {});
+      setTokenHeaderFormat(tmpl.system_name === 'splunk' ? 'Splunk {token}' : 'Bearer {token}');
     }
   }, [selectedTemplateKey]);
 
@@ -1854,18 +2267,24 @@ const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate })
       scope_level: scopeLevel,
       project_can_override: projectCanOverride,
       inherit_platform_defaults: scopeLevel !== 'project_only',
-      rate_limit: integrationKind === 'mcp' ? '1000 msg / batch' : integrationKind === 'a2a' ? '60 calls / min' : '300 req / min',
+      rate_limit: rateLimit || (integrationKind === 'mcp' ? '1000 msg / batch' : integrationKind === 'a2a' ? '60 calls / min' : '300 req / min'),
       last_ping: 'Just created',
       latency_ms: 18,
       calls_today: 0,
       error_rate: 0.0,
       endpoint,
+      ui_base_url: uiBaseUrl,
+      service_user: serviceUser,
       protocol,
       auth_method: authMethod,
       secret_reference: secretReference,
-      timeout_seconds: 30,
-      retry_attempts: 3,
-      custom_config: tmpl ? tmpl.default_config : {},
+      timeout_seconds: timeoutSeconds,
+      retry_attempts: retryAttempts,
+      retry_backoff_seconds: retryBackoffSeconds,
+      max_response_bytes: maxResponseBytes,
+      verify_ssl: verifySsl,
+      token_header_format: tokenHeaderFormat,
+      custom_config: customConfig && Object.keys(customConfig).length > 0 ? customConfig : (tmpl ? tmpl.default_config : {}),
       mcp_config: integrationKind === 'mcp' ? {
         transport: mcpTransport,
         tools_exposed: mcpToolsStr.split(',').map(s => s.trim()).filter(Boolean)
@@ -2264,6 +2683,28 @@ const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate })
             </div>
           </div>
 
+          {/* UI Presentation URL */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+              UI Presentation URL (Direct Portal / Console Link)
+            </label>
+            <input
+              type="text"
+              value={uiBaseUrl}
+              onChange={e => setUiBaseUrl(e.target.value)}
+              placeholder="e.g. https://splunk-ui.prod.internal:8000 or https://company.atlassian.net"
+              style={{
+                padding: '8px 10px',
+                borderRadius: '6px',
+                border: '1px solid var(--line)',
+                background: 'var(--bg)',
+                color: 'var(--text)',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)'
+              }}
+            />
+          </div>
+
           {/* Auth & Secret */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -2306,6 +2747,134 @@ const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate })
                 }}
               />
             </div>
+          </div>
+
+          {/* Service User & Token Header Format */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                Service Account / User Identity (service_user)
+              </label>
+              <input
+                type="text"
+                value={serviceUser}
+                onChange={e => setServiceUser(e.target.value)}
+                placeholder="e.g. svc-rca-jira@corp.internal, splunk-api-svc"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                Token Header Format
+              </label>
+              <input
+                type="text"
+                value={tokenHeaderFormat}
+                onChange={e => setTokenHeaderFormat(e.target.value)}
+                placeholder="e.g. Bearer {token} or Splunk {token}"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '12px',
+                  fontFamily: 'var(--font-mono)'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Timeout, Retries, Backoff */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                Timeout (Seconds)
+              </label>
+              <input
+                type="number"
+                value={timeoutSeconds}
+                onChange={e => setTimeoutSeconds(parseInt(e.target.value) || 30)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '12px'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                Retry Attempts
+              </label>
+              <input
+                type="number"
+                value={retryAttempts}
+                onChange={e => setRetryAttempts(parseInt(e.target.value) || 0)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '12px'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                Retry Backoff (Seconds)
+              </label>
+              <input
+                type="number"
+                value={retryBackoffSeconds}
+                onChange={e => setRetryBackoffSeconds(parseInt(e.target.value) || 0)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--line)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '12px'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* SSL Verification Checkbox */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            border: '1px solid var(--line)',
+            background: 'var(--bg)'
+          }}>
+            <input
+              type="checkbox"
+              id="create-modal-verify-ssl"
+              checked={verifySsl}
+              onChange={e => setVerifySsl(e.target.checked)}
+              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+            />
+            <label htmlFor="create-modal-verify-ssl" style={{ fontSize: '12px', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontWeight: 600, color: 'var(--text)' }}>Verify TLS/SSL Certificates (verify_ssl)</span>
+              <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Enforces CA validation. Keep checked unless testing private sandbox with self-signed certificate.</span>
+            </label>
           </div>
 
           {/* Description */}

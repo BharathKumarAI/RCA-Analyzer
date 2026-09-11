@@ -83,6 +83,7 @@ ehthumbs.db
 Thumbs.db
 .idea/
 .vscode/
+.serena/
 *.swp
 *.swo
 *~

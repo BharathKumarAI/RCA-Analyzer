@@ -22,6 +22,7 @@ import {
   Info
 } from 'lucide-react';
 import { SystemHealth } from '../types/api';
+import { ApiError, fetchConfig } from '../services/api';
 
 interface RuntimeProps {
   health: SystemHealth;
@@ -210,6 +211,9 @@ router = SpecialistRouter(tools=specialist_tools)`
 };
 
 export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
+  const [config, setConfig] = useState<any>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  useEffect(() => { fetchConfig().then(setConfig).catch((reason: unknown) => setConfigError(reason instanceof ApiError ? reason.message : 'Unable to load runtime configuration.')); }, []);
   const [selectedNode, setSelectedNode] = useState<string>('synthesis');
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(1.0);
@@ -230,7 +234,17 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 0.15, 0.7));
   const handleZoomReset = () => setZoom(1.0);
 
-  const activeNodeData = NODES_SPEC[selectedNode] || NODES_SPEC.synthesis;
+  const configuredStage = config?.model_profiles?.stages?.[selectedNode];
+  const activeNodeData: NodeSpec = {
+    ...(NODES_SPEC[selectedNode] || NODES_SPEC.synthesis),
+    ...(configuredStage ? {
+      model: configuredStage.model || NODES_SPEC.synthesis.model,
+      thinking: configuredStage.thinking_level ? `${configuredStage.thinking_level} (configured)` : NODES_SPEC.synthesis.thinking,
+      outputLimit: configuredStage.max_output_tokens ? `${configuredStage.max_output_tokens} tokens` : NODES_SPEC.synthesis.outputLimit,
+      description: 'Configured stage from the server model profile.',
+    } : {}),
+  };
+  const execution = config?.execution || {};
 
   // Render the core interactive workflow topology graph
   const renderWorkflowGraph = (isModal: boolean) => (
@@ -493,13 +507,14 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   return (
     <div className="view-container">
       {/* Header Banner */}
+      {configError && <div className="card" style={{ color: 'var(--danger)' }}>{configError}<button className="btn btn-secondary" onClick={() => window.location.reload()}>Retry</button></div>}
       <section className="hero-banner">
         <div className="hero-main">
           <h1 className="hero-title">
             Runtime <span>Engine</span> & ADK Workflow
           </h1>
           <p className="hero-lede">
-            Google ADK 2.9 Native Workflow graph execution, parallel evidence acquisition, join nodes, specialist agent routing, and bounded concurrency semaphores.
+            Configured Google ADK workflow topology. The diagram describes the server configuration; live run stage execution is reported on the Runs page.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -509,13 +524,13 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
               <b>Runtime Mode:</b> {health.mode.toUpperCase()}
             </span>
             <span className="hero-stat-chip">
-              <b>Max Concurrent Runs:</b> 4
+              <b>Max Concurrent Runs:</b> {execution.max_concurrent_runs ?? '—'}
             </span>
             <span className="hero-stat-chip">
-              <b>Model Semaphore:</b> 4 Parallel LLMs
+              <b>Model Semaphore:</b> {execution.max_parallel_models ?? '—'} Parallel LLMs
             </span>
             <span className="hero-stat-chip">
-              <b>Hard Deadline:</b> 120s UTC
+              <b>Hard Deadline:</b> {execution.run_timeout_seconds ?? '—'}s UTC
             </span>
           </div>
         </div>

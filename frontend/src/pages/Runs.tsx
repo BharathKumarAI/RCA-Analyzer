@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PlayCircle,
   Clock,
@@ -15,18 +15,27 @@ import {
   Zap
 } from 'lucide-react';
 import { Run } from '../types/api';
+import { fetchRun } from '../services/api';
 
 interface RunsProps {
   runs: Run[];
   onNewInvestigation: () => void;
+  onRunUpdated?: (run: Run) => void;
 }
 
-export const Runs: React.FC<RunsProps> = ({ runs, onNewInvestigation }) => {
+export const Runs: React.FC<RunsProps> = ({ runs, onNewInvestigation, onRunUpdated }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(
     new Set([runs[0]?.id || ''])
   );
+  useEffect(() => {
+    if (!onRunUpdated || !runs.some(run => run.status === 'RUNNING')) return;
+    const timer = window.setInterval(() => {
+      runs.filter(run => run.status === 'RUNNING').forEach(run => fetchRun(run.id).then(onRunUpdated).catch(() => undefined));
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [runs, onRunUpdated]);
 
   const toggleRun = (id: string) => {
     setExpandedRunIds(prev => {
@@ -66,7 +75,7 @@ export const Runs: React.FC<RunsProps> = ({ runs, onNewInvestigation }) => {
               <b>{runs.filter(r => r.status === 'RUNNING').length}</b> In Progress
             </span>
             <span className="hero-stat-chip">
-              <b>Avg MTTR:</b> 4.8m
+              <b>Avg MTTR:</b> Derived from recorded runs
             </span>
           </div>
         </div>
@@ -117,6 +126,11 @@ export const Runs: React.FC<RunsProps> = ({ runs, onNewInvestigation }) => {
 
       {/* Simplified & Intuitive Investigation Cards List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%' }}>
+        {filtered.length === 0 && (
+          <div className="card" style={{ padding: '36px', textAlign: 'center', color: 'var(--dim)' }}>
+            {runs.length === 0 ? 'No investigations have been recorded yet.' : 'No investigations match the current filters.'}
+          </div>
+        )}
         {filtered.map(run => {
           const isExpanded = expandedRunIds.has(run.id);
 

@@ -23,6 +23,7 @@ from sqlalchemy import (
     select,
     text,
     update,
+    func,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.exc import IntegrityError
@@ -267,6 +268,52 @@ class InvestigationStore:
         if before is not None:
             q = q.where(runs.c.created_at < before)
         return await self._list_responses(q, principal)
+
+    async def run_counts(self, principal):
+        """Return durable run counts for the authenticated project scope."""
+        now = time.time()
+        async with self.engine.begin() as c:
+            await c.execute(
+                update(runs)
+                .where(self._scope(runs, principal), runs.c.status == "RUNNING", runs.c.deadline < now)
+                .values(status="FAILED", reason="Run deadline exceeded", updated_at=now, revision=runs.c.revision + 1)
+            )
+            rows = (
+                await c.execute(
+                    select(runs.c.status, func.count())
+                    .where(self._scope(runs, principal))
+                    .group_by(runs.c.status)
+                )
+            ).all()
+        counts = {status: count for status, count in rows}
+        return {
+            "total": sum(counts.values()),
+            "active": sum(counts.get(status, 0) for status in ("RUNNING", "QUEUED")),
+            "by_status": counts,
+        }
+
+    async def list_attachments(self, principal, limit=100):
+        """List non-expired attachment metadata in the authenticated project."""
+        async with self.engine.connect() as c:
+            rows = (await c.execute(
+                select(attachments)
+                .where(and_(attachments.c.tenant_id == principal.tenant_id,
+                            attachments.c.project_id == principal.project_id,
+                            attachments.c.expires_at > time.time()))
+                .order_by(attachments.c.created_at.desc())
+                .limit(max(1, min(limit, 100)))
+            )).all()
+        result = []
+        for row in rows:
+            payload = json.loads(row.payload_json)
+            result.append({"id": row.attachment_id,
+                           "title": payload.get("filename", row.attachment_id),
+                           "size_bytes": payload.get("size_bytes"),
+                           "media_type": payload.get("media_type"),
+                           "created_at": row.created_at,
+                           "expires_at": row.expires_at,
+                           "status": "available"})
+        return result
 
     async def _list_responses(self, query, principal):
         """List in one query, with one bounded refresh if deadlines have expired."""

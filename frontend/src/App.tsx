@@ -30,8 +30,8 @@ import {
   fetchPrincipal,
   fetchAgents,
   fetchRuns,
-  MOCK_TOOLS,
-  MOCK_AUDIT_LOGS,
+  fetchTools,
+  fetchAuditLogs,
 } from './services/api';
 import { SystemHealth, Principal, AgentConfiguration, Run } from './types/api';
 
@@ -46,28 +46,14 @@ export const App: React.FC = () => {
   const [isNewRunOpen, setIsNewRunOpen] = useState(false);
 
   // Core Data
-  const [health, setHealth] = useState<SystemHealth>({
-    status: 'healthy',
-    latency_ms: 22,
-    tenant_id: 'default',
-    project_id: 'root',
-    mode: 'demo',
-    active_runs: 1,
-    total_runs: 142,
-    mttr_minutes: 4.8,
-    tool_success_rate: 99.4,
-    active_agents_count: 5,
-  });
+  const [health, setHealth] = useState<SystemHealth>({ status: 'error', latency_ms: 0, tenant_id: '', project_id: '', mode: 'demo', active_runs: 0, total_runs: 0, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 });
 
-  const [principal, setPrincipal] = useState<Principal>({
-    subject: 'admin@rca-analyzer.internal',
-    roles: ['PLATFORM_ADMIN', 'SRE_LEAD'],
-    tenant_id: 'default',
-    project_id: 'root',
-  });
+  const [principal, setPrincipal] = useState<Principal>({ subject: '', roles: [], tenant_id: '', project_id: '' });
 
   const [agents, setAgents] = useState<AgentConfiguration[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [tools, setTools] = useState<import('./types/api').ToolDefinition[]>([]);
+  const [auditLogs, setAuditLogs] = useState<import('./types/api').AuditLog[]>([]);
 
   // Initialize data and hash routing
   useEffect(() => {
@@ -141,18 +127,21 @@ export const App: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [h, p, ag, rn] = await Promise.all([
+      const [h, p, ag, rn, tl] = await Promise.all([
         fetchHealth(),
         fetchPrincipal(),
         fetchAgents(),
         fetchRuns(),
+        fetchTools(),
       ]);
       setHealth(h);
       setPrincipal(p);
       setAgents(ag);
       setRuns(rn);
-    } catch {
-      // Fallbacks already embedded in services
+      setTools(tl);
+      try { setAuditLogs(await fetchAuditLogs()); } catch { setAuditLogs([]); }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : 'Unable to load application data');
     }
   };
 
@@ -210,7 +199,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'runs' && (
-            <Runs runs={runs} onNewInvestigation={() => setIsNewRunOpen(true)} />
+            <Runs runs={runs} onNewInvestigation={() => setIsNewRunOpen(true)} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
           )}
 
           {activePage === 'capabilities' && (
@@ -238,7 +227,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'tools' && (
-            <Tools tools={MOCK_TOOLS} />
+            <Tools tools={tools} />
           )}
 
           {activePage === 'persistence' && (
@@ -254,7 +243,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'governance' && (
-            <Governance logs={MOCK_AUDIT_LOGS} agents={agents} />
+            <Governance logs={auditLogs} agents={agents} />
           )}
 
           {activePage === 'knowledge' && (
@@ -287,6 +276,7 @@ export const App: React.FC = () => {
         onClose={() => setIsSessionOpen(false)}
         principal={principal}
         onUpdatePrincipal={setPrincipal}
+        onSessionChanged={loadData}
       />
 
       <NewInvestigationModal

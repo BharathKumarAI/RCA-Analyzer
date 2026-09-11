@@ -72,9 +72,8 @@ instruction: >
       await submitAgentYaml(yamlContent);
       setIsRegisterOpen(false);
       onRefresh();
-    } catch {
-      setIsRegisterOpen(false);
-      onRefresh();
+    } catch (error) {
+      setReviewReason(error instanceof Error ? error.message : 'Unable to submit configuration');
     } finally {
       setSubmitting(false);
     }
@@ -83,12 +82,12 @@ instruction: >
   const handleApprove = async (agent: AgentConfiguration) => {
     setSubmitting(true);
     try {
-      await approveAgent(agent.id, agent.content_hash || 'sha256:dummy', reviewReason || 'Peer reviewed');
+      if (!agent.content_hash) throw new Error('This configuration has no review hash. Refresh and try again.');
+      await approveAgent(agent.id, agent.content_hash, reviewReason || 'Peer reviewed');
       setSelectedAgent(null);
       onRefresh();
-    } catch {
-      setSelectedAgent(null);
-      onRefresh();
+    } catch (error) {
+      setReviewReason(error instanceof Error ? error.message : 'Unable to approve configuration');
     } finally {
       setSubmitting(false);
     }
@@ -97,12 +96,12 @@ instruction: >
   const handleReject = async (agent: AgentConfiguration) => {
     setSubmitting(true);
     try {
-      await rejectAgent(agent.id, agent.content_hash || 'sha256:dummy', reviewReason || 'Policy constraint');
+      if (!agent.content_hash) throw new Error('This configuration has no review hash. Refresh and try again.');
+      await rejectAgent(agent.id, agent.content_hash, reviewReason || 'Policy constraint');
       setSelectedAgent(null);
       onRefresh();
-    } catch {
-      setSelectedAgent(null);
-      onRefresh();
+    } catch (error) {
+      setReviewReason(error instanceof Error ? error.message : 'Unable to reject configuration');
     } finally {
       setSubmitting(false);
     }

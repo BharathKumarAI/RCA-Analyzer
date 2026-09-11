@@ -36,6 +36,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 export const Topbar: React.FC<TopbarProps> = ({
   principal,
+  health,
   theme,
   activePage = 'overview',
   onToggleTheme,
@@ -89,9 +90,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           </button>
         )}
 
-        <div className="telemetry-pill" title="Platform Live Status">
+        <div className="telemetry-pill" title={`Platform ${health.mode} status`}>
           <span className="telemetry-dot" />
-          <span>Live</span>
+          <span>{health.mode === 'live' ? 'Live' : 'Demo'}</span>
         </div>
 
         <button

@@ -1,11 +1,28 @@
 """Tests for Admin Portal static serving and security headers."""
 
 import tempfile
+from html.parser import HTMLParser
 
 from fastapi.testclient import TestClient
 
 from app.api.application import create_app
 from tests.support import settings_for
+
+
+class AssetParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.assets = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        url = attributes.get("src") if tag == "script" else (
+            attributes.get("href")
+            if tag == "link" and attributes.get("rel") == "stylesheet"
+            else None
+        )
+        if url and not url.startswith(("http:", "https:", "//")):
+            self.assets.append(url)
 
 
 def test_admin_portal_mount_and_security_headers():
@@ -33,14 +50,15 @@ def test_admin_portal_mount_and_security_headers():
             assert "frame-ancestors 'none'" in csp
             assert res.headers["X-Frame-Options"] == "DENY"
 
-            # 4. Static assets (css/js) served successfully
-            res_css = client.get("/admin/css/variables.css")
-            assert res_css.status_code == 200
-            assert "--bg-void" in res_css.text
-
-            res_js = client.get("/admin/js/api.js")
-            assert res_js.status_code == 200
-            assert "inMemoryToken" in res_js.text
+            # Check the selected portal's assets (built React or legacy fallback).
+            parser = AssetParser()
+            parser.feed(res.text)
+            assert parser.assets
+            for asset in parser.assets:
+                path = asset if asset.startswith("/") else f"/admin/{asset}"
+                response = client.get(path)
+                assert response.status_code == 200, path
+                assert response.content
 
             # 5. /api/v1/* remains protected by bearer token auth
             res_api = client.get("/api/v1/runs")

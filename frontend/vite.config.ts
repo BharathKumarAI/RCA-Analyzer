@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const apiTarget = process.env.RCA_API_TARGET || 'http://127.0.0.1:8000'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -25,15 +27,15 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8005',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/ready': {
-        target: 'http://127.0.0.1:8005',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://127.0.0.1:8005',
+        target: apiTarget,
         changeOrigin: true,
       },
     },

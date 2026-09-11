@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -85,6 +86,18 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(unchanged.status, "FAILED")
 
+    async def test_run_counts_refresh_expired_work(self):
+        contract = make_contract(self.principal)
+        await self.store.create_run(contract, None, "request", time.time() + 0.01)
+        counts = await self.store.run_counts(self.principal)
+        self.assertEqual(counts["total"], 1)
+        self.assertEqual(counts["active"], 1)
+        await asyncio.sleep(0.01)
+        await self.store.get_run(contract.run_id, self.principal)
+        counts = await self.store.run_counts(self.principal)
+        self.assertEqual(counts["active"], 0)
+        self.assertEqual(counts["by_status"]["FAILED"], 1)
+
     async def test_attachment_isolation_and_expiry(self):
         aid = await self.store.save_attachment(
             {
@@ -100,7 +113,11 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             (await self.store.get_attachments([aid], self.principal))[0]["filename"],
             "a.txt",
         )
+        self.assertEqual((await self.store.list_attachments(self.principal))[0]["id"], aid)
         other = self.principal.model_copy(update={"subject": "s2"})
+        self.assertEqual((await self.store.list_attachments(other))[0]["id"], aid)
+        other_project = self.principal.model_copy(update={"project_id": "other"})
+        self.assertEqual(await self.store.list_attachments(other_project), [])
         with self.assertRaises(PermissionError):
             await self.store.get_attachments([aid], other)
 

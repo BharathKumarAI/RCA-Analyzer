@@ -54,6 +54,8 @@ The [local deployer](scripts/deploy_local_database.py) creates missing credentia
 
 ## Verification and current boundaries
 
+The React admin workspace is available at `/admin/`. See the [frontend setup guide](frontend/README.md) for development, production builds, authentication, and the distinction between persisted backend data and live connector execution.
+
 From the source checkout, run `make lint`, `make test`, `make smoke`, and `make eval`. Smoke checks invoke the actual ADK runner with local model/HTTP fixtures. The four-case MLflow evaluation checks status handling, citation existence and redaction; it does not measure live root-cause accuracy. Its summary is written to `data/evaluation/summary.json`.
 
 Images support local OCR, not visual scene reasoning. Scanned PDFs without extractable text are rejected. Model availability, live Jira/Splunk permissions, GCS access and production PostgreSQL operation must be verified in the deployment environment. Concurrency limits are per process. Runs persist across restarts but are not resumed automatically; expired runs become failed when read. See [operations](docs/operations.md) for retention and telemetry.

@@ -376,6 +376,19 @@ class AgentConfigurationService:
             ).all()
         return [await self._record(r) for r in rows]
 
+    async def list_audit(self, principal, limit=100):
+        """List configuration governance events within the caller's project."""
+        async with self.engine.connect() as c:
+            rows = (
+                await c.execute(
+                    select(audit)
+                    .where(self._scope(audit, principal))
+                    .order_by(audit.c.created_at.desc())
+                    .limit(max(1, min(limit, 100)))
+                )
+            ).all()
+        return [dict(row._mapping) for row in rows]
+
     async def approved(self, principal, capability):
         async with self.engine.connect() as c:
             q = (

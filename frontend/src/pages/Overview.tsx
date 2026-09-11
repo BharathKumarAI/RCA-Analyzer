@@ -76,7 +76,7 @@ export const Overview: React.FC<OverviewProps> = ({
             <span>Mean Time to RCA</span>
             <Clock size={15} color="var(--acc)" />
           </div>
-          <div className="metric-value">{health.mttr_minutes}m</div>
+          <div className="metric-value">{health.mttr_minutes ? `${health.mttr_minutes}m` : '—'}</div>
           <div className="metric-meta">
             <b>↓ 34% faster</b> resolution cycle
           </div>
@@ -87,7 +87,7 @@ export const Overview: React.FC<OverviewProps> = ({
             <span>Tool Success Rate</span>
             <CheckCircle2 size={15} color="var(--acc3)" />
           </div>
-          <div className="metric-value">{health.tool_success_rate}%</div>
+          <div className="metric-value">{health.tool_success_rate ? `${health.tool_success_rate}%` : '—'}</div>
           <div className="metric-meta">
             Jira & Splunk API connector SLA
           </div>
@@ -111,7 +111,7 @@ export const Overview: React.FC<OverviewProps> = ({
             <span>Dual-Custody Governance</span>
             <ShieldCheck size={15} color="var(--acc3)" />
           </div>
-          <div className="metric-value">100%</div>
+          <div className="metric-value">—</div>
           <div className="metric-meta">
             Strict content-hash segregation
           </div>

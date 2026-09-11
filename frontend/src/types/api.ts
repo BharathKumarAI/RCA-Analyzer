@@ -45,7 +45,7 @@ export interface Run {
   capability: string;
   prompt: string;
   incident_id?: string;
-  status: 'COMPLETED' | 'RUNNING' | 'FAILED' | 'QUEUED';
+  status: 'COMPLETED' | 'RUNNING' | 'FAILED' | 'QUEUED' | 'PARTIAL' | 'CANCELLED' | 'SIMULATED' | 'BLOCKED';
   created_at: string;
   completed_at?: string;
   duration_seconds?: number;
@@ -91,9 +91,9 @@ export interface ToolDefinition {
   inherit_platform_defaults: boolean;
   rate_limit: string;
   last_ping: string;
-  latency_ms: number;
-  calls_today: number;
-  error_rate: number;
+  latency_ms?: number;
+  calls_today?: number;
+  error_rate?: number;
   endpoint?: string;
   ui_base_url?: string;
   auth_method?: string;
@@ -102,6 +102,11 @@ export interface ToolDefinition {
   protocol?: string;
   timeout_seconds?: number;
   retry_attempts?: number;
+  retry_backoff_seconds?: number;
+  max_response_bytes?: number;
+  verify_ssl?: boolean;
+  token_header_format?: string;
+  project_key?: string;
   custom_config?: Record<string, any>;
   mcp_config?: {
     transport: 'sse' | 'stdio' | 'websocket' | 'streamable_http';
@@ -179,7 +184,7 @@ export interface SystemDiagnostics {
     status: 'healthy' | 'unreachable' | 'degraded';
     latency_ms: number;
     dialect: string;
-    schema_version: number;
+    schema_version: number | null;
     schemas: string[];
   };
   storage: {
@@ -203,7 +208,7 @@ export interface SystemDiagnostics {
   };
   connectors: {
     mode: string;
-    results: Record<string, boolean>;
+    results: Record<string, unknown>;
     disabled: string[];
   };
 }

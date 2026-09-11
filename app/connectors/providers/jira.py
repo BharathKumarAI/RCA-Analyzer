@@ -141,13 +141,73 @@ class JiraConnector(BaseConnector):
         fields = payload.get("fields", {})
         if not isinstance(fields, dict):
             raise ConnectorError("Jira issue response schema or project scope mismatch")
+        priority = (
+            (fields.get("priority") or {}).get("name")
+            if isinstance(fields.get("priority"), dict)
+            else fields.get("priority")
+        )
+        issuetype = (
+            (fields.get("issuetype") or {}).get("name")
+            if isinstance(fields.get("issuetype"), dict)
+            else fields.get("issuetype")
+        )
+        assignee_data = fields.get("assignee")
+        assignee = (
+            assignee_data.get("displayName") or assignee_data.get("name")
+            if isinstance(assignee_data, dict)
+            else None
+        )
+        reporter_data = fields.get("reporter")
+        reporter = (
+            reporter_data.get("displayName") or reporter_data.get("name")
+            if isinstance(reporter_data, dict)
+            else None
+        )
+        resolution = (
+            (fields.get("resolution") or {}).get("name")
+            if isinstance(fields.get("resolution"), dict)
+            else fields.get("resolution")
+        )
+        labels = fields.get("labels", []) if isinstance(fields.get("labels"), list) else []
+        environment = fields.get("environment")
+        comments_count = (
+            len((fields.get("comment") or {}).get("comments", []))
+            if isinstance(fields.get("comment"), dict)
+            else 0
+        )
+        attachments_count = (
+            len(fields.get("attachment", []))
+            if isinstance(fields.get("attachment"), list)
+            else 0
+        )
+        custom_fields = {
+            k: v
+            for k, v in fields.items()
+            if k.startswith("customfield_") and v is not None
+        }
+
         return {
             "key": payload.get("key", ticket_id),
             "summary": fields.get("summary", ""),
             "status": (fields.get("status") or {}).get("name", ""),
             "created": fields.get("created"),
+            "updated": fields.get("updated"),
             "description": fields.get("description", ""),
-            "components": [c.get("name", "") for c in fields.get("components", [])],
+            "priority": priority,
+            "issue_type": issuetype,
+            "assignee": assignee,
+            "reporter": reporter,
+            "resolution": resolution,
+            "environment": environment,
+            "labels": labels,
+            "components": [
+                c.get("name", "")
+                for c in fields.get("components", [])
+                if isinstance(c, dict)
+            ],
+            "custom_fields": custom_fields,
+            "comments_count": comments_count,
+            "attachments_count": attachments_count,
         }
 
     async def post_comment(

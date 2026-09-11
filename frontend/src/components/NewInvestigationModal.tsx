@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PlayCircle, X, Sparkles, AlertCircle, Paperclip, FileText } from 'lucide-react';
-import { triggerRun } from '../services/api';
+import { triggerRun, fetchCapabilities } from '../services/api';
 import { Run } from '../types/api';
 
 interface NewInvestigationModalProps {
@@ -20,6 +20,8 @@ export const NewInvestigationModal: React.FC<NewInvestigationModalProps> = ({
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<Array<{ name: string; description?: string }>>([]);
+  useEffect(() => { fetchCapabilities().then(items => setCapabilities(items)).catch(() => setCapabilities([])); }, []);
 
   if (!isOpen) return null;
 
@@ -74,9 +76,8 @@ export const NewInvestigationModal: React.FC<NewInvestigationModalProps> = ({
               onChange={e => setCapability(e.target.value)}
               style={{ width: '100%', padding: '10px 12px' }}
             >
-              <option value="full_incident_rca">full_incident_rca (Jira + Splunk + OCR Summarizer + RCA Join)</option>
-              <option value="splunk_telemetry_triage">splunk_telemetry_triage (Log mining & spike correlator)</option>
-              <option value="jira_incident_triage">jira_incident_triage (Priority & lineage analysis)</option>
+              {capabilities.length === 0 && <option value="">No capabilities available</option>}
+              {capabilities.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
             </select>
           </div>
 
@@ -154,7 +155,7 @@ export const NewInvestigationModal: React.FC<NewInvestigationModalProps> = ({
             <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={loading}>
+            <button type="submit" className="btn btn-primary" disabled={loading || !capability}>
               <Sparkles size={14} />
               {loading ? 'Dispatching...' : 'Dispatch Investigation'}
             </button>

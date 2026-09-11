@@ -312,6 +312,7 @@
 .app-body {
   display: flex;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -436,6 +437,35 @@
   gap: 18px;
   width: 100%;
   max-width: none;
+  min-width: 0;
+}
+
+.view-container > * {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .topbar { padding: 0 12px; gap: 12px; }
+  .search-bar-btn { width: 220px; }
+  .topbar-crumb, .topbar-crumb-sep { display: none; }
+  .view-container { padding: 18px 16px 32px; }
+}
+
+@media (max-width: 640px) {
+  .app-layout { height: 100dvh; }
+  .topbar-center, .topbar-quick-btn, .user-meta { display: none; }
+  .sidebar, .sidebar.collapsed { width: 56px; padding: 12px 6px; }
+  .sidebar-header, .sidebar-heading { display: none; }
+  .sidebar .nav-item { justify-content: center; min-height: 40px; padding: 8px; }
+  .sidebar .nav-item span, .sidebar-action-btn span { display: none; }
+  .sidebar-action-btn { padding: 10px; }
+  .view-container { padding: 14px 12px 24px; }
+  .hero-banner, .page-header { flex-direction: column; align-items: flex-start; }
+  .hero-banner { padding: 16px; }
+  .page-header-actions { flex-wrap: wrap; }
+  .metric-grid { grid-template-columns: 1fr; }
+  .modal-dialog { width: calc(100% - 24px); padding: 16px; }
 }
 
 /* ---------------- Elevated Hero Banner (Fable 5.1 / SRE Control Plane) ---------------- */
@@ -1610,3 +1640,14 @@
   color: var(--text);
 }
 
+.settings-tabs, .settings-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; padding: 10px 0; }
+.settings-values dt { color: var(--muted); font-size: 12px; }
+.settings-values dd { margin-top: 4px; font-weight: 600; overflow-wrap: anywhere; }
+.settings-hash { overflow-wrap: anywhere; }
+.notice-banner h3 { display: flex; align-items: center; gap: 8px; }
+.studio-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.4fr); gap: 16px; align-items: start; }
+.parameter-item { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 12px; text-align: left; color: var(--tx); border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.parameter-item span { color: var(--muted); font-size: 12px; }
+.parameter-item.selected { border-color: var(--acc); background: var(--acc-glow); }
+@media (max-width: 900px) { .studio-grid { grid-template-columns: 1fr; } }
