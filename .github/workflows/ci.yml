@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rca_ci
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: rca_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rca_ci -d rca_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RCA_POSTGRES_TEST_URL: postgresql+asyncpg://rca_ci:isolated-ci-only@127.0.0.1:5432/rca_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install OCR runtime
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - run: uv sync --locked --extra dev
+      - run: uv run ruff check .
+      - run: uv run python -m pytest -v
+      - run: make smoke
+      - run: docker build --tag rca-analyzer:ci .

@@ -1,0 +1,219 @@
+{
+  "id": "rca-example",
+  "version": "1.0.0",
+  "purpose": "example",
+  "capability": "incident_triage",
+  "description": "Synthetic wiring examples only. Not an independently labeled quality benchmark; cannot qualify promotion.",
+  "train": [
+    {
+      "id": "checkout_observations",
+      "prompt": "Summarize the recorded checkout timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "checkout timeout observations",
+        "description": "The checkout endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR checkout request timeout; duration_ms=1000"
+        }
+      ],
+      "attachments": [
+        "Recorded checkout observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A checkout timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "inventory_observations",
+      "prompt": "Summarize the recorded inventory timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "inventory timeout observations",
+        "description": "The inventory endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR inventory request timeout; duration_ms=1100"
+        }
+      ],
+      "attachments": [
+        "Recorded inventory observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A inventory timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "payments_observations",
+      "prompt": "Summarize the recorded payments timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "payments timeout observations",
+        "description": "The payments endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR payments request timeout; duration_ms=1200"
+        }
+      ],
+      "attachments": [
+        "Recorded payments observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A payments timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    }
+  ],
+  "holdout": [
+    {
+      "id": "shipping_observations",
+      "prompt": "Summarize the recorded shipping timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "shipping timeout observations",
+        "description": "The shipping endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR shipping request timeout; duration_ms=1300"
+        }
+      ],
+      "attachments": [
+        "Recorded shipping observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A shipping timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "catalog_observations",
+      "prompt": "Summarize the recorded catalog timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "catalog timeout observations",
+        "description": "The catalog endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR catalog request timeout; duration_ms=1400"
+        }
+      ],
+      "attachments": [
+        "Recorded catalog observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A catalog timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "search_observations",
+      "prompt": "Summarize the recorded search timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "search timeout observations",
+        "description": "The search endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR search request timeout; duration_ms=1500"
+        }
+      ],
+      "attachments": [
+        "Recorded search observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A search timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "accounts_observations",
+      "prompt": "Summarize the recorded accounts timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "accounts timeout observations",
+        "description": "The accounts endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR accounts request timeout; duration_ms=1600"
+        }
+      ],
+      "attachments": [
+        "Recorded accounts observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A accounts timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    },
+    {
+      "id": "notifications_observations",
+      "prompt": "Summarize the recorded notifications timeout observations and missing evidence; do not assert a proven cause.",
+      "incident_id": "SAMSON-101",
+      "ticket": {
+        "key": "SAMSON-101",
+        "summary": "notifications timeout observations",
+        "description": "The notifications endpoint returned a timeout during this recorded scenario.",
+        "created": "2026-09-11T10:15:00Z"
+      },
+      "logs": [
+        {
+          "_time": "2026-09-11T10:15:00Z",
+          "_raw": "ERROR notifications request timeout; duration_ms=1700"
+        }
+      ],
+      "attachments": [
+        "Recorded notifications observation: one timeout. No deployment timeline or database metrics are available."
+      ],
+      "expected_outcome": "FINDINGS",
+      "expected_facts": [
+        "A notifications timeout was observed.",
+        "The supplied evidence does not establish a root cause.",
+        "Deployment timeline and database metrics are unavailable."
+      ]
+    }
+  ]
+}

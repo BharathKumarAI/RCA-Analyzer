@@ -1,0 +1,24 @@
+.git
+.gitignore
+.env
+.env.*
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+references/
+blob_local/*
+!blob_local/platform/
+data/
+tests/
+docs/
+infra/
+observability/
+optimization/
+persistence/
+evals/
+
+# Scoped layers are deployment-managed, never baked into the image or committed.
+blob_local/platform/layers/projects/*.yaml
+blob_local/platform/layers/users/*.yaml

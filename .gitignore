@@ -1,0 +1,89 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Track platform content; exclude runtime blobs and private project files.
+blob_local/*
+!blob_local/platform/
+!blob_local/README.md
+
+references/
+.env
+.env.*
+!.env.example
+
+# Runtime records, local evaluations and tooling caches
+data/
+mlruns/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.db
+*.db-shm
+*.db-wal
+
+# Scoped layers are deployment-managed, never baked into the image or committed.
+blob_local/platform/layers/projects/*.yaml
+blob_local/platform/layers/users/*.yaml
+
+# Track only project documentation and reference templates; real project data stays private.
+!blob_local/projects/
+blob_local/projects/*
+!blob_local/projects/README.md
+!blob_local/projects/project_1/
+!blob_local/projects/project_2/
+blob_local/projects/project_[12]/**
+!blob_local/projects/project_[12]/**/
+!blob_local/projects/project_[12]/**/README.md
+!blob_local/projects/project_[12]/**/*.example
+
+# Keys, certificates, and credentials
+*.pem
+*.key
+*.cert
+*.crt
+
+# Node and frontend build artifacts
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist-ssr/
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# Operating System & IDE files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+

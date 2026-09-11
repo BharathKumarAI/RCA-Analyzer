@@ -1,0 +1,20 @@
+# Delegation applies only to these fields. Identity, credentials and safety stay platform-owned.
+project_sections: [skills, capabilities, disabled_connectors, limits, workflow, prompts, preferences]
+model_profiles: [balanced-investigation, fast-investigation, high-reasoning-synthesis]
+user_preferences: [presentation, detail]
+# Tool ceilings are intersected with capability permissions at runtime.
+# Native authentication, audit, redaction and tool guards are always immutable.
+skills:
+  incident-triage:
+    immutable: false
+    project_override: true
+    user_override: true
+    actions: [itsm.get_ticket]
+  log-correlation:
+    immutable: false
+    project_override: true
+    user_override: true
+    actions: [log_search.query_range]
+  database-rca:
+    immutable: true
+    actions: [database.query_readonly]

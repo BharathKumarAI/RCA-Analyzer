@@ -1,0 +1,12 @@
+max_file_bytes: 8388608
+max_files: 20
+max_expanded_bytes: 33554432
+max_zip_members: 500
+max_pdf_pages: 50
+max_rows: 2000
+max_cells: 20000
+max_text_chars: 40000
+max_image_pixels: 25000000
+parser_timeout_seconds: 20
+concurrency: 4
+allowed_extensions: ['.txt', '.md', '.log', '.json', '.csv', '.tsv', '.pdf', '.docx', '.xlsx', '.png', '.jpg', '.jpeg', '.webp']

@@ -1,0 +1,33 @@
+id: log_correlation
+version: 1.5.0
+enabled: true
+name: "Structured Log Anomaly & Correlation"
+description: "Queries log clusters, extracts error spikes within incident time windows, and detects stack trace anomalies."
+category: investigation
+
+skills:
+  - log-correlation
+
+requires:
+  connectors:
+    - log_search
+
+optional:
+  connectors:
+    - itsm
+
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+    - PLATFORM_ADMIN
+    - PROJECT_OWNER
+    - PROJECT_ANALYST
+  allowed_actions:
+    - log_search.query_range
+
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: offload_to_artifacts
+
+model_profile: fast-investigation

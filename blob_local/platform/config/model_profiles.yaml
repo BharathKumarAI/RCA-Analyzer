@@ -1,0 +1,47 @@
+# Stage models are explicit. A run snapshots the resolved profile and prompts.
+# Verified model catalogue: https://ai.google.dev/gemini-api/docs/models
+stages:
+  extraction:
+    model: gemini-3.5-flash-lite
+    thinking_level: minimal
+    temperature: 1.0
+    max_output_tokens: 2048
+  triage:
+    model: gemini-3.5-flash-lite
+    thinking_level: low
+    temperature: 1.0
+    max_output_tokens: 2048
+  logs:
+    model: gemini-3.8-flash
+    thinking_level: low
+    temperature: 1.0
+    max_output_tokens: 4096
+  synthesis:
+    model: gemini-3.8-flash
+    thinking_level: high
+    temperature: 1.0
+    max_output_tokens: 8192
+  fast_synthesis:
+    model: gemini-3.5-flash-lite
+    thinking_level: medium
+    temperature: 1.0
+    max_output_tokens: 4096
+profiles:
+  balanced-investigation:
+    extraction: extraction
+    triage: triage
+    logs: logs
+    synthesis: synthesis
+    tool_call_limit: 12
+  fast-investigation:
+    extraction: extraction
+    triage: triage
+    logs: logs
+    synthesis: fast_synthesis
+    tool_call_limit: 8
+  high-reasoning-synthesis:
+    extraction: extraction
+    triage: triage
+    logs: logs
+    synthesis: synthesis
+    tool_call_limit: 12

@@ -1,0 +1,37 @@
+id: incident_triage
+version: 2.1.0
+enabled: true
+name: "Incident Triage & Anchor Resolution"
+description: "Ingests incident reports, extracts temporal anchors, classifies severity, and maps to owning teams."
+category: triage
+
+skills:
+  - incident-triage
+  - log-correlation
+
+requires:
+  connectors:
+    - itsm
+
+optional:
+  connectors:
+    - log_search
+
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+    - PLATFORM_ADMIN
+    - PROJECT_OWNER
+    - PROJECT_MANAGER
+    - PROJECT_ANALYST
+  allowed_actions:
+    - itsm.get_ticket
+    - log_search.query_range
+
+safety_profile:
+  tool_mutations: approval_required
+  pii_access: project_scoped
+  raw_payload_access: restricted
+  external_network: connector_allowlist
+
+model_profile: balanced-investigation

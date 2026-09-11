@@ -1,0 +1,18 @@
+# One ADK reflection candidate, then independent held-out comparison.
+# Approval is always required; these gates cannot enable automatic activation.
+enabled: true
+reflection_stage: synthesis
+judge_stage: synthesis
+repeats: 2
+min_train_cases: 3
+min_holdout_cases: 5
+max_cases_per_split: 20
+max_model_calls: 256
+timeout_seconds: 1800
+min_quality_gain: 0.02
+min_candidate_quality: 0.8
+max_case_quality_drop: 0.1
+max_latency_ratio: 1.5
+max_token_ratio: 1.25
+max_blob_bytes: 2097152
+max_asset_chars: 16000

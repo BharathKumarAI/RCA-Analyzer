@@ -1,0 +1,15 @@
+# Credentials and endpoint/scope are provided via environment variables.
+itsm:
+  enabled: true
+  timeout_s: 5
+  max_connections: 8
+  max_keepalive_connections: 4
+  max_response_bytes: 1048576
+log_search:
+  enabled: true
+  timeout_s: 10
+  max_connections: 8
+  max_keepalive_connections: 4
+  max_response_bytes: 1048576
+  max_results: 100
+  max_window_seconds: 86400

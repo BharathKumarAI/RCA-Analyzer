@@ -1,0 +1,21 @@
+# Non-secret server settings. RCA_* environment values override these.
+mode: demo
+max_concurrent_runs: 4
+max_parallel_models: 4
+parallel_evidence: true
+run_timeout_seconds: 120
+max_llm_calls: 12
+max_input_chars: 16000
+max_context_chars: 64000
+max_evidence_items: 100
+max_evidence_chars: 12000
+max_upload_batch_bytes: 33554432
+attachment_ttl_seconds: 86400
+retention_days: 90
+progress_poll_seconds: 0.5
+health_timeout_seconds: 10
+default_log_window: '-15m'
+max_concurrent_uploads: 2
+max_json_body_bytes: 131072
+max_project_agents: 4
+max_agent_yaml_bytes: 65536

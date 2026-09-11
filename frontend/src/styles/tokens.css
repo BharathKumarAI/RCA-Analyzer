@@ -1,0 +1,77 @@
+:root, [data-theme="dark"] {
+  --bg: #090e1a;
+  --card: #111a2e;
+  --card-hover: #18243e;
+  --card-active: #1e2c4c;
+  --card-subtle: #0c1424;
+  --line: #22314d;
+  --line-strong: #364d75;
+  --line-focus: rgba(157, 113, 253, 0.6);
+
+  --tx: #f8fafc;
+  --muted: #cbd5e1;
+  --dim: #94a3b8;
+  --tx-inverse: #090c15;
+
+  --acc: #9d71fd;
+  --acc-glow: rgba(157, 113, 253, 0.28);
+  --acc2: #6366f1;
+  --acc3: #10b981;
+  --acc3-glow: rgba(16, 185, 129, 0.25);
+  --acc-rose: #f43f5e;
+  --acc-amber: #f59e0b;
+
+  --gradient-brand: linear-gradient(120deg, #9d71fd, #6366f1, #10b981);
+  --gradient-btn: linear-gradient(135deg, rgba(157, 113, 253, 0.22), rgba(99, 102, 241, 0.2));
+  --gradient-btn-hover: linear-gradient(135deg, #8b5cf6, #4f46e5);
+
+  --shadow: 0 2px 4px rgba(0, 0, 0, 0.4), 0 12px 32px -10px rgba(0, 0, 0, 0.7);
+  --shadow-hover: 0 4px 8px rgba(0, 0, 0, 0.5), 0 20px 42px -12px rgba(139, 92, 246, 0.3);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+}
+
+[data-theme="light"] {
+  --bg: #f7f6f2;
+  --card: #ffffff;
+  --card-hover: #faf9f6;
+  --card-active: #f3f0e8;
+  --card-subtle: #f4f1ea;
+  --line: #e6e1d6;
+  --line-strong: #cfc6b4;
+  --line-focus: rgba(109, 40, 217, 0.4);
+
+  --tx: #211d17;
+  --muted: #665e50;
+  --dim: #9a917f;
+  --tx-inverse: #ffffff;
+
+  --acc: #6d28d9;
+  --acc-glow: rgba(109, 40, 217, 0.15);
+  --acc2: #4338ca;
+  --acc3: #0e7a5f;
+  --acc3-glow: rgba(14, 122, 95, 0.15);
+  --acc-rose: #e11d48;
+  --acc-amber: #d97706;
+
+  --gradient-brand: linear-gradient(120deg, #7c3aed, #4f46e5, #0d9488);
+  --gradient-btn: linear-gradient(135deg, rgba(124, 58, 237, 0.12), rgba(79, 70, 229, 0.1));
+  --gradient-btn-hover: linear-gradient(135deg, #7c3aed, #4f46e5);
+
+  --shadow: 0 1px 2px rgba(30, 20, 50, 0.05), 0 8px 24px -12px rgba(30, 20, 50, 0.12);
+  --shadow-hover: 0 2px 6px rgba(30, 20, 50, 0.06), 0 16px 34px -16px rgba(30, 20, 50, 0.2);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+}
