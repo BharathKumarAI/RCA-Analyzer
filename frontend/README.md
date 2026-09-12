@@ -4,15 +4,15 @@ The React admin workspace uses authenticated FastAPI endpoints through the [API 
 
 ## Run locally
 
-Start the backend from the repository root with `make dev`, then run:
+Start the backend from the repository root with `make dev` (port 8000), then run:
 
 ```sh
 cd frontend
 npm ci
-npm run dev
+RCA_API_TARGET=http://127.0.0.1:8000 npm run dev
 ```
 
-Open `/admin/` on the URL printed by Vite. The [development proxy](vite.config.ts) defaults to `http://127.0.0.1:8000`. To use another local API port, start Vite with `RCA_API_TARGET=http://127.0.0.1:8005 npm run dev`.
+Open `http://localhost:5173/admin/`. Vite is pinned to port 5173; if that port is already occupied, the frontend stops with a clear error instead of switching ports. The [development proxy](vite.config.ts) defaults to `http://127.0.0.1:8005`. To use another local API port, start Vite with `RCA_API_TARGET=http://127.0.0.1:8005 npm run dev`.
 
 Open the session control and enter a valid deployment-issued bearer token. The server verifies the token and resolves membership; entering a token never grants roles or changes deployment scope. The token stays in memory and is cleared on page reload. See [authentication](../app/identity/auth.py) and the [session client](src/services/api.ts). For configured demo deployments, the existing [development token issuer](../scripts/issue_dev_token.py) can issue a token using an explicitly supplied private key; it refuses live mode.
 
@@ -21,6 +21,7 @@ Open the session control and enter a valid deployment-issued bearer token. The s
 ```sh
 npm run build
 npm run lint
+npm test
 ```
 
 The [FastAPI application](../app/api/application.py) serves the built `dist` directory at `/admin/` when it exists, with a legacy portal fallback when no build exists. Rebuild after changing the frontend before serving it through FastAPI. Run `make lint`, `make test`, and `make smoke` from the repository root for backend verification.

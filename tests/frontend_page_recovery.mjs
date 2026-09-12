@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import vm from 'node:vm';
+import ts from '../frontend/node_modules/typescript/lib/typescript.js';
+
+const source = await fs.readFile(new URL('../frontend/src/App.tsx', import.meta.url), 'utf8');
+const boundary = source.slice(source.indexOf('class PageErrorBoundary'), source.indexOf('export const App:'));
+const output = ts.transpileModule(`${boundary}\nglobalThis.Boundary = PageErrorBoundary;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS } }).outputText;
+let reloaded = false;
+const context = { React: { Component: class { constructor(props) { this.props = props; } }, createElement: (type, props, ...children) => ({ type, props, children }) }, window: { location: { reload: () => { reloaded = true; } } } };
+vm.createContext(context);
+vm.runInContext(output, context);
+const instance = new context.Boundary({ children: 'page content' });
+assert.equal(instance.render(), 'page content');
+instance.state = context.Boundary.getDerivedStateFromError(new Error('Chunk unavailable'));
+const rendered = instance.render();
+assert.equal(rendered.props.role, 'alert');
+const button = rendered.children.find(item => item.type === 'button');
+assert.equal(button.children[0], 'Reload application');
+button.props.onClick();
+assert.equal(reloaded, true);
+console.log('frontend failed page recovery checks passed');

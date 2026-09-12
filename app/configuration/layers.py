@@ -26,6 +26,7 @@ class ConfigurationLayers:
             raise ValueError("Migrate skill_layers to layers before startup")
         self.files = {}
         self.project_files = {}
+        self.harness = None
 
         def read(path, model, external=False):
             if (
@@ -161,6 +162,9 @@ class ConfigurationLayers:
 
     def resolve_capability(self, capability, principal):
         project = self.project(principal)
+        exclusions = self.harness.exclusions(project.harness if project else None) if self.harness else {}
+        if capability.id in exclusions.get("capabilities", set()):
+            capability = capability.model_copy(update={"enabled": False})
         if project is None:
             return capability
         override = project.capabilities.get(capability.id, CapabilityOverride())
@@ -219,6 +223,7 @@ class ConfigurationLayers:
             "preferences": preferences,
             "prompts": {**prompts, **(project.prompts if project else {})},
             "disabled_connectors": project.disabled_connectors if project else (),
+            "environments": project.environments if project else (),
         }
 
     def resolve(
@@ -233,7 +238,9 @@ class ConfigurationLayers:
             rule = self.rules.get(name)
             text = platform_contents[name]
             permitted = set(rule.actions if rule else capability.allowed_actions)
-            enabled, source = True, "platform"
+            exclusions = self.harness.exclusions(project.harness if project else None) if self.harness else {}
+            enabled = name not in exclusions.get("skills", set())
+            source = "harness" if not enabled else "platform"
             if (
                 optimized_contents is not None
                 and rule is not None

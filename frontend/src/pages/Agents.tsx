@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bot,
   Plus,
@@ -13,15 +13,16 @@ import {
   AlertTriangle,
   ArrowUpRight
 } from 'lucide-react';
-import { AgentConfiguration } from '../types/api';
-import { approveAgent, rejectAgent, submitAgentYaml } from '../services/api';
+import { AgentConfiguration, Principal } from '../types/api';
+import { approveAgent, rejectAgent, revokeAgent, submitAgentYaml } from '../services/api';
 
 interface AgentsProps {
   agents: AgentConfiguration[];
+  principal: Principal | null;
   onRefresh: () => void;
 }
 
-export const Agents: React.FC<AgentsProps> = ({ agents, onRefresh }) => {
+export const Agents: React.FC<AgentsProps> = ({ agents, principal, onRefresh }) => {
   const [selectedAgent, setSelectedAgent] = useState<AgentConfiguration | null>(null);
   const [expandedPromptIds, setExpandedPromptIds] = useState<Set<string>>(new Set());
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
@@ -29,21 +30,25 @@ export const Agents: React.FC<AgentsProps> = ({ agents, onRefresh }) => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [submitting, setSubmitting] = useState(false);
   const [reviewReason, setReviewReason] = useState('');
-  const [yamlContent, setYamlContent] = useState(`name: kubernetes_crashloop_specialist
-role: Specialist
-description: Specialist agent for reviewing Kubernetes crashloops, node evictions and OOMKilled events.
-model: gemini-2.5-flash
-temperature: 0.2
-thinking_budget: 2048
-max_steps: 10
+  const [actionError, setActionError] = useState<string | null>(null);
+  const isAdmin = Boolean(principal?.roles.some(role => role === 'PLATFORM_ADMIN' || role === 'TENANT_ADMIN'));
+  const canReview = (agent: AgentConfiguration) => isAdmin && principal?.subject !== agent.author && agent.status === 'pending' && Boolean(agent.content_hash) && Boolean(reviewReason.trim()) && !submitting;
+
+  const [yamlContent, setYamlContent] = useState(`id: incident_specialist
+version: 1.0.0
+name: Incident specialist
+description: Investigates incident evidence within the configured capability.
+capability: incident_triage
+model_profile: balanced-investigation
+stage_model: logs
 tools:
-  - splunk_query_events
-permissions:
-  - telemetry:read
-rag_sources:
-  - Kubernetes Runbooks
-instruction: >
-  Analyze pod crashloops, query container exit codes, and isolate memory leak signatures.`);
+  - itsm.get_ticket
+instruction: Investigate the supplied incident evidence and report bounded findings.`);
+
+  useEffect(() => {
+    const candidate = new URLSearchParams(window.location.hash.split('?')[1]).get('candidate');
+    if (candidate) setSelectedAgent(agents.find(agent => agent.id === candidate) || null);
+  }, [agents]);
 
   const togglePrompt = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -68,43 +73,56 @@ instruction: >
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setActionError(null);
     try {
       await submitAgentYaml(yamlContent);
       setIsRegisterOpen(false);
       onRefresh();
     } catch (error) {
-      setReviewReason(error instanceof Error ? error.message : 'Unable to submit configuration');
+      setActionError(error instanceof Error ? error.message : 'Unable to submit configuration');
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleApprove = async (agent: AgentConfiguration) => {
+    if (!canReview(agent)) return;
     setSubmitting(true);
+    setActionError(null);
     try {
       if (!agent.content_hash) throw new Error('This configuration has no review hash. Refresh and try again.');
-      await approveAgent(agent.id, agent.content_hash, reviewReason || 'Peer reviewed');
+      await approveAgent(agent.id, agent.content_hash, reviewReason.trim());
       setSelectedAgent(null);
       onRefresh();
     } catch (error) {
-      setReviewReason(error instanceof Error ? error.message : 'Unable to approve configuration');
+      setActionError(error instanceof Error ? error.message : 'Unable to approve configuration');
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleReject = async (agent: AgentConfiguration) => {
+    if (!canReview(agent)) return;
     setSubmitting(true);
+    setActionError(null);
     try {
       if (!agent.content_hash) throw new Error('This configuration has no review hash. Refresh and try again.');
-      await rejectAgent(agent.id, agent.content_hash, reviewReason || 'Policy constraint');
+      await rejectAgent(agent.id, agent.content_hash, reviewReason.trim());
       setSelectedAgent(null);
       onRefresh();
     } catch (error) {
-      setReviewReason(error instanceof Error ? error.message : 'Unable to reject configuration');
+      setActionError(error instanceof Error ? error.message : 'Unable to reject configuration');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleRevoke = async (agent: AgentConfiguration) => {
+    setSubmitting(true);
+    setActionError(null);
+    try { await revokeAgent(agent.id, reviewReason || 'Configuration revoked'); setSelectedAgent(null); onRefresh(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : 'Unable to revoke configuration'); }
+    finally { setSubmitting(false); }
   };
 
   return (
@@ -136,7 +154,7 @@ instruction: >
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => setIsRegisterOpen(true)}
+              onClick={() => { setActionError(null); setReviewReason(''); setIsRegisterOpen(true); }}
               title="Submit declarative specialist configuration"
             >
               <Plus size={13} strokeWidth={2.5} /> Register Specialist
@@ -200,7 +218,7 @@ instruction: >
                   <div className="card-title-row">
                     <h2
                       className="card-title"
-                      onClick={() => setSelectedAgent(agent)}
+                      onClick={() => { setActionError(null); setReviewReason(''); setSelectedAgent(agent); }}
                     >
                       {agent.name}
                     </h2>
@@ -217,8 +235,6 @@ instruction: >
                   <div className="card-meta-pills">
                     <span className="meta-pill highlight">{agent.model}</span>
                     <span className="meta-pill">{agent.thinking_budget} tokens</span>
-                    <span className="meta-pill highlight">{agent.accuracy}% acc</span>
-                    <span className="meta-pill">{agent.avg_latency_sec}s latency</span>
                     <span className="meta-pill">{agent.tools.length} tools</span>
                   </div>
                 </div>
@@ -227,7 +243,7 @@ instruction: >
                   <button
                     type="button"
                     className="btn btn-open"
-                    onClick={() => setSelectedAgent(agent)}
+                    onClick={() => { setActionError(null); setReviewReason(''); setSelectedAgent(agent); }}
                     title="Open configuration drawer"
                   >
                     <Sliders size={13} />
@@ -253,7 +269,7 @@ instruction: >
                   <div className="prompt-label">Autonomous Directive & Persona Prompt</div>
                   <pre className="prompt-text">{agent.prompt}</pre>
                   <div className="file-name">
-                    config: {agent.id}.yaml · hash: {agent.content_hash || 'sha256:verified'} · updated: {agent.updated_at}
+                    config: {agent.id}.yaml · hash: {agent.content_hash || 'unavailable'} · updated: {agent.updated_at}
                   </div>
                 </div>
               )}
@@ -277,12 +293,13 @@ instruction: >
                 </span>
               </div>
             </div>
-            <button type="button" className="icon-btn" onClick={() => setSelectedAgent(null)}>
+            <button type="button" className="icon-btn" aria-label="Close agent details" onClick={() => setSelectedAgent(null)}>
               <X size={15} />
             </button>
           </div>
 
           <div className="drawer-body">
+            {actionError && <div className="notice-banner red" role="alert">{actionError}</div>}
             {selectedAgent.status === 'pending' && (
               <div style={{ padding: '12px 14px', borderRadius: '10px', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--acc-amber)', fontWeight: 700, fontSize: '12px' }}>
@@ -296,9 +313,16 @@ instruction: >
                   Expected Hash: <code>{selectedAgent.content_hash}</code>
                 </div>
 
+                <p style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
+                  {!isAdmin ? 'Only platform or tenant administrators can review configurations.' : principal?.subject === selectedAgent.author ? 'You authored this configuration. A different administrator must approve or reject it.' : !selectedAgent.content_hash ? 'The review hash is missing. Refresh before reviewing.' : 'Enter a review reason to approve or reject this configuration.'}
+                </p>
                 <input
                   type="text"
                   placeholder="Review decision rationale..."
+                  aria-label="Review decision rationale"
+                  maxLength={2000}
+                  required
+                  disabled={submitting || !isAdmin || principal?.subject === selectedAgent.author}
                   value={reviewReason}
                   onChange={e => setReviewReason(e.target.value)}
                   style={{ width: '100%', padding: '6px 8px', fontSize: '11.5px' }}
@@ -309,7 +333,7 @@ instruction: >
                     type="button"
                     className="btn btn-danger"
                     onClick={() => handleReject(selectedAgent)}
-                    disabled={submitting}
+                    disabled={!canReview(selectedAgent)}
                   >
                     <XCircle size={13} /> Reject
                   </button>
@@ -317,7 +341,7 @@ instruction: >
                     type="button"
                     className="btn btn-primary"
                     onClick={() => handleApprove(selectedAgent)}
-                    disabled={submitting}
+                    disabled={!canReview(selectedAgent)}
                   >
                     <CheckCircle size={13} /> Approve & Activate
                   </button>
@@ -334,22 +358,19 @@ instruction: >
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11.5px' }}>
                 <div>
                   <label style={{ color: 'var(--dim)', display: 'block', marginBottom: '3px', fontWeight: 600 }}>Foundation Model</label>
-                  <select defaultValue={selectedAgent.model} style={{ width: '100%', padding: '6px 8px' }}>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep Reasoning)</option>
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Low Latency)</option>
-                  </select>
+                  <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 5 }}>{selectedAgent.model}</div>
                 </div>
                 <div>
                   <label style={{ color: 'var(--dim)', display: 'block', marginBottom: '3px', fontWeight: 600 }}>Temperature</label>
-                  <input type="number" step="0.05" defaultValue={selectedAgent.temperature} style={{ width: '100%', padding: '6px 8px' }} />
+                  <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 5, color: 'var(--muted)' }}>Not configured</div>
                 </div>
                 <div>
                   <label style={{ color: 'var(--dim)', display: 'block', marginBottom: '3px', fontWeight: 600 }}>Thinking Budget</label>
-                  <input type="number" defaultValue={selectedAgent.thinking_budget} style={{ width: '100%', padding: '6px 8px' }} />
+                  <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 5, color: 'var(--muted)' }}>Not configured</div>
                 </div>
                 <div>
                   <label style={{ color: 'var(--dim)', display: 'block', marginBottom: '3px', fontWeight: 600 }}>Max Steps</label>
-                  <input type="number" defaultValue={selectedAgent.max_steps} style={{ width: '100%', padding: '6px 8px' }} />
+                  <div style={{ padding: '7px 8px', border: '1px solid var(--line)', borderRadius: 5, color: 'var(--muted)' }}>Not configured</div>
                 </div>
               </div>
             </div>
@@ -363,8 +384,13 @@ instruction: >
               <textarea
                 rows={5}
                 defaultValue={selectedAgent.prompt}
+                readOnly
+                aria-label="System instruction (read only)"
                 style={{ width: '100%', padding: '10px', fontSize: '12px', fontFamily: 'var(--font-mono)', lineHeight: 1.5 }}
               />
+              <p style={{ margin: '6px 0 0', fontSize: '11px', color: 'var(--muted)' }}>
+                Agent definitions are immutable after submission. Register a new YAML revision to change this instruction.
+              </p>
             </div>
 
             {/* Bound Tools */}
@@ -376,7 +402,7 @@ instruction: >
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
                 {selectedAgent.tools.map(tool => (
                   <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <input type="checkbox" defaultChecked />
+                    <input type="checkbox" defaultChecked disabled />
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px' }}>{tool}</span>
                   </label>
                 ))}
@@ -389,20 +415,7 @@ instruction: >
                 <Activity size={12} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
                 Reliability & SRE Empirical Metrics
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', textAlign: 'center' }}>
-                <div style={{ padding: '8px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-                  <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--acc3)', fontFamily: 'var(--font-mono)' }}>{selectedAgent.accuracy}%</div>
-                  <div style={{ fontSize: '10px', color: 'var(--dim)', marginTop: '2px' }}>Accuracy</div>
-                </div>
-                <div style={{ padding: '8px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-                  <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--acc)', fontFamily: 'var(--font-mono)' }}>{selectedAgent.hallucination_rate}%</div>
-                  <div style={{ fontSize: '10px', color: 'var(--dim)', marginTop: '2px' }}>Hallucination</div>
-                </div>
-                <div style={{ padding: '8px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-                  <div style={{ fontSize: '16px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{selectedAgent.avg_latency_sec}s</div>
-                  <div style={{ fontSize: '10px', color: 'var(--dim)', marginTop: '2px' }}>Mean Latency</div>
-                </div>
-              </div>
+              <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)' }}>No empirical quality or latency measurements are persisted for this configuration.</p>
             </div>
           </div>
 
@@ -410,9 +423,9 @@ instruction: >
             <button type="button" className="btn btn-secondary" onClick={() => setSelectedAgent(null)}>
               Close
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => setSelectedAgent(null)}>
-              Save Changes
-            </button>
+            {selectedAgent.status === 'active' && <button type="button" className="btn btn-danger" onClick={() => void handleRevoke(selectedAgent)} disabled={submitting}>
+              Revoke
+            </button>}
           </div>
         </div>
       )}
@@ -426,7 +439,7 @@ instruction: >
                 <div className="eyebrow" style={{ marginBottom: '2px' }}>Specialist Proposal</div>
                 <h2 style={{ fontSize: '16px', fontWeight: 800, letterSpacing: '-.02em' }}>Register Agent Configuration</h2>
               </div>
-              <button type="button" className="icon-btn" onClick={() => setIsRegisterOpen(false)}>
+              <button type="button" className="icon-btn" aria-label="Close agent registration" onClick={() => setIsRegisterOpen(false)}>
                 <X size={15} />
               </button>
             </div>
@@ -435,6 +448,7 @@ instruction: >
               Submit a declarative YAML agent specification. The agent definition will be schema-validated, stored by content hash, and placed in the dual-custody approval queue.
             </p>
 
+            {actionError && <div className="notice-banner red" role="alert">{actionError}</div>}
             <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <textarea
                 rows={10}

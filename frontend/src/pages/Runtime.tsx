@@ -237,6 +237,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const configuredStage = config?.model_profiles?.stages?.[selectedNode];
   const activeNodeData: NodeSpec = {
     ...(NODES_SPEC[selectedNode] || NODES_SPEC.synthesis),
+    ...(!configuredStage && NODES_SPEC[selectedNode]?.type.includes('LlmAgent') ? { model: '—', thinking: '—', outputLimit: '—' } : {}),
     ...(configuredStage ? {
       model: configuredStage.model || NODES_SPEC.synthesis.model,
       thinking: configuredStage.thinking_level ? `${configuredStage.thinking_level} (configured)` : NODES_SPEC.synthesis.thinking,
@@ -245,6 +246,9 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
     } : {}),
   };
   const execution = config?.execution || {};
+  const stageConfig = (node: string) => config?.model_profiles?.stages?.[node] || config?.model_profiles?.stages?.orchestrator;
+  const modelLabel = (node: string, fallback: string) => stageConfig(node)?.model || fallback;
+  const thinkingLabel = (node: string, fallback: string) => stageConfig(node)?.thinking_level ? `${stageConfig(node).thinking_level} Think` : fallback;
 
   // Render the core interactive workflow topology graph
   const renderWorkflowGraph = (isModal: boolean) => (
@@ -283,7 +287,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
             <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>Pre-Flight Planning</span>
           </div>
           <span style={{ fontSize: '13px', fontWeight: 700 }}>Request Planning Stage</span>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '3px' }}>gemini-2.5-flash (High Think)</span>
+          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '3px' }}>{modelLabel('orchestrator', 'Configured model')} ({thinkingLabel('orchestrator', 'Configured thinking')})</span>
         </div>
       </div>
 
@@ -314,7 +318,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '12px', fontWeight: 700 }}>1. Triage LlmAgent</span>
-                <span style={{ fontSize: '10px', color: 'var(--muted)' }}>Flash-Lite (Low Think)</span>
+                <span style={{ fontSize: '10px', color: 'var(--muted)' }}>{modelLabel('triage', 'Configured model')} ({thinkingLabel('triage', 'Configured thinking')})</span>
               </div>
               <span style={{ fontSize: '11px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>
                 Calls governed <code style={{ color: 'var(--acc)' }}>itsm.get_ticket</code> tool
@@ -332,7 +336,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '12px', fontWeight: 700 }}>2. Log Investigator LlmAgent</span>
-                <span style={{ fontSize: '10px', color: 'var(--muted)' }}>Flash (Low Think)</span>
+                <span style={{ fontSize: '10px', color: 'var(--muted)' }}>{modelLabel('logs', 'Configured model')} ({thinkingLabel('logs', 'Configured thinking')})</span>
               </div>
               <span style={{ fontSize: '11px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>
                 Calls governed <code style={{ color: 'var(--acc)' }}>log_search.query_range</code> tool
@@ -366,7 +370,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '12px', fontWeight: 700 }}>File Investigator LlmAgent</span>
-              <span style={{ fontSize: '10px', color: 'var(--muted)' }}>Flash-Lite (Min Think)</span>
+              <span style={{ fontSize: '10px', color: 'var(--muted)' }}>{modelLabel('extraction', 'Configured model')} ({thinkingLabel('extraction', 'Configured thinking')})</span>
             </div>
             <p style={{ fontSize: '11px', color: 'var(--muted)', margin: 0, lineHeight: 1.4 }}>
               Summarizes pre-extracted, redacted attachment text stored in CAS without calling external network tools.
@@ -393,7 +397,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
         >
           <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>ADK JoinNode</span>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>Evidence Join Barrier</span>
-          <span style={{ fontSize: '10px', color: 'var(--acc)', display: 'block', marginTop: '2px' }}>Max 100 Evidence Items</span>
+          <span style={{ fontSize: '10px', color: 'var(--acc)', display: 'block', marginTop: '2px' }}>Max {execution.max_evidence_items ?? '—'} Evidence Items</span>
         </div>
 
         <ArrowRight size={18} style={{ color: 'var(--muted)', flexShrink: 0 }} />
@@ -417,7 +421,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
         >
           <span style={{ fontSize: '10px', color: '#10b981', display: 'block', fontWeight: 700 }}>Terminal Synthesis</span>
           <span style={{ fontSize: '12px', fontWeight: 700 }}>RCA Synthesizer LlmAgent</span>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>gemini-2.5-flash (High Think)</span>
+          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>{modelLabel('synthesis', 'Configured model')} ({thinkingLabel('synthesis', 'Configured thinking')})</span>
         </div>
       </div>
     </div>
@@ -493,7 +497,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
       <div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
           <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Code2 size={12} /> Google ADK Native Python Definition
+            <Code2 size={12} /> Illustrative ADK Architecture Snippet
           </span>
           <span style={{ fontSize: '10px', color: 'var(--muted)' }}>app/orchestrator/</span>
         </div>
@@ -701,25 +705,25 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <div style={{ background: 'var(--bg)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Max Parallel Models</span>
-              <span style={{ fontSize: '16px', fontWeight: 700 }}>4 (Semaphore)</span>
+              <span style={{ fontSize: '16px', fontWeight: 700 }}>{execution.max_parallel_models ?? '—'} (Semaphore)</span>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>Protects rate limits</span>
             </div>
 
             <div style={{ background: 'var(--bg)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Max Concurrent Runs</span>
-              <span style={{ fontSize: '16px', fontWeight: 700 }}>4 Active Runs</span>
+              <span style={{ fontSize: '16px', fontWeight: 700 }}>{execution.max_concurrent_runs ?? '—'} Active Runs</span>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>HTTP 429 when busy</span>
             </div>
 
             <div style={{ background: 'var(--bg)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Max LLM Calls / Run</span>
-              <span style={{ fontSize: '16px', fontWeight: 700 }}>12 Model Calls</span>
+              <span style={{ fontSize: '16px', fontWeight: 700 }}>{execution.max_llm_calls ?? '—'} Model Calls</span>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>Hard budget cap</span>
             </div>
 
             <div style={{ background: 'var(--bg)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Max Evidence Items</span>
-              <span style={{ fontSize: '16px', fontWeight: 700 }}>100 Items</span>
+              <span style={{ fontSize: '16px', fontWeight: 700 }}>{execution.max_evidence_items ?? '—'} Items</span>
               <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', marginTop: '2px' }}>Bounded context</span>
             </div>
           </div>

@@ -1,29 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Topbar } from './components/Topbar';
 import { Sidebar, ActivePage } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { SessionModal } from './components/SessionModal';
 import { NewInvestigationModal } from './components/NewInvestigationModal';
 
-import { Overview } from './pages/Overview';
-import { Agents } from './pages/Agents';
-import { Tools } from './pages/Tools';
-import { Governance } from './pages/Governance';
-import { Knowledge } from './pages/Knowledge';
-import { Runs } from './pages/Runs';
-import { Capabilities } from './pages/Capabilities';
-import { Users } from './pages/Users';
-import { Billing } from './pages/Billing';
-import { Settings } from './pages/Settings';
+const Overview = lazy(() => import('./pages/Overview').then(module => ({ default: module.Overview })));
+const Agents = lazy(() => import('./pages/Agents').then(module => ({ default: module.Agents })));
+const Tools = lazy(() => import('./pages/Tools').then(module => ({ default: module.Tools })));
+const Governance = lazy(() => import('./pages/Governance').then(module => ({ default: module.Governance })));
+const Knowledge = lazy(() => import('./pages/Knowledge').then(module => ({ default: module.Knowledge })));
+const Runs = lazy(() => import('./pages/Runs').then(module => ({ default: module.Runs })));
+const Capabilities = lazy(() => import('./pages/Capabilities').then(module => ({ default: module.Capabilities })));
+const Users = lazy(() => import('./pages/Users').then(module => ({ default: module.Users })));
+const Billing = lazy(() => import('./pages/Billing').then(module => ({ default: module.Billing })));
+const Settings = lazy(() => import('./pages/Settings').then(module => ({ default: module.Settings })));
 
 // New Agent Harness Suite Pages
-import { Skills } from './pages/Skills';
-import { ParameterStudio } from './pages/ParameterStudio';
-import { Roles } from './pages/Roles';
-import { Optimization } from './pages/Optimization';
-import { Persistence } from './pages/Persistence';
-import { Policy } from './pages/Policy';
-import { Runtime } from './pages/Runtime';
+const Skills = lazy(() => import('./pages/Skills').then(module => ({ default: module.Skills })));
+const ParameterStudio = lazy(() => import('./pages/ParameterStudio').then(module => ({ default: module.ParameterStudio })));
+const Roles = lazy(() => import('./pages/Roles').then(module => ({ default: module.Roles })));
+const Optimization = lazy(() => import('./pages/Optimization').then(module => ({ default: module.Optimization })));
+const Persistence = lazy(() => import('./pages/Persistence').then(module => ({ default: module.Persistence })));
+const Policy = lazy(() => import('./pages/Policy').then(module => ({ default: module.Policy })));
+const Runtime = lazy(() => import('./pages/Runtime').then(module => ({ default: module.Runtime })));
+const Alerts = lazy(() => import('./pages/Alerts').then(module => ({ default: module.Alerts })));
+const HealthChecks = lazy(() => import('./pages/HealthChecks').then(module => ({ default: module.HealthChecks })));
+const ProjectSetup = lazy(() => import('./pages/ProjectSetup').then(module => ({ default: module.ProjectSetup })));
+const HarnessLibrary = lazy(() => import('./pages/HarnessLibrary').then(module => ({ default: module.HarnessLibrary })));
 
 import {
   fetchHealth,
@@ -32,28 +36,64 @@ import {
   fetchRuns,
   fetchTools,
   fetchAuditLogs,
+  getSessionToken,
+  setSessionToken,
+  ApiError,
 } from './services/api';
 import { SystemHealth, Principal, AgentConfiguration, Run } from './types/api';
+
+class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) return <div className="notice-banner" role="alert" style={{ margin: 24 }}>
+      <p>This page could not load. The application may have been updated. Reload to reconnect your session and try again.</p>
+      <button className="btn btn-primary" onClick={() => window.location.reload()}>Reload application</button>
+    </div>;
+    return this.props.children;
+  }
+}
 
 export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<ActivePage>('overview');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>('light');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   // Modals state
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSessionOpen, setIsSessionOpen] = useState(false);
   const [isNewRunOpen, setIsNewRunOpen] = useState(false);
+  const [initialCapability, setInitialCapability] = useState<string | undefined>();
+  const openInvestigation = (capability?: string) => { setInitialCapability(capability); setIsNewRunOpen(true); };
 
   // Core Data
   const [health, setHealth] = useState<SystemHealth>({ status: 'error', latency_ms: 0, tenant_id: '', project_id: '', mode: 'demo', active_runs: 0, total_runs: 0, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 });
 
-  const [principal, setPrincipal] = useState<Principal>({ subject: '', roles: [], tenant_id: '', project_id: '' });
+  const [principal, setPrincipal] = useState<Principal | null>(null);
+  const [sessionVersion, setSessionVersion] = useState(0);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadingData, setLoadingData] = useState(false);
 
   const [agents, setAgents] = useState<AgentConfiguration[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [tools, setTools] = useState<import('./types/api').ToolDefinition[]>([]);
   const [auditLogs, setAuditLogs] = useState<import('./types/api').AuditLog[]>([]);
+
+  useEffect(() => {
+    const openSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsSearchOpen(open => !open);
+      }
+    };
+    window.addEventListener('keydown', openSearch);
+    return () => window.removeEventListener('keydown', openSearch);
+  }, []);
 
   // Initialize data and hash routing
   useEffect(() => {
@@ -75,6 +115,9 @@ export const App: React.FC = () => {
         'optimization',
         'agents',
         'tools',
+        'alerts',
+        'health-checks',
+        'project-setup',
         'persistence',
         'policy',
         'roles',
@@ -83,6 +126,7 @@ export const App: React.FC = () => {
         'users',
         'billing',
         'settings',
+        'harness-library',
       ];
 
       const hashStr = (window.location.hash + ' ' + window.location.pathname).toLowerCase();
@@ -111,39 +155,66 @@ export const App: React.FC = () => {
         setActivePage('agents');
       } else if (hashStr.includes('tools')) {
         setActivePage('tools');
+      } else if (hashStr.includes('alerts')) {
+        setActivePage('alerts');
+      } else if (hashStr.includes('health')) {
+        setActivePage('health-checks');
+      } else if (hashStr.includes('project')) {
+        setActivePage('project-setup');
       } else if (hashStr.includes('settings')) {
         setActivePage('settings');
+      } else {
+        setActivePage('overview');
       }
     };
 
     window.addEventListener('hashchange', handleHashChange);
     handleHashChange();
 
-    // Fetch initial backend state
-    loadData();
-
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
   const loadData = async () => {
+    if (!principal) return;
+    const token = getSessionToken();
+    setLoadingData(true);
+    setLoadError(null);
     try {
-      const [h, p, ag, rn, tl] = await Promise.all([
-        fetchHealth(),
-        fetchPrincipal(),
-        fetchAgents(),
-        fetchRuns(),
-        fetchTools(),
+      const [p, h, ag, rn, tl, logs] = await Promise.allSettled([
+        fetchPrincipal(), fetchHealth(), fetchAgents(), fetchRuns(), fetchTools(), fetchAuditLogs(),
       ]);
-      setHealth(h);
-      setPrincipal(p);
-      setAgents(ag);
-      setRuns(rn);
-      setTools(tl);
-      try { setAuditLogs(await fetchAuditLogs()); } catch { setAuditLogs([]); }
+      if (token !== getSessionToken()) return;
+      if (p.status === 'rejected') throw p.reason;
+      if (p.value.subject !== principal.subject || p.value.tenant_id !== principal.tenant_id || p.value.project_id !== principal.project_id) return clearScopedData();
+      const failures = [h, ag, rn, tl, logs].filter(result => result.status === 'rejected');
+      const expired = failures.find(result => result.reason instanceof ApiError && result.reason.status === 401);
+      if (expired) return clearScopedData(expired.reason.message);
+      if (h.status === 'fulfilled') setHealth(h.value);
+      if (ag.status === 'fulfilled') setAgents(ag.value);
+      if (rn.status === 'fulfilled') setRuns(rn.value);
+      if (tl.status === 'fulfilled') setTools(tl.value);
+      if (logs.status === 'fulfilled') setAuditLogs(logs.value);
+      if (failures.length) setLoadError(failures.map(result => result.reason instanceof Error ? result.reason.message : 'Some workspace data is unavailable.').join(' '));
     } catch (error) {
-      console.error(error instanceof Error ? error.message : 'Unable to load application data');
+      if (token !== getSessionToken()) return;
+      if (error instanceof ApiError && [401, 403].includes(error.status)) clearScopedData(error.message);
+      else setLoadError(error instanceof Error ? error.message : 'Unable to load workspace data.');
+    } finally {
+      if (token === getSessionToken()) setLoadingData(false);
     }
   };
+  const clearScopedData = (message?: string) => { setSessionError(message || null); setSessionToken(null); setLoadingData(false); setIsNewRunOpen(false); setIsSearchOpen(false); setPrincipal(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadError(null); setIsSessionOpen(true); setSessionVersion(v => v + 1); };
+  const handleAuthenticated = (next: Principal) => { setSessionError(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadingData(true); setPrincipal(next); setSessionVersion(v => v + 1); setIsSessionOpen(false); };
+  useEffect(() => { if (principal) void loadData(); }, [principal]);
+  useEffect(() => {
+    void fetchPrincipal().then(p => {
+      handleAuthenticated(p);
+    }).catch(err => {
+      if (err instanceof ApiError && [401, 403].includes(err.status)) {
+        setIsSessionOpen(true);
+      }
+    });
+  }, []);
 
   const handleSelectPage = (page: ActivePage) => {
     setActivePage(page);
@@ -160,7 +231,10 @@ export const App: React.FC = () => {
     setRuns(prev => [newRun, ...prev]);
     setActivePage('runs');
     window.location.hash = 'runs';
+    void loadData();
   };
+
+  if (!principal) return <div className="app-layout"><div className="card" style={{ margin: 'auto', padding: 32, textAlign: 'center' }}><h1>Connect your session</h1><p>Authenticate with a deployment JWT to view scoped RCA data.</p></div><SessionModal isOpen sessionError={sessionError} principal={{ subject: '', roles: [], tenant_id: '', project_id: '' }} onClose={() => undefined} onAuthenticated={handleAuthenticated} onSignedOut={clearScopedData} /></div>;
 
   return (
     <div className="app-layout">
@@ -173,8 +247,8 @@ export const App: React.FC = () => {
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSession={() => setIsSessionOpen(true)}
-        onOpenAlerts={() => handleSelectPage('governance')}
-        onNewInvestigation={() => setIsNewRunOpen(true)}
+        onOpenAlerts={() => handleSelectPage('alerts')}
+        onNewInvestigation={() => openInvestigation()}
       />
 
       {/* Main Body */}
@@ -184,30 +258,38 @@ export const App: React.FC = () => {
           onSelectPage={handleSelectPage}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-          onNewInvestigation={() => setIsNewRunOpen(true)}
+          onNewInvestigation={() => openInvestigation()}
         />
 
-        <main style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, width: '100%' }}>
+        <main key={sessionVersion} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, width: '100%' }}>
+          {loadError && <div className="notice-banner" role="alert">{loadError}<button className="btn btn-secondary" onClick={() => void loadData()}>Retry loading data</button></div>}
+          {loadingData && <div role="status" style={{ padding: '8px 24px', color: 'var(--muted)' }}>Refreshing workspace data…</div>}
+          <PageErrorBoundary>
+          <Suspense fallback={<div role="status" style={{ padding: 24 }}>Loading page…</div>}>
           {activePage === 'overview' && (
             <Overview
               health={health}
               agents={agents}
               runs={runs}
               onNavigate={handleSelectPage}
-              onNewInvestigation={() => setIsNewRunOpen(true)}
+              onNewInvestigation={() => openInvestigation()}
             />
           )}
 
           {activePage === 'runs' && (
-            <Runs runs={runs} onNewInvestigation={() => setIsNewRunOpen(true)} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
+            <Runs runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
           )}
 
           {activePage === 'capabilities' && (
-            <Capabilities />
+            <Capabilities onNewInvestigation={openInvestigation} />
           )}
 
           {activePage === 'skills' && (
             <Skills />
+          )}
+
+          {activePage === 'harness-library' && (
+            <HarnessLibrary />
           )}
 
           {activePage === 'runtime' && (
@@ -223,11 +305,23 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'agents' && (
-            <Agents agents={agents} onRefresh={loadData} />
+            <Agents agents={agents} principal={principal} onRefresh={loadData} />
           )}
 
           {activePage === 'tools' && (
-            <Tools tools={tools} />
+            <Tools tools={tools} principal={principal} />
+          )}
+
+          {activePage === 'alerts' && (
+            <Alerts />
+          )}
+
+          {activePage === 'health-checks' && (
+            <HealthChecks />
+          )}
+
+          {activePage === 'project-setup' && (
+            <ProjectSetup />
           )}
 
           {activePage === 'persistence' && (
@@ -261,6 +355,8 @@ export const App: React.FC = () => {
           {activePage === 'settings' && (
             <Settings principal={principal} health={health} />
           )}
+          </Suspense>
+          </PageErrorBoundary>
         </main>
       </div>
 
@@ -275,11 +371,12 @@ export const App: React.FC = () => {
         isOpen={isSessionOpen}
         onClose={() => setIsSessionOpen(false)}
         principal={principal}
-        onUpdatePrincipal={setPrincipal}
-        onSessionChanged={loadData}
+        onAuthenticated={handleAuthenticated}
+        onSignedOut={clearScopedData}
       />
 
       <NewInvestigationModal
+        initialCapability={initialCapability}
         isOpen={isNewRunOpen}
         onClose={() => setIsNewRunOpen(false)}
         onRunCreated={handleRunCreated}

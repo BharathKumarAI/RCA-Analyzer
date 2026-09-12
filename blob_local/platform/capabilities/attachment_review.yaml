@@ -1,0 +1,27 @@
+id: attachment_review
+version: 1.0.0
+enabled: true
+name: "Attachment Review"
+description: "Reviews supplied local attachments and produces a bounded evidence summary without connector access."
+category: investigation
+agent_stages:
+  - file
+
+skills:
+  - attachment-review
+
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+    - PLATFORM_ADMIN
+    - PROJECT_OWNER
+    - PROJECT_MANAGER
+    - PROJECT_ANALYST
+  allowed_actions: []
+
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: project_scoped
+  raw_payload_access: restricted
+
+model_profile: fast-investigation

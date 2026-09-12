@@ -3,6 +3,7 @@
 import asyncio
 
 from app.configuration.parameters import ParameterStore
+from app.configuration.integrations import IntegrationStore
 from app.configuration.database_bundle import load_effective_settings
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -20,8 +21,26 @@ from app.observability.otel import setup_telemetry
 from app.runtime.runner import ExecutionRunner
 from app.optimization.service import OptimizationService
 from app.settings import Settings
+from typing import Any
 
-from app.connectors.providers.registry import build_connectors
+from app.connectors.providers.registry import build_connectors, configured_connector_values
+
+
+def _resolve_connector_secret_overrides(platform_options: dict[str, Any], parameter_rows):
+    defaults: dict[str, dict[str, str]] = {}
+    for name, options in platform_options.items():
+        secrets = getattr(options, "secrets", None) if not isinstance(options, dict) else options.get("secrets")
+        if isinstance(secrets, dict):
+            defaults[name] = {
+                key: value for key, value in secrets.items() if isinstance(key, str) and isinstance(value, str)
+            }
+    for row in parameter_rows or []:
+        tool = row.get("tool")
+        variable = row.get("variable_name")
+        value = row.get("effective_value")
+        if tool in defaults and isinstance(variable, str) and variable in defaults[tool]:
+            defaults[tool][variable] = value
+    return {tool: overrides for tool, overrides in defaults.items() if overrides}
 
 
 def application_lifespan(settings=None, *, connectors=None, model_factory=None):
@@ -41,27 +60,24 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             await api.state.store.initialize()
             api.state.parameters = ParameterStore(api.state.store.engine)
             await api.state.parameters.initialize()
+            api.state.integrations = IntegrationStore(api.state.store.engine)
+            await api.state.integrations.initialize()
+            api.state.integration_probe_limiter = asyncio.Semaphore(4)
             configured, parameters = await load_effective_settings(
                 api.state.store.engine, configured, cleanup
             )
-            reference_keys = {
-                ("jira", "api_token"): "itsm",
-                ("splunk", "token"): "log_search",
-            }
-            secret_references = {
-                reference_keys[(row["tool"], row["variable_name"])]: row[
-                    "effective_value"
-                ]
-                for row in parameters
-                if (row["tool"], row["variable_name"]) in reference_keys
-            }
             api.state.settings = configured
             api.state.upload_limiter = asyncio.Semaphore(
                 configured.max_concurrent_uploads
             )
             platform = PlatformConfiguration.load(configured)
+            secret_references = _resolve_connector_secret_overrides(
+                platform_options=platform.connector_options,
+                parameter_rows=parameters,
+            )
             api.state.platform = platform
             api.state.registry = platform.registry
+            api.state.harness = api.state.registry.harness
             api.state.file_limits = platform.file_limits
             providers = build_connectors(
                 platform.connector_options,
@@ -69,6 +85,7 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 cleanup,
                 connectors,
                 secret_references,
+                configured_connector_values(parameters),
             )
             api.state.chat_artifacts = ChatArtifactStore(
                 api.state.store, configured, platform.file_limits.max_file_bytes

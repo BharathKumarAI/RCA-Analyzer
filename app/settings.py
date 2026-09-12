@@ -24,6 +24,8 @@ class Settings(BaseModel):
     auth_issuer: str = ""
     auth_audience: str = ""
     auth_public_key: str = ""
+    integration_allowed_hosts: str = ""
+    integration_secret_references: str = ""
     principals: dict[str, UserPrincipal] = Field(default_factory=dict)
     database_url: SecretStr = SecretStr("sqlite+aiosqlite:///./data/rca.db")
     session_database_url: SecretStr = SecretStr(
@@ -90,6 +92,8 @@ class Settings(BaseModel):
             "auth_issuer",
             "auth_audience",
             "auth_public_key",
+            "integration_allowed_hosts",
+            "integration_secret_references",
             "database_url",
             "session_database_url",
             "optimization_tracking_uri",

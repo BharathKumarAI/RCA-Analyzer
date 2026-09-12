@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
-  Wrench,
   CheckCircle2,
   AlertCircle,
   Activity,
-  ArrowUpRight,
   Search,
   Sliders,
   Settings,
@@ -15,56 +13,57 @@ import {
   Lock,
   Unlock,
   Layers,
-  Globe,
-  Server,
   Key,
   RefreshCw,
-  FileCode,
-  Terminal,
   Cpu,
   Check,
   ExternalLink,
-  Info,
-  Radio,
   Clock,
-  Filter,
   Bot,
-  Network,
-  Share2,
   Workflow,
   User,
 } from 'lucide-react';
-import { ToolDefinition, ScopeLevel, ConnectorCategory, IntegrationKind } from '../types/api';
-import { fetchTools } from '../services/api';
-import { CONNECTOR_TEMPLATES } from './toolsData';
+import { ToolDefinition, ScopeLevel, ConnectorTemplateItem, Principal } from '../types/api';
+import { fetchTools, fetchConnectorTemplates, fetchConnectorHealthCheck, testIntegration } from '../services/api';
+import { IntegrationForm } from '../components/IntegrationForm';
 
 interface ToolsProps {
   tools: ToolDefinition[];
+  principal: Principal;
 }
 
-export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
+export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) => {
   const [toolsList, setToolsList] = useState<ToolDefinition[]>(initialTools);
+
+  const [templates, setTemplates] = useState<ConnectorTemplateItem[]>([]);
+  const [templateFetchError, setTemplateFetchError] = useState<string | null>(null);
 
   // Sync live probe status if initialTools changes
   React.useEffect(() => {
-    if (initialTools && initialTools.length > 0) {
-      setToolsList(prev => {
-        const base = prev;
-        return base.map(t => {
-          const live = initialTools.find(it => it.id === t.id || it.system_name === t.system_name);
-          if (live) {
-            return {
-              ...t,
-              status: live.status || t.status,
-              latency_ms: live.latency_ms || t.latency_ms,
-              last_ping: live.last_ping || t.last_ping
-            };
-          }
-          return t;
-        });
-      });
-    }
+    setToolsList(initialTools);
   }, [initialTools]);
+
+  React.useEffect(() => {
+    let active = true;
+    fetchConnectorTemplates()
+      .then(items => {
+        if (active) {
+          setTemplates(items);
+          setTemplateFetchError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setTemplateFetchError(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load connector templates from backend.'
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; msg: string; latency_ms?: number } | null>(null);
@@ -77,7 +76,10 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
   // Modal states
   const [configuringTool, setConfiguringTool] = useState<ToolDefinition | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const canEditIntegrations = principal.roles.includes('PLATFORM_ADMIN') || principal.roles.some(role => ['TENANT_ADMIN', 'PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role));
 
 
   const showToast = (msg: string) => {
@@ -95,38 +97,121 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
     setTestingId(tool.id);
     setTestResult(null);
 
-    const isDisabled = !tool.enabled && tool.status === 'disabled';
-
-    fetchTools().then(current => {
-      setToolsList(current);
-      setTestingId(null);
-      if (isDisabled || !current.find(item => item.id === tool.id)?.enabled) {
-        setTestResult({
+    if (tool.registration) {
+      testIntegration(tool.registration.id)
+        .then(result => setTestResult({
+          id: tool.id,
+          success: result.status === 'reachable',
+          msg: result.message,
+          latency_ms: result.latency_ms,
+        }))
+        .catch(error => setTestResult({
           id: tool.id,
           success: false,
-          msg: `Connector disabled by deployment policy or administrative toggle.`
-        });
-      } else {
-        const currentTool = current.find(item => item.id === tool.id);
-        const protocolStr = tool.type === 'mcp' ? `MCP (${tool.mcp_config?.transport || 'SSE'})` : tool.type === 'a2a' ? `A2A (${tool.a2a_config?.delegation_protocol || 'AgentTool'})` : tool.protocol || 'HTTPS';
+          msg: error instanceof Error ? error.message : 'Unable to test saved connection',
+        }))
+        .finally(() => setTestingId(null));
+      return;
+    }
+
+    const connectorId = (tool.system_name || tool.id || '').split('.')[0].toLowerCase();
+    if (!connectorId) {
+      setTestingId(null);
+      setTestResult({
+        id: tool.id,
+        success: false,
+        msg: 'Connector identifier is unavailable in current tool definition.',
+      });
+      return;
+    }
+
+    fetchConnectorHealthCheck(connectorId)
+      .then((probe) => {
+        setToolsList(current =>
+          current.map(item => {
+            if (item.id !== tool.id) return item;
+            return {
+              ...item,
+              status: probe.overall === 'HEALTHY'
+                ? 'connected'
+                : probe.overall === 'DEGRADED' || probe.overall === 'RATE_LIMITED'
+                  ? 'degraded'
+                  : 'disabled',
+              enabled: item.enabled,
+              health: probe,
+              latency_ms: probe.latency_ms,
+            };
+          })
+        );
+
+        if (probe.overall !== 'HEALTHY') {
+          setTestResult({
+            id: tool.id,
+            success: false,
+            msg: `Deployment connector probe reported ${probe.overall.toLowerCase().replace('_', ' ')}: ${probe.message}`,
+            latency_ms: probe.latency_ms,
+          });
+          return;
+        }
+
         setTestResult({
           id: tool.id,
           success: true,
-          msg: `Deployment reported ${currentTool?.status || 'unknown'} via ${protocolStr}.`,
-          latency_ms: currentTool?.latency_ms
+          msg: `Deployment reported healthy status via ${probe.connectivity.toLowerCase()} path.`,
+          latency_ms: probe.latency_ms,
         });
-      }
-    }).catch(error => { setTestingId(null); setTestResult({ id: tool.id, success: false, msg: error instanceof Error ? error.message : 'Unable to probe connector' }); });
+      })
+      .catch(error => {
+        setTestResult({
+          id: tool.id,
+          success: false,
+          msg: error instanceof Error ? error.message : 'Unable to probe connector',
+        });
+      })
+      .finally(() => {
+        setTestingId(null);
+      });
   };
 
-  const handleSaveConfig = (updated: ToolDefinition) => {
-    void updated;
-    showToast('Connector configuration is deployment managed.');
+  const refreshCatalog = async () => {
+    setRefreshing(true);
+    try {
+      setToolsList(await fetchTools());
+      showToast('Integration catalog refreshed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to refresh integration catalog.';
+      showToast(message);
+      throw error;
+    } finally {
+      setRefreshing(false);
+    }
   };
 
-  const handleCreateConnector = (newTool: ToolDefinition) => {
-    void newTool;
-    showToast('Connector registration is unavailable in this release.');
+  const templateTool = (template: ConnectorTemplateItem): ToolDefinition => ({
+    id: `template:${template.system_name}`,
+    name: template.name,
+    system_name: template.system_name,
+    category: template.category,
+    description: template.description,
+    status: 'planned',
+    enabled: false,
+    type: template.integration_kind === 'a2a' ? 'a2a' : 'mcp',
+    integration_kind: template.integration_kind,
+    scope_level: template.default_scope,
+    project_can_override: template.can_override,
+    inherit_platform_defaults: template.default_scope !== 'project_only',
+    rate_limit: template.default_rate_limit || 'Not active',
+    last_ping: 'Not configured',
+    endpoint: template.default_endpoint,
+    protocol: template.protocol,
+  });
+
+  const registeredTemplateItems = templates.filter(template => template.integration_kind === 'mcp' || template.integration_kind === 'a2a');
+
+  const openIntegrationForm = (tool?: ToolDefinition) => {
+    if (!canEditIntegrations) return;
+    setConfiguringTool(tool || null);
+    setIsCreating(!tool);
   };
 
   // Filter logic
@@ -167,6 +252,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
   const nativeCount = toolsList.filter(t => !t.type || t.type === 'connector' || t.type === 'parser').length;
   const mcpCount = toolsList.filter(t => t.type === 'mcp').length;
   const a2aCount = toolsList.filter(t => t.type === 'a2a').length;
+  const firstTestableTool = toolsList.find(tool => tool.registration ? canEditIntegrations : tool.probe_available);
 
   return (
     <div className="view-container">
@@ -201,7 +287,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
             Enterprise Connectors & <span>Integration Governance</span>
           </h1>
           <p className="hero-lede">
-            Declarative telemetry connectors, Model Context Protocol (MCP) servers, and Google ADK Agent-to-Agent (A2A) bridges bridging Jira, Splunk, SignalFx, Oracle, Kafka, Unix logs, and Kubernetes clusters.
+            Inspect server-reported connectors and template-backed integrations. Templates are reference metadata only; runtime health is policy-scoped and live-only.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -224,7 +310,9 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => setIsCreating(true)}
+              onClick={() => openIntegrationForm()}
+              disabled={!canEditIntegrations}
+              title={canEditIntegrations ? 'Add an MCP or A2A integration' : 'Requires a platform or project administrator role'}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -235,17 +323,27 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                 borderRadius: '6px',
                 fontWeight: 600,
                 fontSize: '12px',
-                cursor: 'pointer',
+                cursor: canEditIntegrations ? 'pointer' : 'not-allowed',
                 border: 'none'
               }}
             >
-              <Plus size={14} /> Add / Bind Connector (MCP / A2A)
+              <Plus size={14} /> Add MCP / A2A integration
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void refreshCatalog()}
+              disabled={refreshing}
+              title="Reload saved integrations and deployment catalog"
+            >
+              <RefreshCw size={13} className={refreshing ? 'spin' : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh catalog'}
             </button>
             <button
               type="button"
               className="btn btn-open"
-              onClick={() => handleTestConnection(toolsList[0])}
-              title="Ping primary Jira triage connector"
+              onClick={() => firstTestableTool && handleTestConnection(firstTestableTool)}
+              disabled={!firstTestableTool}
+              title="Ping the first configured connector"
             >
               <Activity size={13} /> Ping Active Fleet
             </button>
@@ -253,65 +351,54 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
         </div>
       </section>
 
+      {templateFetchError && (
+        <div className="notice-banner" role="alert" style={{ marginBottom: '10px' }}>
+          {templateFetchError}
+        </div>
+      )}
+
       {/* ------------------------------------------------------------- */}
       {/* FULL-DETAIL GOVERNANCE & PRECEDENCE BANNER (Never Squashed)  */}
       {/* ------------------------------------------------------------- */}
       <div className="notice-banner purple">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <Sliders size={16} style={{ color: 'var(--acc)' }} />
-              <h3 style={{ fontSize: '14px', fontWeight: 700, margin: 0, color: 'var(--text)' }}>
-                Configuration Resolution Precedence & Override Policy
-              </h3>
-            </div>
-            <p style={{ fontSize: '12px', color: 'var(--muted)', margin: 0, lineHeight: 1.5, maxWidth: '900px' }}>
-              In accordance with <code>sample.yaml</code> specification, configurations resolve through a strict 5-tier precedence hierarchy. Platform defaults define baseline connectivity across the entire organization, while project teams can override parameters only when explicitly permitted by policy.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(99,102,241,0.12)', color: 'var(--acc)', border: '1px solid rgba(99,102,241,0.25)' }}>
-              1. Platform
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>→</span>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(234,179,8,0.12)', color: '#ca8a04', border: '1px solid rgba(234,179,8,0.25)' }}>
-              2. Project
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>→</span>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(168,85,247,0.12)', color: '#9333ea', border: '1px solid rgba(168,85,247,0.25)' }}>
-              3. Environment
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>→</span>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(59,130,246,0.12)', color: '#2563eb', border: '1px solid rgba(59,130,246,0.25)' }}>
-              4. Profile
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>→</span>
-            <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(16,185,129,0.12)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)' }}>
-              5. Run
-            </span>
-          </div>
-        </div>
-
-        {/* Detailed Governance Rule Pills */}
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '6px', borderTop: '1px solid rgba(99,102,241,0.15)', fontSize: '11px' }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: 'var(--muted)' }}>
-            <CheckCircle2 size={12} style={{ color: '#10b981' }} /> <code>inherit_platform_defaults: true</code> (Projects inherit baseline)
-          </span>
-          <span style={{ color: 'var(--line-strong)' }}>•</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: 'var(--muted)' }}>
-            <Unlock size={12} style={{ color: '#3b82f6' }} /> <code>project_can_override: policy-governed</code> (Admin configurable)
-          </span>
-          <span style={{ color: 'var(--line-strong)' }}>•</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: 'var(--muted)' }}>
-            <Server size={12} style={{ color: '#a855f7' }} /> <code>environment_can_override: true</code> (Per-lab QLAB/PLAB scopes)
-          </span>
-          <span style={{ color: 'var(--line-strong)' }}>•</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: 'var(--muted)' }}>
-            <Shield size={12} style={{ color: '#eab308' }} /> <code>reject_plaintext_secrets: true</code> (Strict secret references only)
-          </span>
-        </div>
+        <h3><Shield size={16} /> Integration configuration</h3>
+        <p>Saved MCP and A2A connection settings persist in the backend at platform or project scope. Registration records configuration only; agent access and live execution remain deployment-gated.</p>
+        <p className="metric-meta">Native connectors continue to use deployment-provided settings. Use Refresh catalog after saving to load the current persisted configuration.</p>
       </div>
+
+      {registeredTemplateItems.length > 0 && (
+        <section className="integration-template-panel" aria-labelledby="integration-template-title">
+          <div className="integration-template-heading">
+            <div>
+              <h2 id="integration-template-title">Available MCP &amp; A2A templates</h2>
+              <p>Start with deployment catalog metadata, then save the connection for this platform or project.</p>
+            </div>
+            <span className="brand-badge">CATALOG</span>
+          </div>
+          <div className="integration-template-grid">
+            {registeredTemplateItems.map(template => (
+              <article className="integration-template-card" key={template.type}>
+                <div>
+                  <div className="integration-template-title">
+                    <strong>{template.name}</strong>
+                    <span className={`integration-kind-badge ${template.integration_kind}`}>{template.integration_kind.toUpperCase()}</span>
+                  </div>
+                  <p>{template.description}</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={!canEditIntegrations}
+                  title={canEditIntegrations ? 'Configure this template' : 'Requires a platform or project administrator role'}
+                  onClick={() => openIntegrationForm(templateTool(template))}
+                >
+                  <Settings size={12} /> Configure
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Controls Bar: Integration Filter + Scope Tabs + Search */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
@@ -476,6 +563,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
         )}
         {filtered.map((tool, index) => {
           const numStr = String(index + 1).padStart(3, '0');
+          const canTest = tool.registration ? canEditIntegrations : Boolean(tool.probe_available);
 
           return (
             <article
@@ -613,7 +701,8 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                       <button
                         type="button"
                         onClick={(e) => handleToggleEnabled(tool.id, e)}
-                        title={tool.enabled ? 'Click to disable integration' : 'Click to enable integration'}
+                        disabled
+                        title="Connector state is managed by the deployment"
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -635,7 +724,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                           borderRadius: '50%',
                           background: tool.enabled ? '#10b981' : 'var(--muted)'
                         }} />
-                        {tool.enabled ? 'ENABLED' : 'DISABLED'}
+                        {tool.status.toUpperCase()}
                       </button>
                     </div>
                   </div>
@@ -685,7 +774,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                     )}
                     {(tool.timeout_seconds !== undefined || tool.retry_attempts !== undefined) && (
                       <span className="meta-pill" title="Connection timeouts & retry boundaries">
-                        <Clock size={11} /> {tool.timeout_seconds || 30}s • {tool.retry_attempts || 3} retries
+                        <Clock size={11} /> {tool.timeout_seconds ?? 30}s • {tool.retry_attempts ?? 0} retries
                       </span>
                     )}
                   </div>
@@ -833,7 +922,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    onClick={() => setConfiguringTool(tool)}
+                    onClick={() => tool.registration ? openIntegrationForm(tool) : setConfiguringTool(tool)}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -848,17 +937,18 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
                       cursor: 'pointer'
                     }}
                   >
-                    <Settings size={12} /> Configure
+                    <Settings size={12} /> {tool.registration ? 'Configure' : 'View catalog'}
                   </button>
 
                   <button
                     type="button"
                     className="btn btn-open"
                     onClick={(e) => handleTestConnection(tool, e)}
-                    disabled={testingId === tool.id}
+                    disabled={!canTest || testingId === tool.id}
+                    title={canTest ? 'Test the configured connection' : 'No runtime provider is available, or your role cannot test this integration'}
                   >
                     <Activity size={12} />
-                    {testingId === tool.id ? 'Testing...' : 'Test Ping'}
+                    {testingId === tool.id ? 'Testing…' : tool.registration ? 'Test connection' : canTest ? 'Test Ping' : 'Test unavailable'}
                   </button>
                 </div>
               </div>
@@ -867,27 +957,27 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
         })}
       </div>
 
-      {/* ============================================================ */}
-      {/* CONNECTOR CONFIGURATION MODAL                                */}
-      {/* ============================================================ */}
       {configuringTool && (
-        <ConnectorConfigModal
-          tool={configuringTool}
-          onClose={() => setConfiguringTool(null)}
-          onSave={handleSaveConfig}
-          onTest={handleTestConnection}
-          testingId={testingId}
-          testResult={testResult}
-        />
+        configuringTool.registration || configuringTool.type === 'mcp' || configuringTool.type === 'a2a'
+          ? <IntegrationForm
+              tool={configuringTool}
+              principal={principal}
+              onClose={() => setConfiguringTool(null)}
+              onSaved={async () => { await refreshCatalog(); setIsCreating(false); }}
+            />
+          : <ConnectorConfigModal
+              tool={configuringTool}
+              onClose={() => setConfiguringTool(null)}
+              onTest={handleTestConnection}
+              testingId={testingId}
+            />
       )}
 
-      {/* ============================================================ */}
-      {/* CREATE NEW CONNECTOR / MCP / A2A MODAL                       */}
-      {/* ============================================================ */}
       {isCreating && (
-        <CreateConnectorModal
+        <IntegrationForm
+          principal={principal}
           onClose={() => setIsCreating(false)}
-          onCreate={handleCreateConnector}
+          onSaved={async () => { await refreshCatalog(); setIsCreating(false); }}
         />
       )}
     </div>
@@ -900,19 +990,15 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools }) => {
 interface ModalProps {
   tool: ToolDefinition;
   onClose: () => void;
-  onSave: (tool: ToolDefinition) => void;
   onTest: (tool: ToolDefinition) => void;
   testingId: string | null;
-  testResult: { id: string; success: boolean; msg: string; latency_ms?: number } | null;
 }
 
 const ConnectorConfigModal: React.FC<ModalProps> = ({
   tool,
   onClose,
-  onSave,
   onTest,
-  testingId,
-  testResult
+  testingId
 }) => {
   const [activeTab, setActiveTab] = useState<'general' | 'endpoints' | 'auth' | 'params' | 'mcp_a2a' | 'custom'>('general');
   const [form, setForm] = useState<ToolDefinition>({ ...tool });
@@ -953,11 +1039,6 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
       setCustomConfigStr(JSON.stringify(nextCustom, null, 2));
       return { ...prev, custom_config: nextCustom };
     });
-  };
-
-  const handleSave = () => {
-    if (jsonError) return;
-    onSave(form);
   };
 
   return (
@@ -1003,6 +1084,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
             <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: 'var(--muted)' }}>
               System: <code>{form.system_name || form.id}</code> • Type: {form.type?.toUpperCase()} • Category: {form.category}
             </p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: 'var(--acc-amber)' }}>Deployment-managed catalog · read only</p>
           </div>
           <button
             type="button"
@@ -1058,7 +1140,8 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+        <fieldset disabled style={{ padding: '20px', overflowY: 'auto', flex: 1, border: 0, margin: 0 }}>
+          <p className="metric-meta">Only values supplied by the server describe this connection. Unspecified fields display template defaults and are not active deployment settings.</p>
           {activeTab === 'general' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {/* Enabled Switch */}
@@ -2120,7 +2203,7 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
               />
             </div>
           )}
-        </div>
+        </fieldset>
 
         {/* Modal Footer */}
         <div style={{
@@ -2160,796 +2243,13 @@ const ConnectorConfigModal: React.FC<ModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleSave}
-              disabled={!!jsonError}
-              style={{
-                padding: '7px 16px',
-                borderRadius: '6px',
-                border: 'none',
-                background: 'var(--acc)',
-                color: '#fff',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: 'pointer'
-              }}
+              className="btn btn-primary"
+              onClick={() => { onClose(); window.location.hash = 'parameters'; }}
             >
-              Save Configuration
+              Edit in Parameter Studio
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  );
-};
-
-// ----------------------------------------------------------------------
-// CreateConnectorModal Component (Supports Native, MCP, A2A)
-// ----------------------------------------------------------------------
-interface CreateModalProps {
-  onClose: () => void;
-  onCreate: (tool: ToolDefinition) => void;
-}
-
-const CreateConnectorModal: React.FC<CreateModalProps> = ({ onClose, onCreate }) => {
-  const [integrationKind, setIntegrationKind] = useState<IntegrationKind>('native');
-  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>('jira');
-  const [name, setName] = useState('New Integration');
-  const [systemName, setSystemName] = useState('');
-  const [category, setCategory] = useState<ConnectorCategory>('Observability');
-  const [description, setDescription] = useState('');
-  const [scopeLevel, setScopeLevel] = useState<ScopeLevel>('platform_default');
-  const [projectCanOverride, setProjectCanOverride] = useState(true);
-  const [enabled, setEnabled] = useState(true);
-  const [endpoint, setEndpoint] = useState('');
-  const [uiBaseUrl, setUiBaseUrl] = useState('');
-  const [serviceUser, setServiceUser] = useState('');
-  const [protocol, setProtocol] = useState('HTTPS');
-  const [authMethod, setAuthMethod] = useState('Bearer Token');
-  const [secretReference, setSecretReference] = useState('');
-  const [timeoutSeconds, setTimeoutSeconds] = useState(30);
-  const [retryAttempts, setRetryAttempts] = useState(3);
-  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState(5);
-  const [maxResponseBytes, setMaxResponseBytes] = useState(10485760);
-  const [verifySsl, setVerifySsl] = useState(true);
-  const [tokenHeaderFormat, setTokenHeaderFormat] = useState('Bearer {token}');
-  const [rateLimit, setRateLimit] = useState('300 req / min');
-  const [customConfig, setCustomConfig] = useState<Record<string, any>>({});
-
-  // MCP specific fields
-  const [mcpTransport, setMcpTransport] = useState<'sse' | 'stdio' | 'websocket' | 'streamable_http'>('sse');
-  const [mcpToolsStr, setMcpToolsStr] = useState('scan_messages, check_consumer_lag');
-
-  // A2A specific fields
-  const [a2aTargetAgent, setA2aTargetAgent] = useState('specialist-agent-01');
-  const [a2aCapability, setA2aCapability] = useState('incident_triage_classification');
-  const [a2aProtocol, setA2aProtocol] = useState<'adk_agent_tool' | 'a2a_rest' | 'a2a_jsonrpc'>('adk_agent_tool');
-  const [a2aDualCustody, setA2aDualCustody] = useState(true);
-
-  // When template changes, apply defaults
-  useEffect(() => {
-    const tmpl = CONNECTOR_TEMPLATES.find(t => t.type === selectedTemplateKey);
-    if (tmpl) {
-      setName(tmpl.name);
-      setSystemName(tmpl.system_name);
-      setCategory(tmpl.category);
-      setDescription(tmpl.description);
-      setScopeLevel(tmpl.default_scope);
-      setProjectCanOverride(tmpl.can_override);
-      setEndpoint(tmpl.default_endpoint);
-      setUiBaseUrl(tmpl.default_ui_base_url || '');
-      setServiceUser(tmpl.default_service_user || '');
-      setProtocol(tmpl.protocol);
-      setAuthMethod(tmpl.auth_method);
-      setSecretReference(tmpl.default_secret);
-      setIntegrationKind(tmpl.integration_kind);
-      setTimeoutSeconds(tmpl.default_timeout_seconds || 30);
-      setRetryAttempts(tmpl.default_retry_attempts || 3);
-      setRetryBackoffSeconds(tmpl.default_retry_backoff || 5);
-      setRateLimit(tmpl.default_rate_limit || '300 req / min');
-      setCustomConfig(tmpl.default_config ? JSON.parse(JSON.stringify(tmpl.default_config)) : {});
-      setTokenHeaderFormat(tmpl.system_name === 'splunk' ? 'Splunk {token}' : 'Bearer {token}');
-    }
-  }, [selectedTemplateKey]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const tmpl = CONNECTOR_TEMPLATES.find(t => t.type === selectedTemplateKey);
-    const newTool: ToolDefinition = {
-      id: `tool-${systemName.toLowerCase().replace(/[^a-z0-9]/g, '-') || Date.now()}`,
-      name,
-      system_name: systemName || selectedTemplateKey,
-      category,
-      description,
-      status: enabled ? 'connected' : 'disabled',
-      enabled,
-      type: integrationKind === 'mcp' ? 'mcp' : integrationKind === 'a2a' ? 'a2a' : 'connector',
-      integration_kind: integrationKind,
-      scope_level: scopeLevel,
-      project_can_override: projectCanOverride,
-      inherit_platform_defaults: scopeLevel !== 'project_only',
-      rate_limit: rateLimit || (integrationKind === 'mcp' ? '1000 msg / batch' : integrationKind === 'a2a' ? '60 calls / min' : '300 req / min'),
-      last_ping: 'Just created',
-      latency_ms: 18,
-      calls_today: 0,
-      error_rate: 0.0,
-      endpoint,
-      ui_base_url: uiBaseUrl,
-      service_user: serviceUser,
-      protocol,
-      auth_method: authMethod,
-      secret_reference: secretReference,
-      timeout_seconds: timeoutSeconds,
-      retry_attempts: retryAttempts,
-      retry_backoff_seconds: retryBackoffSeconds,
-      max_response_bytes: maxResponseBytes,
-      verify_ssl: verifySsl,
-      token_header_format: tokenHeaderFormat,
-      custom_config: customConfig && Object.keys(customConfig).length > 0 ? customConfig : (tmpl ? tmpl.default_config : {}),
-      mcp_config: integrationKind === 'mcp' ? {
-        transport: mcpTransport,
-        tools_exposed: mcpToolsStr.split(',').map(s => s.trim()).filter(Boolean)
-      } : undefined,
-      a2a_config: integrationKind === 'a2a' ? {
-        target_agent_id: a2aTargetAgent,
-        target_capability: a2aCapability,
-        delegation_protocol: a2aProtocol,
-        dual_custody_approved: a2aDualCustody,
-        content_hash: 'sha256:e3b0c44298fc1c14'
-      } : undefined
-    };
-
-    onCreate(newTool);
-  };
-
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0, 0, 0, 0.65)',
-      backdropFilter: 'blur(4px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 10000,
-      padding: '20px'
-    }}>
-      <div style={{
-        background: 'var(--card)',
-        border: '1px solid var(--line)',
-        borderRadius: '12px',
-        width: '100%',
-        maxWidth: '740px',
-        maxHeight: '90vh',
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: 'var(--shadow-hover)',
-        overflow: 'hidden'
-      }}>
-        {/* Modal Header */}
-        <div style={{
-          padding: '16px 20px',
-          borderBottom: '1px solid var(--line)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Plus size={18} style={{ color: 'var(--acc)' }} />
-              Bind Integration: Native Connector, MCP, or A2A Bridge
-            </h2>
-            <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: 'var(--muted)' }}>
-              Configure telemetry tools, Model Context Protocol servers, or Google ADK Agent-to-Agent delegation bridges.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px' }}
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Modal Form */}
-        <form onSubmit={handleSubmit} style={{ padding: '20px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Integration Type Switcher */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-              Integration Architecture
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-              {[
-                { id: 'native', label: 'Native Connector', desc: 'Jira, Splunk, SignalFx, DBs', icon: Database },
-                { id: 'mcp', label: 'MCP Server', desc: 'Model Context Protocol tool server', icon: Cpu },
-                { id: 'a2a', label: 'A2A Agent Bridge', desc: 'ADK AgentTool delegation mesh', icon: Bot }
-              ].map(opt => {
-                const Icon = opt.icon;
-                const isSelected = integrationKind === opt.id;
-                return (
-                  <div
-                    key={opt.id}
-                    onClick={() => {
-                      setIntegrationKind(opt.id as any);
-                      if (opt.id === 'mcp') {
-                        setSelectedTemplateKey('mcp_generic');
-                      } else if (opt.id === 'a2a') {
-                        setSelectedTemplateKey('a2a_generic');
-                      } else {
-                        setSelectedTemplateKey('jira');
-                      }
-                    }}
-                    style={{
-                      padding: '10px 12px',
-                      borderRadius: '8px',
-                      border: isSelected ? '1px solid var(--acc)' : '1px solid var(--line)',
-                      background: isSelected ? 'var(--acc-subtle)' : 'var(--bg)',
-                      cursor: 'pointer',
-                      transition: 'all .15s ease'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, fontSize: '12px', color: isSelected ? 'var(--acc)' : 'var(--text)' }}>
-                      <Icon size={14} />
-                      {opt.label}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                      {opt.desc}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Template Picker */}
-          {integrationKind === 'native' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Select Connector Template (from sample.yaml)
-              </label>
-              <select
-                value={selectedTemplateKey}
-                onChange={e => setSelectedTemplateKey(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              >
-                {CONNECTOR_TEMPLATES.filter(t => t.integration_kind === 'native').map(t => (
-                  <option key={t.type} value={t.type}>
-                    {t.name} ({t.category} • {t.protocol})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* MCP Specific Configuration Section */}
-          {integrationKind === 'mcp' && (
-            <div style={{
-              background: 'rgba(234, 179, 8, 0.06)',
-              padding: '12px',
-              borderRadius: '8px',
-              border: '1px solid rgba(234, 179, 8, 0.25)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px'
-            }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#ca8a04', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Cpu size={14} /> Model Context Protocol (MCP) Parameters
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Transport</label>
-                  <select
-                    value={mcpTransport}
-                    onChange={e => setMcpTransport(e.target.value as any)}
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', fontSize: '12px' }}
-                  >
-                    <option value="sse">SSE (HTTP Server-Sent Events)</option>
-                    <option value="streamable_http">Streamable HTTP</option>
-                    <option value="stdio">Stdio (Local Command)</option>
-                    <option value="websocket">WebSocket</option>
-                  </select>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Exposed MCP Tools</label>
-                  <input
-                    type="text"
-                    value={mcpToolsStr}
-                    onChange={e => setMcpToolsStr(e.target.value)}
-                    placeholder="scan_messages, check_consumer_lag, query_health"
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* A2A Specific Configuration Section */}
-          {integrationKind === 'a2a' && (
-            <div style={{
-              background: 'rgba(168, 85, 247, 0.06)',
-              padding: '12px',
-              borderRadius: '8px',
-              border: '1px solid rgba(168, 85, 247, 0.25)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px'
-            }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, color: '#9333ea', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Bot size={14} /> Google ADK Agent-to-Agent (A2A) Delegation Bridge
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Target Specialist Agent ID</label>
-                  <input
-                    type="text"
-                    value={a2aTargetAgent}
-                    onChange={e => setA2aTargetAgent(e.target.value)}
-                    placeholder="agent-jira-triage-specialist"
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Target Capability</label>
-                  <input
-                    type="text"
-                    value={a2aCapability}
-                    onChange={e => setA2aCapability(e.target.value)}
-                    placeholder="jira_triage_classification"
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', alignItems: 'center' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Delegation Protocol</label>
-                  <select
-                    value={a2aProtocol}
-                    onChange={e => setA2aProtocol(e.target.value as any)}
-                    style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', fontSize: '12px' }}
-                  >
-                    <option value="adk_agent_tool">ADK Native AgentTool</option>
-                    <option value="a2a_rest">A2A REST Endpoint</option>
-                    <option value="a2a_jsonrpc">A2A JSON-RPC</option>
-                  </select>
-                </div>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', marginTop: '16px' }}>
-                  <input
-                    type="checkbox"
-                    checked={a2aDualCustody}
-                    onChange={e => setA2aDualCustody(e.target.checked)}
-                  />
-                  <span>Dual-Custody Approved</span>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* Scope Level Setting */}
-          <div style={{
-            background: 'rgba(99,102,241,0.06)',
-            padding: '12px',
-            borderRadius: '8px',
-            border: '1px solid rgba(99,102,241,0.2)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px'
-          }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Sliders size={14} style={{ color: 'var(--acc)' }} />
-              Scope & Precedence Setting
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>
-                  Scoping Tier
-                </label>
-                <select
-                  value={scopeLevel}
-                  onChange={e => setScopeLevel(e.target.value as ScopeLevel)}
-                  style={{
-                    padding: '6px 8px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--card)',
-                    color: 'var(--text)',
-                    fontSize: '12px'
-                  }}
-                >
-                  <option value="platform_default">Platform Default (Shared baseline)</option>
-                  <option value="project_override">Project Override (Overrides platform)</option>
-                  <option value="project_only">Direct Project-Only (No platform default)</option>
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>
-                  Project Override Policy
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', marginTop: '6px' }}>
-                  <input
-                    type="checkbox"
-                    checked={projectCanOverride}
-                    onChange={e => setProjectCanOverride(e.target.checked)}
-                  />
-                  <span>Allow project teams to override</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {/* Name & System Name */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Integration Name
-              </label>
-              <input
-                type="text"
-                required
-                value={name}
-                onChange={e => setName(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                System Identifier
-              </label>
-              <input
-                type="text"
-                required
-                value={systemName}
-                onChange={e => setSystemName(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Endpoint & Protocol */}
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Endpoint URL / Host / MCP URI
-              </label>
-              <input
-                type="text"
-                required
-                value={endpoint}
-                onChange={e => setEndpoint(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Protocol
-              </label>
-              <select
-                value={protocol}
-                onChange={e => setProtocol(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              >
-                <option value="HTTPS">HTTPS</option>
-                <option value="MCP (SSE)">MCP (SSE)</option>
-                <option value="MCP (Streamable HTTP)">MCP (Streamable HTTP)</option>
-                <option value="MCP (Stdio)">MCP (Stdio)</option>
-                <option value="ADK AgentTool">ADK AgentTool</option>
-                <option value="A2A REST Protocol">A2A REST Protocol</option>
-                <option value="Oracle Net (TNS/OCI)">Oracle Net</option>
-                <option value="SSH">SSH</option>
-              </select>
-            </div>
-          </div>
-
-          {/* UI Presentation URL */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-              UI Presentation URL (Direct Portal / Console Link)
-            </label>
-            <input
-              type="text"
-              value={uiBaseUrl}
-              onChange={e => setUiBaseUrl(e.target.value)}
-              placeholder="e.g. https://splunk-ui.prod.internal:8000 or https://company.atlassian.net"
-              style={{
-                padding: '8px 10px',
-                borderRadius: '6px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)',
-                color: 'var(--text)',
-                fontSize: '12px',
-                fontFamily: 'var(--font-mono)'
-              }}
-            />
-          </div>
-
-          {/* Auth & Secret */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Auth Method
-              </label>
-              <input
-                type="text"
-                value={authMethod}
-                onChange={e => setAuthMethod(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Secret Reference Name
-              </label>
-              <input
-                type="text"
-                required
-                value={secretReference}
-                onChange={e => setSecretReference(e.target.value)}
-                placeholder="e.g. JIRA_API_TOKEN, MCP_SECRET"
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Service User & Token Header Format */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Service Account / User Identity (service_user)
-              </label>
-              <input
-                type="text"
-                value={serviceUser}
-                onChange={e => setServiceUser(e.target.value)}
-                placeholder="e.g. svc-rca-jira@corp.internal, splunk-api-svc"
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Token Header Format
-              </label>
-              <input
-                type="text"
-                value={tokenHeaderFormat}
-                onChange={e => setTokenHeaderFormat(e.target.value)}
-                placeholder="e.g. Bearer {token} or Splunk {token}"
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Timeout, Retries, Backoff */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Timeout (Seconds)
-              </label>
-              <input
-                type="number"
-                value={timeoutSeconds}
-                onChange={e => setTimeoutSeconds(parseInt(e.target.value) || 30)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Retry Attempts
-              </label>
-              <input
-                type="number"
-                value={retryAttempts}
-                onChange={e => setRetryAttempts(parseInt(e.target.value) || 0)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                Retry Backoff (Seconds)
-              </label>
-              <input
-                type="number"
-                value={retryBackoffSeconds}
-                onChange={e => setRetryBackoffSeconds(parseInt(e.target.value) || 0)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px'
-                }}
-              />
-            </div>
-          </div>
-
-          {/* SSL Verification Checkbox */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '10px 14px',
-            borderRadius: '8px',
-            border: '1px solid var(--line)',
-            background: 'var(--bg)'
-          }}>
-            <input
-              type="checkbox"
-              id="create-modal-verify-ssl"
-              checked={verifySsl}
-              onChange={e => setVerifySsl(e.target.checked)}
-              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-            />
-            <label htmlFor="create-modal-verify-ssl" style={{ fontSize: '12px', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontWeight: 600, color: 'var(--text)' }}>Verify TLS/SSL Certificates (verify_ssl)</span>
-              <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Enforces CA validation. Keep checked unless testing private sandbox with self-signed certificate.</span>
-            </label>
-          </div>
-
-          {/* Description */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-              Description
-            </label>
-            <textarea
-              rows={2}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              style={{
-                padding: '8px 10px',
-                borderRadius: '6px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)',
-                color: 'var(--text)',
-                fontSize: '12px',
-                resize: 'vertical'
-              }}
-            />
-          </div>
-
-          {/* Initial Enabled checkbox */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={e => setEnabled(e.target.checked)}
-            />
-            <span style={{ fontWeight: 600 }}>Enable this integration immediately upon creation</span>
-          </label>
-
-          {/* Modal Buttons */}
-          <div style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '8px',
-            marginTop: '10px',
-            borderTop: '1px solid var(--line)',
-            paddingTop: '14px'
-          }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: '8px 14px',
-                borderRadius: '6px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)',
-                color: 'var(--muted)',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              style={{
-                padding: '8px 18px',
-                borderRadius: '6px',
-                border: 'none',
-                background: 'var(--acc)',
-                color: '#fff',
-                fontSize: '12px',
-                fontWeight: 700,
-                cursor: 'pointer'
-              }}
-            >
-              Bind Integration
-            </button>
-          </div>
-        </form>
       </div>
     </div>
   );

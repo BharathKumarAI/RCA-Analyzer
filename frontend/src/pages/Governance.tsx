@@ -25,7 +25,7 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
             Governance & <span>Compliance Audit</span>
           </h1>
           <p className="hero-lede">
-            Cryptographic audit logs, two-person rule enforcement for specialist models, and immutable tenant isolation boundaries.
+            Persisted governance events, two-person rule enforcement for specialist models, and tenant isolation boundaries.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -35,7 +35,7 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
               <b>Pending Review:</b> {pendingAgents.length} Agents
             </span>
             <span className="hero-stat-chip">
-              <b>Audit Log:</b> Immutable Append-Only
+              <b>Audit Log:</b> Persisted governance events
             </span>
           </div>
         </div>
@@ -124,7 +124,7 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
                 <button
                   type="button"
                   className="btn btn-open"
-                  onClick={() => window.location.hash = 'agents'}
+                  onClick={() => window.location.hash = `agents?candidate=${encodeURIComponent(agent.id)}`}
                 >
                   Review Candidate <ArrowUpRight size={13} />
                 </button>
@@ -138,8 +138,8 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
       <div className="card" style={{ padding: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--line)' }}>
           <div>
-            <h3 style={{ fontSize: '16px', fontWeight: 700 }}>Chained Cryptographic Audit Trail</h3>
-            <span style={{ fontSize: '12px', color: 'var(--dim)' }}>Immutable SHA-256 HMAC verification log</span>
+            <h3 style={{ fontSize: '16px', fontWeight: 700 }}>Governance Audit Trail</h3>
+            <span style={{ fontSize: '12px', color: 'var(--dim)' }}>Configuration approval and review events from the project store</span>
           </div>
         </div>
 
@@ -152,7 +152,6 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
                 <th>Action</th>
                 <th>Resource Target</th>
                 <th>Outcome</th>
-                <th>Cryptographic Hash</th>
                 <th>Evaluation Details</th>
               </tr>
             </thead>
@@ -173,9 +172,6 @@ export const Governance: React.FC<GovernanceProps> = ({ logs, agents }) => {
                     <span className={`badge badge-${log.outcome === 'SUCCESS' ? 'active' : 'deprecated'}`}>
                       {log.outcome}
                     </span>
-                  </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: 'var(--acc)' }}>
-                    {log.hash}
                   </td>
                   <td style={{ fontSize: '12.5px', color: 'var(--muted)' }}>{log.details}</td>
                 </tr>

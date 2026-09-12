@@ -16,6 +16,12 @@ from app.configuration.parameters import (
     ParameterOverride,
     ParameterStore,
 )
+from app.configuration.integrations import (
+    IntegrationConflict,
+    IntegrationDefinition,
+    IntegrationStore,
+    IntegrationWrite,
+)
 from app.persistence.database import session_service
 from app.persistence.lineage import ingestion_context
 from app.persistence.store import InvestigationStore
@@ -93,6 +99,109 @@ async def test_postgres_migrations_parameters_lineage_and_native_sessions(tmp_pa
             project_id=configured.project_id,
             roles=(Role.PLATFORM_ADMIN,),
         )
+
+        # Registrations use the migrated PostgreSQL table, including the
+        # deployment stamped lineage columns, and remain available to a fresh
+        # store instance after writes from both scopes.
+        integration_store = IntegrationStore(database.engine)
+        await integration_store.initialize()
+        integration_admin = principal
+        integration_owner = principal.model_copy(
+            update={"subject": "integration-owner", "roles": (Role.PROJECT_OWNER,)}
+        )
+        platform_definition = IntegrationDefinition(
+            name="PostgreSQL MCP",
+            kind="mcp",
+            endpoint="https://mcp.postgres.example.test",
+            description="PostgreSQL registration test",
+            transport="streamable_http",
+            timeout_seconds=20,
+            allow_project_override=True,
+        )
+        with ingestion_context("api", batch_id="integration-create", actor="integration-admin"):
+            await integration_store.save(
+                integration_admin,
+                "platform",
+                "postgres-mcp",
+                IntegrationWrite(definition=platform_definition),
+            )
+        platform_row = (await integration_store.list(integration_admin))[0]
+        assert platform_row["scope_level"] == "platform_default"
+        first_platform_revision = platform_row["revision"]
+
+        edited_platform = platform_definition.model_copy(
+            update={"endpoint": "https://mcp-edited.postgres.example.test"}
+        )
+        with ingestion_context("api", batch_id="integration-update", actor="integration-editor"):
+            await integration_store.save(
+                integration_admin,
+                "platform",
+                "postgres-mcp",
+                IntegrationWrite(
+                    definition=edited_platform,
+                    expected_revision=first_platform_revision,
+                ),
+            )
+        platform_row = (await integration_store.list(integration_admin))[0]
+        platform_revision = platform_row["revision"]
+        assert platform_revision != first_platform_revision
+        assert platform_row["definition"]["endpoint"] == edited_platform.endpoint
+        with pytest.raises(IntegrationConflict):
+            await integration_store.save(
+                integration_admin,
+                "platform",
+                "postgres-mcp",
+                IntegrationWrite(
+                    definition=platform_definition,
+                    expected_revision=first_platform_revision,
+                ),
+            )
+
+        project_definition = edited_platform.model_copy(
+            update={"name": "Payments MCP", "endpoint": "https://payments-mcp.postgres.example.test"}
+        )
+        with ingestion_context("api", batch_id="integration-project", actor="integration-owner"):
+            await integration_store.save(
+                integration_owner,
+                "project",
+                "postgres-mcp",
+                IntegrationWrite(
+                    definition=project_definition,
+                    expected_platform_revision=platform_revision,
+                ),
+            )
+        project_row = (await integration_store.list(integration_owner))[0]
+        assert project_row["scope_level"] == "project_override"
+        assert project_row["definition"]["endpoint"] == project_definition.endpoint
+
+        # A separate SQLAlchemy store sees the same effective registration.
+        fresh_engine = create_async_engine(target)
+        try:
+            fresh_integrations = IntegrationStore(fresh_engine)
+            await fresh_integrations.initialize()
+            persisted = (await fresh_integrations.list(integration_owner))[0]
+            assert persisted["revision"] == project_row["revision"]
+            assert persisted["platform_revision"] == platform_revision
+            assert persisted["definition"]["name"] == "Payments MCP"
+        finally:
+            await fresh_engine.dispose()
+
+        async with database.engine.connect() as c:
+            lineage = (
+                await c.execute(
+                    text(
+                        "SELECT created_by, edited_by, etl_src_system, etl_batch_id "
+                        "FROM platform.integration_configurations "
+                        "WHERE tenant_id='acme' AND project_id='' "
+                        "AND integration_id='postgres-mcp'"
+                    )
+                )
+            ).mappings().one()
+            assert lineage["created_by"] == "integration-admin"
+            assert lineage["edited_by"] == "integration-editor"
+            assert lineage["etl_src_system"] == "api"
+            assert lineage["etl_batch_id"] == "integration-update"
+
         with ingestion_context("api", batch_id="etl-test", actor="creator"):
             await store.define(
                 principal,
@@ -128,7 +237,7 @@ async def test_postgres_migrations_parameters_lineage_and_native_sessions(tmp_pa
                         "SELECT count(*) FROM information_schema.columns WHERE column_name IN ('created_time','created_by','edited_time','edited_by','etl_src_system','etl_batch_id') AND table_schema IN ('platform','project','runtime','governance','optimization')"
                     )
                 )
-                == 108
+                == 114
             )
         with ingestion_context("api", batch_id="etl-update", actor="editor"):
             await store.define(

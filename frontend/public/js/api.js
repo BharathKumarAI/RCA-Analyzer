@@ -101,8 +101,8 @@ export async function getConfig() {
   return request("/api/v1/config");
 }
 
-export async function getCapabilities() {
-  return request("/api/v1/capabilities");
+export async function getCapabilities(all = true) {
+  return request(all ? "/api/v1/capabilities?all=true" : "/api/v1/capabilities");
 }
 
 export async function getConnectorHealth() {

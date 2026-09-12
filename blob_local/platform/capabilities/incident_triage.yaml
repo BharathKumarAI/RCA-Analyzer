@@ -4,6 +4,10 @@ enabled: true
 name: "Incident Triage & Anchor Resolution"
 description: "Ingests incident reports, extracts temporal anchors, classifies severity, and maps to owning teams."
 category: triage
+agent_stages:
+  - triage
+  - logs
+  - file
 
 skills:
   - incident-triage

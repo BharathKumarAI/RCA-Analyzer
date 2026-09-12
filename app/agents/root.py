@@ -57,11 +57,45 @@ def build_root_agent(
 
     request_text = contract.request.text
     instruction_skills = "\n\n".join(skills)
-    available_tools = build_tools(connectors, capability.allowed_actions)
+    enabled_agent_stages = set(capability.agent_stages)
+    # Scope connector instances by the resolved capability before agents see
+    # them. Action permissions alone must not expose an undeclared connector.
+    connector_scope = set(capability.requires.connectors) | set(
+        capability.optional.connectors
+    )
+    scoped_connectors = {
+        name: connector
+        for name, connector in connectors.items()
+        if name in connector_scope
+    }
+    available_tools = build_tools(scoped_connectors, capability.allowed_actions)
     snapshot = json.loads(contract.model_config_json)
     workflow = WorkflowOptions.model_validate(snapshot.get("workflow", {}))
     preferences = "\nPresentation preferences:\n" + json.dumps(
         snapshot.get("preferences", {})
+    )
+    configured_environments = snapshot.get("environments", [])
+    env_mapping_lines = []
+    for env in configured_environments:
+        if env.get("enabled", True):
+            env_id = env.get("id", "unknown")
+            name = env.get("name") or env_id
+            host = env.get("host") or "N/A"
+            ns = env.get("namespace") or "N/A"
+            idx = env.get("splunk_index") or "default"
+            jira_name = env.get("jira_env_name") or env_id
+            cluster = env.get("cluster") or "N/A"
+            env_mapping_lines.append(
+                f"- Environment '{name}' [id={env_id}]: Jira Environment Name='{jira_name}', "
+                f"Cluster='{cluster}', Namespace='{ns}', Host='{host}', Splunk Index='{idx}'"
+            )
+    env_mapping_context = (
+        "\nConnected Environment Mapping:\n"
+        + "\n".join(env_mapping_lines)
+        + "\nUse the above mapping to correlate the incident ticket's environment to its corresponding "
+        + "host, namespace, and Splunk index when forming log queries and assessing component impact."
+        if env_mapping_lines
+        else ""
     )
     # Only resolved capability actions can enter a branch.
     action_tools = {
@@ -70,7 +104,11 @@ def build_root_agent(
 
     branches = []
     incident_steps = []
-    if "get_ticket" in available_tools and stages["triage"].enabled:
+    if (
+        "triage" in enabled_agent_stages
+        and "get_ticket" in available_tools
+        and stages["triage"].enabled
+    ):
 
         def triage_instruction(ctx):
             return (
@@ -84,6 +122,7 @@ def build_root_agent(
                 + str(contract.request.incident_id)
                 + "\nRequest plan: "
                 + str(ctx.state.get("request_plan", "Unavailable"))
+                + env_mapping_context
                 + "\nOnly retrieve a ticket when the request plan requires "
                 + "triage, RCA, data retrieval, sanity checking, follow-up, or rerun work."
             )
@@ -97,7 +136,11 @@ def build_root_agent(
                 triage_instruction,
             )
         )
-    if "query_range" in available_tools and stages["logs"].enabled:
+    if (
+        "logs" in enabled_agent_stages
+        and "query_range" in available_tools
+        and stages["logs"].enabled
+    ):
 
         def logs_instruction(ctx):
             return (
@@ -113,6 +156,7 @@ def build_root_agent(
                 + governance.settings.default_log_window
                 + "\nRequest plan: "
                 + str(ctx.state.get("request_plan", "Unavailable"))
+                + env_mapping_context
                 + "\nOnly query logs when the request plan requires RCA, data "
                 + "retrieval, metrics, sanity checking, follow-up, or rerun work."
             )
@@ -129,7 +173,8 @@ def build_root_agent(
     if incident_steps:
         branches.append(sequential("incident_evidence", incident_steps))
     if (
-        workflow.attachments
+        "file" in enabled_agent_stages
+        and workflow.attachments
         and contract.request.attachment_ids
         and stages["extraction"].enabled
     ):
@@ -163,7 +208,24 @@ def build_root_agent(
         return (
             UNTRUSTED_DATA_RULE
             + prompts["orchestrator"]
+            + "\nCapability: "
+            + capability.name
+            + " — "
+            + capability.description
+            + "\nCapability skills: "
+            + ", ".join(capability.skills)
+            + "\nEnabled source agents: "
+            + ", ".join(capability.agent_stages)
+            + "\nRequired connectors: "
+            + ", ".join(capability.requires.connectors)
+            + "\nOptional connectors: "
+            + ", ".join(capability.optional.connectors)
+            + "\nAvailable connectors: "
+            + ", ".join(sorted(scoped_connectors))
+            + "\nPermitted actions: "
+            + ", ".join(capability.allowed_actions)
             + preferences
+            + env_mapping_context
             + "\nRequest:\n"
             + request_text
         )
@@ -297,6 +359,12 @@ def build_root_agent(
             UNTRUSTED_DATA_RULE
             + prompts["synthesis"]
             + preferences
+            + "\nCapability task: "
+            + capability.name
+            + " — "
+            + capability.description
+            + "\nProduce the capability's requested assessment from available evidence. "
+            + "A causal diagnosis is required only when the capability task asks for one."
             + "\nSkills:\n"
             + instruction_skills
             + "\nRequest:\n"
@@ -305,6 +373,7 @@ def build_root_agent(
             + json.dumps(intermediate, ensure_ascii=False)
             + "\nAuthoritative captured evidence:\n"
             + governance.context()
+            + env_mapping_context
         )
 
     steps.append(

@@ -4,6 +4,9 @@ enabled: true
 name: "Structured Log Anomaly & Correlation"
 description: "Queries log clusters, extracts error spikes within incident time windows, and detects stack trace anomalies."
 category: investigation
+agent_stages:
+  - logs
+  - file
 
 skills:
   - log-correlation

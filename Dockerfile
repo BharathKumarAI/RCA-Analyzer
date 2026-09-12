@@ -1,3 +1,10 @@
+FROM node:22-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,7 +27,7 @@ RUN useradd --create-home --uid 10001 appuser \
     && chown appuser:appuser /app/data /app/blob_local/projects /app/blob_local/agent-configurations /app/blob_local/optimizations
 COPY README.md ./
 COPY app ./app
-COPY web ./web
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 COPY blob_local/platform ./blob_local/platform
 COPY scripts ./scripts
 COPY migrations ./migrations

@@ -8,6 +8,7 @@ from app.inputs.files import FileLimits
 from app.models.profiles import ModelProfiles
 from app.optimization.models import OptimizationConfig
 from app.tools.catalog import ALLOWED_ACTIONS
+from app.configuration.models import ConnectorTemplate
 
 STAGES = {"triage", "logs", "extraction", "synthesis", "router", "orchestrator"}
 
@@ -19,12 +20,22 @@ class PlatformConfiguration:
     prompts: dict[str, str]
     file_limits: FileLimits
     connector_options: dict
+    connector_templates: tuple[ConnectorTemplate, ...]
     optimization: OptimizationConfig
 
     @classmethod
     def load(cls, settings, registry=None):
         def read(name):
             return load_yaml_data((settings.config_dir / name).read_text())
+
+        def template_rows():
+            path = settings.config_dir / "connector_templates.yaml"
+            if not path.exists():
+                return []
+            rows = read("connector_templates.yaml")
+            if not isinstance(rows, list):
+                raise ValueError("connector_templates.yaml must define a list")
+            return [ConnectorTemplate.model_validate(row) for row in rows]
 
         registry = registry or CapabilityRegistry(
             str(settings.content_root / "capabilities"), settings.projects_root
@@ -62,5 +73,6 @@ class PlatformConfiguration:
             prompts,
             FileLimits(**read("file_processing.yaml")),
             read("connectors.yaml"),
+            tuple(template_rows()),
             optimization,
         )

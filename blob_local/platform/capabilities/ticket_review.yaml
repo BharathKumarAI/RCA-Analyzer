@@ -1,0 +1,32 @@
+id: ticket_review
+version: 1.0.0
+enabled: true
+name: "Ticket Review"
+description: "Reviews a Jira incident ticket and produces a bounded, evidence-cited assessment."
+category: investigation
+agent_stages:
+  - triage
+
+skills:
+  - ticket-review
+
+requires:
+  connectors:
+    - itsm
+
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+    - PLATFORM_ADMIN
+    - PROJECT_OWNER
+    - PROJECT_MANAGER
+    - PROJECT_ANALYST
+  allowed_actions:
+    - itsm.get_ticket
+
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: project_scoped
+  raw_payload_access: restricted
+
+model_profile: balanced-investigation

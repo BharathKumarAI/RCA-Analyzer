@@ -1,274 +1,34 @@
-import React from 'react';
-import {
-  CheckCircle2,
-  Clock,
-  ShieldCheck,
-  Cpu,
-  ArrowRight,
-  ArrowUpRight,
-  Plus,
-  Sparkles,
-  Activity
-} from 'lucide-react';
-import { SystemHealth, AgentConfiguration, Run } from '../types/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowRight, Circle, Clock3, FileText, Link2, Plus, ShieldCheck } from 'lucide-react';
+import { ApiError, fetchTools } from '../services/api';
+import { AgentConfiguration, Run, SystemHealth, ToolDefinition } from '../types/api';
 import { ActivePage } from '../components/Sidebar';
+import '../styles/overview.css';
 
-interface OverviewProps {
-  health: SystemHealth;
-  agents: AgentConfiguration[];
-  runs: Run[];
-  onNavigate: (page: ActivePage) => void;
-  onNewInvestigation: () => void;
-}
+interface OverviewProps { health: SystemHealth; agents: AgentConfiguration[]; runs: Run[]; onNavigate: (page: ActivePage) => void; onNewInvestigation: () => void; }
+const statusClass = (status: Run['status']) => `overview-status overview-status-${status.toLowerCase()}`;
 
-export const Overview: React.FC<OverviewProps> = ({
-  health,
-  agents,
-  runs,
-  onNavigate,
-  onNewInvestigation,
-}) => {
-  return (
-    <div className="view-container">
-      {/* Clean & Elegant Hero Banner */}
-      <section className="hero-banner">
-        <div className="hero-main">
-          <h1 className="hero-title">
-            Control Plane & <span>Fault Isolation</span>
-          </h1>
-          <p className="hero-lede">
-            Real-time multi-agent diagnostics, automated evidence gathering, and root cause synthesis.
-          </p>
-          <div className="hero-meta-strip">
-            <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>System:</b> {health.status.toUpperCase()}
-            </span>
-            <span className="hero-stat-chip">
-              <b>P95 Latency:</b> {health.latency_ms}ms
-            </span>
-            <span className="hero-stat-chip">
-              <b>Investigations:</b> {runs.length} Runs
-            </span>
-            <span className="hero-stat-chip">
-              <b>Fleet:</b> {agents.filter(a => a.status === 'active').length} Active Agents
-            </span>
-          </div>
-        </div>
-
-        <div className="hero-actions">
-          <div className="hero-actions-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={onNewInvestigation}
-              title="Trigger a new root cause investigation"
-            >
-              <Plus size={13} strokeWidth={2.5} /> Launch Investigation
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Proportional Metric Cards Grid */}
-      <div className="metric-grid">
-        <div className="metric-card">
-          <div className="metric-label-row">
-            <span>Mean Time to RCA</span>
-            <Clock size={15} color="var(--acc)" />
-          </div>
-          <div className="metric-value">{health.mttr_minutes ? `${health.mttr_minutes}m` : '—'}</div>
-          <div className="metric-meta">
-            <b>↓ 34% faster</b> resolution cycle
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label-row">
-            <span>Tool Success Rate</span>
-            <CheckCircle2 size={15} color="var(--acc3)" />
-          </div>
-          <div className="metric-value">{health.tool_success_rate ? `${health.tool_success_rate}%` : '—'}</div>
-          <div className="metric-meta">
-            Jira & Splunk API connector SLA
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label-row">
-            <span>Active Agent Fleet</span>
-            <Cpu size={15} color="var(--acc2)" />
-          </div>
-          <div className="metric-value">
-            {agents.filter(a => a.status === 'active').length} / {agents.length}
-          </div>
-          <div className="metric-meta">
-            <b>1 specialist</b> awaiting peer review
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-label-row">
-            <span>Dual-Custody Governance</span>
-            <ShieldCheck size={15} color="var(--acc3)" />
-          </div>
-          <div className="metric-value">—</div>
-          <div className="metric-meta">
-            Strict content-hash segregation
-          </div>
-        </div>
-      </div>
-
-      {/* Live & Recent Investigations Table (Full Content, No Cut-Off) */}
-      <div className="card" style={{ padding: 0, height: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
-          <div>
-            <h3 style={{ fontSize: '14.5px', fontWeight: 700 }}>Live & Recent Investigations</h3>
-            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Multi-agent incident triage and fault tree joins</span>
-          </div>
-          <button
-            type="button"
-            className="btn btn-open"
-            onClick={() => onNavigate('runs')}
-          >
-            View All <ArrowUpRight size={12} />
-          </button>
-        </div>
-
-        <div className="table-wrap" style={{ border: 'none', borderRadius: 0, boxShadow: 'none' }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Run ID</th>
-                <th>Incident</th>
-                <th>Directive / Symptoms</th>
-                <th>Status</th>
-                <th>Duration</th>
-                <th>Evidence</th>
-                <th>Timestamp (UTC)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map(run => (
-                <tr key={run.id}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 650, color: 'var(--acc)', fontSize: '11.5px' }}>
-                    {run.id}
-                  </td>
-                  <td>
-                    <span className="brand-badge" style={{ fontSize: '10px' }}>
-                      {run.incident_id || 'N/A'}
-                    </span>
-                  </td>
-                  <td style={{ maxWidth: '440px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {run.prompt}
-                  </td>
-                  <td>
-                    <span className={`badge badge-${run.status.toLowerCase()}`}>
-                      {run.status}
-                    </span>
-                  </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px' }}>
-                    {run.duration_seconds ? `${run.duration_seconds}s` : 'Active'}
-                  </td>
-                  <td>{run.evidence_count ?? 0} items</td>
-                  <td style={{ color: 'var(--dim)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
-                    {run.created_at}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Fleet & Connectors Row (Balanced 2-Column Grid) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '14px' }}>
-        <div className="card" style={{ padding: '16px', height: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 700 }}>Active Agent Fleet</h3>
-            <button
-              type="button"
-              className="btn btn-prompt"
-              onClick={() => onNavigate('agents')}
-              style={{ fontSize: '10.5px', padding: '3px 8px' }}
-            >
-              Explore Fleet <ArrowRight size={11} />
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {agents.slice(0, 4).map((agent, i) => (
-              <div
-                key={agent.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '9px 12px',
-                  borderRadius: '8px',
-                  background: 'var(--card-subtle)',
-                  border: '1px solid var(--line)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="num" style={{ minWidth: '36px', padding: '3px 6px', fontSize: '10px' }}>
-                    00{i + 1}
-                  </span>
-                  <div>
-                    <div style={{ fontWeight: 650, fontSize: '12.5px' }}>{agent.name}</div>
-                    <div style={{ fontSize: '10.5px', color: 'var(--dim)' }}>{agent.role} · {agent.model}</div>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--acc3)', fontFamily: 'var(--font-mono)' }}>
-                    {agent.accuracy}%
-                  </div>
-                  <div style={{ fontSize: '10px', color: 'var(--dim)' }}>{agent.avg_latency_sec}s</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '16px', height: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 700 }}>Telemetry & Connectors</h3>
-            <button
-              type="button"
-              className="btn btn-prompt"
-              onClick={() => onNavigate('tools')}
-              style={{ fontSize: '10.5px', padding: '3px 8px' }}
-            >
-              Inspect Tools <ArrowRight size={11} />
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-              <div>
-                <div style={{ fontWeight: 650, fontSize: '12.5px' }}>Jira Incident Cloud API</div>
-                <div style={{ fontSize: '10.5px', color: 'var(--dim)' }}>Read-only ticket metadata & lineage</div>
-              </div>
-              <span className="badge badge-active">Connected (12ms)</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-              <div>
-                <div style={{ fontWeight: 650, fontSize: '12.5px' }}>Splunk Enterprise HEC</div>
-                <div style={{ fontSize: '10.5px', color: 'var(--dim)' }}>Bounded log mining & spike detector</div>
-              </div>
-              <span className="badge badge-active">Connected (45ms)</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', borderRadius: '8px', background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
-              <div>
-                <div style={{ fontWeight: 650, fontSize: '12.5px' }}>Bounded OCR Document Parser</div>
-                <div style={{ fontSize: '10.5px', color: 'var(--dim)' }}>Local multi-threaded incident archive reader</div>
-              </div>
-              <span className="badge badge-active">Active (2ms)</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+export const Overview: React.FC<OverviewProps> = ({ health, agents, runs, onNavigate, onNewInvestigation }) => {
+  const [tools, setTools] = useState<ToolDefinition[] | null>(null);
+  const [toolsError, setToolsError] = useState<string | null>(null);
+  useEffect(() => { let active = true; fetchTools().then(value => active && setTools(value)).catch(reason => active && setToolsError(reason instanceof ApiError ? reason.message : 'Unable to load connections.')); return () => { active = false; }; }, []);
+  const runningCount = useMemo(() => runs.filter(run => run.status === 'RUNNING' || run.status === 'QUEUED').length, [runs]);
+  const pendingAgents = useMemo(() => agents.filter(agent => agent.status === 'pending'), [agents]);
+  const connections = tools?.filter(tool => tool.type === 'connector' || tool.integration_kind === 'native' || tool.integration_kind === 'mcp') ?? [];
+  const setupItems = [{ label: 'Connect an evidence source', page: 'tools' as ActivePage, action: 'Review connections' }, { label: 'Choose a capability', page: 'capabilities' as ActivePage, action: 'Browse capabilities' }, { label: 'Start an investigation', action: 'New investigation' }];
+  return <div className="overview-page">
+    <section className="overview-heading"><div><h1>Overview</h1><p>Review investigations and the evidence behind them.</p></div><button type="button" className="btn btn-primary overview-new" onClick={onNewInvestigation}><Plus size={16} /> New investigation</button></section>
+    <div className="overview-metrics" aria-label="Workspace metrics"><span>Recent runs <b>{runs.length}</b></span><i /><span>Running <b>{runningCount}</b></span><i /><span>Pending approvals <b>{pendingAgents.length}</b></span></div>
+    <div className="overview-grid"><main>
+      <section className="overview-section"><div className="overview-section-head"><h2>Recent investigations</h2><button type="button" className="btn btn-secondary" onClick={() => onNavigate('runs')}>View all <ArrowRight size={14} /></button></div><div className="overview-table-wrap"><table className="overview-table"><thead><tr><th>Investigation</th><th>Status</th><th>Evidence</th><th>Updated</th></tr></thead><tbody>
+        {runs.slice(0, 8).map(run => <tr key={run.id}><td><strong>{run.incident_id || run.capability || 'Investigation'}</strong><small>{run.id}</small></td><td><span className={statusClass(run.status)}>{run.status}</span></td><td>{run.evidence_count ?? 0} items</td><td>{run.created_at ? new Date(run.created_at).toLocaleString() : '—'}</td></tr>)}
+        {!runs.length && <tr><td colSpan={4}><div className="overview-empty"><FileText size={42} strokeWidth={1.4} /><strong>No investigations yet.</strong><span>Start with an incident ID or describe what happened.</span><button type="button" className="btn btn-primary" onClick={onNewInvestigation}>Start investigation</button></div></td></tr>}
+      </tbody></table></div></section>
+      {!runs.length && <section className="overview-setup"><h2>Setup checklist</h2>{setupItems.map((item, index) => <div className="overview-setup-row" key={item.label}><span className="overview-step">{index + 1}</span><span>{item.label}</span><button type="button" onClick={() => item.page ? onNavigate(item.page) : onNewInvestigation()}>{item.action} <ArrowRight size={15} /></button></div>)}</section>}
+    </main><aside className="overview-rail">
+      <section><div className="overview-rail-head"><h2>Connections</h2><Link2 size={18} /></div>{toolsError ? <p className="overview-muted" role="alert">{toolsError}</p> : !tools ? <p className="overview-muted">Loading connections…</p> : connections.length ? <div className="overview-connection-list">{connections.map(tool => <div className="overview-connection" key={tool.id}><span className="overview-connection-icon"><Link2 size={16} /></span><span>{tool.name}</span><em className={tool.status === 'connected' ? 'is-connected' : ''}>{tool.status === 'connected' ? 'Connected' : tool.status === 'planned' ? 'Not configured' : tool.status}</em></div>)}</div> : <p className="overview-muted">No connections reported.</p>}<button type="button" className="overview-link" onClick={() => onNavigate('tools')}>Review connections <ArrowRight size={15} /></button></section>
+      <section><div className="overview-rail-head"><h2>Approvals</h2><ShieldCheck size={18} /></div>{pendingAgents.length ? pendingAgents.slice(0, 4).map(agent => <button type="button" className="overview-approval" key={agent.id} onClick={() => onNavigate('agents')}><span><Circle size={12} />{agent.name || agent.id}</span><ArrowRight size={15} /></button>) : <p className="overview-muted">No pending reviews.</p>}{pendingAgents.length > 4 && <button type="button" className="overview-link" onClick={() => onNavigate('agents')}>View all approvals <ArrowRight size={15} /></button>}</section>
+    </aside></div>
+    {health.mode === 'demo' && <p className="overview-demo-note"><Clock3 size={14} /> Demo mode. Investigation results are simulated.</p>}
+  </div>;
 };

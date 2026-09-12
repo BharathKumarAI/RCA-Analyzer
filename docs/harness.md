@@ -4,6 +4,9 @@ This document is the operational map of the RCA Analyzer harness. The harness is
 
 It is intentionally split into small components. Each component has one responsibility, one lifecycle, and one authoritative source of state.
 
+For shared template catalogs, plugin bundles, and project resource selection, see
+[the platform harness library](platform-library.md).
+
 ## System view
 
 ```mermaid

@@ -50,3 +50,21 @@ Validate changes with `make lint`, `make test`, and `make smoke`.
 
 
 Skill-to-tool bindings and override permissions live in [platform skill policy](../blob_local/platform/layers/platform.yaml). The [inheritance resolver](skill-inheritance.md) intersects these with capability actions before ADK assembly.
+
+## Platform capability matrix
+
+The following enabled capabilities are the platform catalog. The YAML manifests are the source of truth; the API projection is implemented by [`app/api/routes/catalog.py`](../app/api/routes/catalog.py), and approved project specialists appear under each capability's `agent_bindings` field.
+
+| Capability | Source agents | Required connector | Optional connector | Actions | Dedicated attachment agent |
+| --- | --- | --- | --- | --- | --- |
+| `ticket_review` | `triage` ([`triage.py`](../app/agents/triage.py)) | `itsm` (Jira) | — | `itsm.get_ticket` | No |
+| `incident_timeline` | `triage`, `logs` ([`triage.py`](../app/agents/triage.py), [`evidence_acquisition.py`](../app/agents/workflows/evidence_acquisition.py)) | `itsm` (Jira) | `log_search` (Splunk) | `itsm.get_ticket`, `log_search.query_range` | No |
+| `attachment_review` | `file` ([`evidence_acquisition.py`](../app/agents/workflows/evidence_acquisition.py)) | — | — | — | Yes (local attachments) |
+| `incident_triage` | `triage`, `logs`, `file` ([`triage.py`](../app/agents/triage.py), [`evidence_acquisition.py`](../app/agents/workflows/evidence_acquisition.py)) | `itsm` (Jira) | `log_search` (Splunk) | `itsm.get_ticket`, `log_search.query_range` | Yes (workflow dependent) |
+| `log_correlation` | `logs`, `file` ([`evidence_acquisition.py`](../app/agents/workflows/evidence_acquisition.py)) | `log_search` (Splunk) | `itsm` (Jira) | `log_search.query_range` | Yes (workflow dependent) |
+
+The manifests for these contracts live in [`blob_local/platform/capabilities`](../blob_local/platform/capabilities). `database_rca` remains disabled because its `database_query` connector and `database.query_readonly` action are not implemented.
+
+`agent_stages` selects the native source branches in [`root.py`](../app/agents/root.py); planning and synthesis remain shared workflow stages. Source branches still require their permitted tool actions, declared connectors, and enabled model stages. Supplied attachments can contribute captured evidence to synthesis even when a dedicated file agent is not selected.
+
+Catalog specialist bindings describe configuration eligibility, not a successful live health probe. [`runner.py`](../app/runtime/runner.py) checks connector health before each live run. Demo runs do not invoke connectors or models.

@@ -69,6 +69,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Test and coverage artifacts
+design-review/
 .coverage
 .coverage.*
 htmlcov/
@@ -87,4 +88,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-

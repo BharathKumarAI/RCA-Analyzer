@@ -1,6 +1,6 @@
 """Strict, data-only agent configuration models."""
 
-from typing import Annotated, Literal, Tuple
+from typing import Any, Annotated, Literal, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.capabilities.models import StrictModel
 from app.identity.principals import Role
@@ -66,11 +66,55 @@ ProjectSection = Literal[
     "workflow",
     "prompts",
     "preferences",
+    "environments",
+    "harness",
 ]
 StageName = Literal[
     "orchestrator", "triage", "logs", "extraction", "router", "synthesis"
 ]
 ConnectorName = Literal["itsm", "log_search"]
+
+ConnectorValueType = Literal["string", "integer", "number", "boolean", "json", "secret_ref"]
+
+IntegrationKind = Literal["native", "mcp", "a2a", "parser"]
+
+
+class ConnectorTemplateField(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    variable_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    description: str = Field(min_length=1, max_length=2048)
+    value_type: ConnectorValueType
+    default_value: Any
+    allow_project_override: bool = True
+    visible_in_project: bool = True
+    icon: str = Field(default="settings", pattern=r"^[a-z0-9_-]{1,64}$")
+
+
+class ConnectorTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    type: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    name: str = Field(min_length=1, max_length=200)
+    system_name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    category: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=2048)
+    integration_kind: IntegrationKind = "native"
+    protocol: str = Field(min_length=1, max_length=120)
+    auth_method: str = Field(min_length=1, max_length=120)
+    default_endpoint: str = Field(min_length=1, max_length=256)
+    default_ui_base_url: str | None = None
+    default_secret: str = Field(min_length=1, max_length=120)
+    secret_variable: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    default_service_user: str | None = None
+    default_scope: Literal["platform_default", "project_override", "project_only"]
+    can_override: bool = True
+    default_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    default_retry_attempts: int = Field(default=3, ge=0, le=20)
+    default_retry_backoff: int = Field(default=1, ge=0, le=120)
+    default_rate_limit: str = "100 req/min"
+    default_config: dict[str, Any] = Field(default_factory=dict)
+    default_mcp: dict[str, Any] | None = None
+    default_a2a: dict[str, Any] | None = None
+    parameter_fields: Tuple[ConnectorTemplateField, ...] = Field(default_factory=tuple)
 
 
 class PlatformRules(StrictModel):
@@ -124,6 +168,26 @@ class SkillOverride(StrictModel):
     actions: tuple[Action, ...] | None = None
 
 
+class EnvironmentConfig(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=200)
+    enabled: bool = True
+    cluster: str | None = Field(default=None, max_length=128)
+    namespace: str | None = Field(default=None, max_length=128)
+    host: str | None = Field(default=None, max_length=256)
+    splunk_index: str | None = Field(default=None, max_length=128)
+    jira_env_name: str | None = Field(default=None, max_length=128)
+
+
+class HarnessSelection(StrictModel):
+    agents: tuple[str, ...] = ()
+    disabled_agents: tuple[str, ...] = ()
+    plugins: tuple[str, ...] = ()
+    disabled_plugins: tuple[str, ...] = ()
+    disabled_skills: tuple[SkillId, ...] = ()
+    disabled_capabilities: tuple[str, ...] = ()
+
+
 class ProjectLayer(StrictModel):
     tenant_id: str = Field(min_length=1)
     project_id: str = Field(min_length=1)
@@ -140,6 +204,8 @@ class ProjectLayer(StrictModel):
         default_factory=PresentationPreferences
     )
     allow_user_preferences: tuple[PreferenceName, ...] = ()
+    environments: tuple[EnvironmentConfig, ...] = ()
+    harness: HarnessSelection = Field(default_factory=HarnessSelection)
 
 
 class UserLayer(StrictModel):

@@ -223,7 +223,7 @@ function renderLimitsAndConnectors(container, config) {
       <div>Max Files per Request: <strong>${limits.max_files ?? '—'}</strong></div>
       <div>Max File Size: <strong>${limits.max_file_bytes ? Math.round(limits.max_file_bytes / 1024 / 1024) : '—'} MB</strong></div>
       <div>Allowed Extensions: <code class="mono">${(limits.allowed_extensions || []).join(', ')}</code></div>
-      <div>OCR Engine: <strong>Local PyTesseract / Tesseract</strong></div>
+      <div>Parser Concurrency: <strong>${limits.concurrency ?? '—'}</strong></div>
     </div>
   `;
   grid.appendChild(fileCard);

@@ -1,4 +1,4 @@
-export type SystemRole = 'PLATFORM_ADMIN' | 'SRE_LEAD' | 'INVESTIGATOR' | 'SECURITY_OFFICER' | 'GENERIC_VIEWER';
+export type SystemRole = 'PLATFORM_ADMIN' | 'TENANT_ADMIN' | 'PROJECT_OWNER' | 'PROJECT_MANAGER' | 'PROJECT_ANALYST' | 'OPERATOR' | 'AUDITOR' | 'SKILL_AUTHOR' | 'PROJECT_VIEWER' | 'GENERIC_VIEWER';
 
 export interface Principal {
   subject: string;
@@ -33,6 +33,117 @@ export interface AgentConfiguration {
   rejection_reason?: string;
 }
 
+export interface StageModelProfile {
+  model: string;
+  enabled?: boolean;
+  temperature: number;
+  max_output_tokens: number;
+  thinking_level?: 'minimal' | 'low' | 'medium' | 'high' | string;
+  thinking_budget?: number | null;
+}
+
+export interface RuntimeModelProfiles {
+  stages: Record<string, StageModelProfile>;
+  profiles: Record<string, Record<string, string | number>>;
+}
+
+export interface ConnectorTemplateItem {
+  type: string;
+  name: string;
+  system_name: string;
+  category: string;
+  description: string;
+  integration_kind: 'native' | 'mcp' | 'a2a' | 'parser';
+  protocol: string;
+  auth_method: string;
+  default_endpoint: string;
+  default_ui_base_url?: string;
+  default_secret: string;
+  secret_variable?: string;
+  parameter_fields?: ConnectorTemplateField[];
+  default_service_user?: string;
+  default_scope: 'platform_default' | 'project_override' | 'project_only';
+  can_override: boolean;
+  default_timeout_seconds: number;
+  default_retry_attempts: number;
+  default_retry_backoff: number;
+  default_rate_limit: string;
+  default_config: Record<string, any>;
+  default_mcp?: Record<string, any>;
+  default_a2a?: Record<string, any>;
+}
+
+export interface ConnectorTemplateField {
+  variable_name: string;
+  description: string;
+  value_type: ConnectorValueType;
+  default_value: any;
+  allow_project_override: boolean;
+  visible_in_project: boolean;
+  icon: string;
+}
+
+export type ConnectorValueType =
+  | 'string'
+  | 'integer'
+  | 'number'
+  | 'boolean'
+  | 'json'
+  | 'secret_ref';
+
+export interface ParameterDefinitionRow {
+  tool: string;
+  variable_name: string;
+  value_type: ConnectorValueType;
+  description: string;
+  default_value: unknown;
+  effective_value: unknown;
+  revision: number;
+  override_revision: number | null;
+  allow_project_override: boolean;
+  project_visible: boolean;
+  source: 'platform' | 'project';
+}
+
+export interface ConnectorParameterField {
+  tool: string;
+  variable_name: string;
+  value_type: ConnectorValueType;
+  description: string;
+  default_value: unknown;
+  effective_value: unknown;
+  revision: number;
+  override_revision: number | null;
+  allow_project_override: boolean;
+  project_visible: boolean;
+  source: 'platform' | 'project';
+}
+
+export interface RuntimeConfig {
+  configuration_hash: string;
+  workflow: Record<string, boolean>;
+  preferences: Record<string, string>;
+  disabled_connectors: string[];
+  max_tool_calls: number;
+  mode: 'demo' | 'live';
+  execution: {
+    run_timeout_seconds: number;
+    max_concurrent_runs: number;
+    retention_days: number;
+    max_llm_calls: number;
+    max_context_chars: number;
+    max_upload_batch_bytes: number;
+    tenant_id?: string;
+    project_id?: string;
+    default_log_window?: string;
+    [key: string]: unknown;
+  };
+  model_profiles: RuntimeModelProfiles;
+  file_limits: { allowed_extensions: string[]; max_file_bytes: number; max_files: number; max_expanded_bytes: number; max_zip_members: number; max_pdf_pages: number; max_rows: number; max_cells: number; max_text_chars: number; max_image_pixels: number; parser_timeout_seconds: number; concurrency: number };
+  optimization: Record<string, any>;
+  telemetry: Record<string, any>;
+}
+
 export interface RunStage {
   name: string;
   status: 'completed' | 'running' | 'queued' | 'skipped';
@@ -42,6 +153,14 @@ export interface RunStage {
 
 export interface Run {
   id: string;
+  mode?: 'demo' | 'live';
+  result?: {
+    outcome: string;
+    summary: string;
+    findings: Array<{ summary: string; evidence_ids: string[] }>;
+    uncertainties: string[];
+    recommended_actions: string[];
+  };
   capability: string;
   prompt: string;
   incident_id?: string;
@@ -77,6 +196,8 @@ export type ScopeLevel = 'platform_default' | 'project_override' | 'project_only
 export type IntegrationKind = 'native' | 'mcp' | 'a2a' | 'parser';
 
 export interface ToolDefinition {
+  registration?: IntegrationRegistration;
+  probe_available?: boolean;
   id: string;
   name: string;
   system_name?: string;
@@ -124,13 +245,41 @@ export interface ToolDefinition {
   };
 }
 
+export interface CapabilitySafetyProfile {
+  tool_mutations?: 'forbidden' | 'approval_required' | 'allowed' | string;
+  pii_access?: 'none' | 'redacted' | 'project_scoped' | 'full' | string;
+  raw_payload_access?: 'restricted' | 'offload_to_artifacts' | 'direct' | string;
+  external_network?: 'connector_allowlist' | string;
+}
+
 export interface CapabilityItem {
+  id: string;
   name: string;
+  version?: string;
   description: string;
-  stage_type: string;
-  orchestrator: string;
-  max_steps: number;
-  agents: string[];
+  stage_type?: string;
+  orchestrator?: string;
+  model_profile?: string;
+  max_steps?: number;
+  agents?: string[];
+  category?: string;
+  enabled?: boolean;
+  skills?: string[];
+  requires?: {
+    connectors?: string[];
+  };
+  optional?: {
+    connectors?: string[];
+  };
+  permissions?: {
+    minimum_role?: string;
+    allowed_roles?: string[];
+    allowed_actions?: string[];
+  };
+  safety_profile?: CapabilitySafetyProfile;
+  is_authorized?: boolean;
+  rejection_reason?: string | null;
+  allowed_skills?: string[];
 }
 
 export interface AuditLog {
@@ -201,7 +350,7 @@ export interface SystemDiagnostics {
     active_tasks: number;
   };
   mlflow: {
-    status: 'connected' | 'unconfigured';
+    status: 'connected' | 'configured' | 'unconfigured' | 'error';
     tracking_uri: string;
     experiment_store: string;
     offline_eval_contracts: string[];
@@ -211,4 +360,315 @@ export interface SystemDiagnostics {
     results: Record<string, unknown>;
     disabled: string[];
   };
+}
+
+export interface ConnectionTestTargetResult {
+  target: 'database' | 'memory' | 'storage' | 'mlflow' | 'connectors';
+  status: 'connected' | 'healthy' | 'warning' | 'error' | 'unconfigured';
+  latency_ms: number;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface ConnectionTestResponse {
+  timestamp: number;
+  results: Record<string, ConnectionTestTargetResult>;
+}
+
+export type ConnectorCheckStatus =
+  | 'HEALTHY'
+  | 'DEGRADED'
+  | 'UNHEALTHY'
+  | 'AUTHENTICATION_ERROR'
+  | 'AUTHORIZATION_ERROR'
+  | 'RATE_LIMITED'
+  | 'SCHEMA_MISMATCH';
+
+export interface ConnectorHealthRecord {
+  connector_id: string;
+  overall: ConnectorCheckStatus;
+  latency_ms: number;
+  connectivity: ConnectorCheckStatus;
+  authentication: ConnectorCheckStatus;
+  authorization: ConnectorCheckStatus;
+  rate_limit_status: ConnectorCheckStatus;
+  schema_compatibility: ConnectorCheckStatus;
+  capability_health: Record<string, ConnectorCheckStatus>;
+  last_probed_at: number;
+  message: string;
+}
+
+export interface ConnectorsHealthResponse {
+  disabled: string[];
+  mode: 'demo' | 'live';
+  connectors: Record<string, ConnectorHealthRecord>;
+  unconfigured: string[];
+}
+
+export interface AlertSummary {
+  total: number;
+  critical: number;
+  warning: number;
+  info: number;
+}
+
+export interface AlertItem {
+  id: string;
+  severity: 'critical' | 'warning' | 'info';
+  source: string;
+  component: string;
+  title: string;
+  summary: string;
+  message: string;
+  created_at: number;
+  metadata?: Record<string, any>;
+  status: 'open' | 'suppressed' | 'dismissed';
+}
+
+export interface AlertsResponse {
+  generated_at: number;
+  items: AlertItem[];
+  summary: AlertSummary;
+}
+
+export interface NotificationItem {
+  id: string;
+  kind: 'run' | 'governance';
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  message: string;
+  created_at: number;
+  created_at_iso?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface NotificationsResponse {
+  generated_at: number;
+  items: NotificationItem[];
+  unread_count: number;
+}
+
+export interface ProjectSetupScope {
+  tenant_id: string;
+  project_id: string;
+  subject: string;
+  mode: 'demo' | 'live';
+  auth_configured: boolean;
+}
+
+export interface ProjectRuntimeSection {
+  settings: RuntimeConfig['execution'] & Record<string, unknown>;
+  max_tool_calls: number;
+  workflow: Record<string, boolean>;
+  preferences: Record<string, string>;
+  disabled_connectors: string[];
+  prompts: Record<string, string>;
+  environments?: EnvironmentConfig[];
+}
+
+export interface EnvironmentConfig {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  cluster?: string | null;
+  namespace?: string | null;
+  host?: string | null;
+  splunk_index?: string | null;
+  jira_env_name?: string | null;
+}
+
+export interface PlatformSkillRule {
+  immutable: boolean;
+  project_override: boolean;
+  user_override: boolean;
+  actions: string[];
+}
+
+export interface PlatformPolicyData {
+  project_sections: string[];
+  model_profiles: string[];
+  user_preferences: string[];
+  skills: Record<string, PlatformSkillRule>;
+}
+
+export interface AvailableSkillItem {
+  id: string;
+  name: string;
+  immutable: boolean;
+  project_override: boolean;
+  user_override: boolean;
+  actions: string[];
+}
+
+export interface StageDefinitionItem {
+  id: string;
+  name: string;
+  description: string;
+  default_model: string;
+}
+
+export interface ProjectValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  effective_configuration: Record<string, unknown> | null;
+}
+
+export interface ProjectSetupResponse {
+  generated_at: number;
+  scope: ProjectSetupScope;
+  runtime: ProjectRuntimeSection;
+  policy: Record<string, unknown>;
+  platform_policy?: PlatformPolicyData;
+  available_capabilities?: CapabilityItem[];
+  available_skills?: AvailableSkillItem[];
+  stage_definitions?: StageDefinitionItem[];
+  template_yaml?: string;
+  project_layer: Record<string, unknown> | null;
+  template_snapshot: Record<string, unknown>[];
+  connector_fields: ConnectorParameterField[];
+  project_file: {
+    path: string | null;
+    exists: boolean;
+    status: 'read' | 'template' | 'missing';
+    content: string | null;
+  };
+  connector_health: Record<string, ConnectorHealthRecord>;
+}
+
+export interface SkillFrontmatter {
+  id?: string;
+  version?: string;
+  summary?: string;
+  category?: string;
+  entrypoints?: string[];
+  required_tools?: string[];
+  forbidden_tools?: string[];
+  input_schema?: string;
+  output_schema?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface SkillMlflowMetrics {
+  contract_status?: number;
+  citation_rate?: number;
+  temporal_precision?: number;
+  secrets_absent?: number;
+  instruction_chars?: number;
+  quality_score?: number;
+  [key: string]: number | undefined;
+}
+
+export interface SkillMlflowReport {
+  run_id: string;
+  experiment_id: string;
+  experiment_name: string;
+  status: string;
+  stage_executed: string;
+  timestamp: number;
+  baseline_metrics: SkillMlflowMetrics;
+  candidate_metrics: SkillMlflowMetrics;
+  improvement: {
+    delta: number;
+    status: 'IMPROVED' | 'MAINTAINED' | 'REGRESSED';
+    summary: string;
+  };
+}
+
+export interface SkillSaveResponse {
+  saved: boolean;
+  skill_id: string;
+  stage: string;
+  project_id: string;
+  tenant_id: string;
+  is_overridden_in_project: boolean;
+  project_instruction: string;
+  project_enabled: boolean;
+  mlflow: SkillMlflowReport;
+}
+
+export interface SkillItem {
+  id: string;
+  name?: string;
+  status?: string;
+  size_bytes?: number;
+  sha256?: string;
+  source?: string;
+  stage?: string;
+  immutable?: boolean;
+  allowed_actions?: string[];
+  project_override?: boolean;
+  user_override?: boolean;
+  content?: string;
+  frontmatter?: SkillFrontmatter;
+  instruction_body?: string;
+  is_overridden_in_project?: boolean;
+  project_instruction?: string | null;
+  project_enabled?: boolean;
+  project_actions?: string[] | null;
+}
+
+export type HarnessResourceKind = 'agent' | 'skill' | 'capability' | 'plugin';
+export interface HarnessSelection {
+  agents: string[];
+  disabled_agents: string[];
+  plugins: string[];
+  disabled_skills?: string[];
+  disabled_capabilities?: string[];
+  disabled_plugins: string[];
+}
+export interface HarnessDocument {
+  version: number;
+  agents: Array<{ enabled: boolean; definition: AgentDefinition }>;
+  plugins: Array<{ id: string; name: string; description: string; capabilities: string[]; skills: string[]; agents: string[]; enabled: boolean }>;
+}
+export interface HarnessResponse {
+  revision: string;
+  document: HarnessDocument;
+  selection: HarnessSelection;
+  effective_agents: string[];
+  effective_plugins: string[];
+  effective_skills?: string[];
+  effective_capabilities?: string[];
+  project_revision?: string;
+}
+export interface AgentDefinition {
+  id: string; version: string; name: string; description: string; instruction: string;
+  capability: string; model_profile: string; tools: string[]; stage_model: string;
+}
+export interface HarnessLibraryItem {
+  id: string;
+  name: string;
+  kind: HarnessResourceKind;
+  description?: string;
+  version?: string;
+  source: 'platform' | 'project';
+  inherited: boolean;
+  selected: boolean;
+  customizable: boolean;
+  immutable?: boolean;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IntegrationDefinition {
+  name: string;
+  kind: 'mcp' | 'a2a';
+  endpoint: string;
+  description: string;
+  auth_method: 'none' | 'bearer';
+  secret_reference: string;
+  transport: 'streamable_http' | 'sse' | 'a2a_jsonrpc' | 'a2a_rest';
+  timeout_seconds: number;
+  allow_project_override: boolean;
+}
+export interface IntegrationRegistration {
+  id: string;
+  definition: IntegrationDefinition;
+  revision: string;
+  platform_definition: IntegrationDefinition | null;
+  platform_revision: string;
+  project_revision: string;
+  scope_level: ScopeLevel;
 }

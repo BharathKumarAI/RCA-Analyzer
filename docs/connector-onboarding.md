@@ -2,7 +2,25 @@
 
 An agent reasons about evidence. A domain tool exposes an allowed operation. A connector provider handles the external API. These responsibilities remain separate so credentials and network behavior stay outside model-authored instructions.
 
+## Connector catalog
+
+The [catalog templates](../blob_local/platform/config/connector_templates.yaml) cover all ten connector bindings in the [reference sample](../references/sample.yaml): Jira, Confluence, Splunk, SignalFx, qTest, GitLab, Oracle, Kafka, Unix/Tuxedo, and Kubernetes. Jira and Splunk retain their runtime IDs, `itsm` and `log_search`. Kafka and Unix/Tuxedo are listed as planned MCP integrations. Placeholder endpoints are reference metadata, not configured services.
+
+The [catalog API](../app/api/routes/catalog.py) shows the eight unimplemented integrations as planned and not enabled. Only the [provider registry](../app/connectors/providers/registry.py) creates executable connectors; catalog entries do not register tools, permit database queries, or enable command execution. Database-backed deployments must update their active [configuration bundle](../app/configuration/database_bundle.py) and reload the API before catalog edits appear.
+
 ## Startup and shutdown
+
+### Admin-managed MCP and A2A configuration
+
+Use **Tools & Connectors → Add MCP / A2A** to save an HTTPS endpoint, protocol, authentication reference, description, and timeout. Platform administrators can save tenant-wide platform defaults and permit project overrides. Project owners and managers can create project-only registrations or override an unlocked default. Identity and scope come from the authenticated principal, not the request body. Revision checks prevent stale saves; **Use platform defaults** removes the project override. These are database records, not changes to the reference YAML. See the [registration API](../app/api/routes/integrations.py), [SQLAlchemy store](../app/configuration/integrations.py), and [migration](../migrations/004_integrations.sql).
+
+**Test connection** reads the saved effective project configuration. It performs an MCP initialization handshake (Streamable HTTP or legacy SSE), or retrieves and validates an A2A agent card. An A2A endpoint uses `/.well-known/agent-card.json`; a supplied `.json` URL is used directly. It does not call remote tools or run agent tasks. A successful connection test does not enable runtime execution or approve a specialist. Manual tests are available in demo mode; demo investigations still perform no external calls. See the [bounded probe implementation](../app/connectors/providers/integration_probe.py), [real HTTPS tests](../tests/integration/test_integration_probe.py), [MCP lifecycle specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [A2A specification](https://a2a-protocol.org/latest/specification/).
+
+Connection tests require the destination hostname in deployment-owned `RCA_INTEGRATION_ALLOWED_HOSTS`. Bearer authentication additionally requires a per-host credential reference in `RCA_INTEGRATION_SECRET_REFERENCES`, for example `{"mcp.example.com":["env://MCP_API_TOKEN"]}`. Credentials are resolved only in the provider; redirects and proxy environment inheritance are disabled, TLS is verified, and responses and deadlines are bounded. Registration does not itself permit network access.
+
+### Editing native connector and operational values
+
+**Parameter Studio** lets platform administrators edit persisted defaults, descriptions, and project override policy. Authorized project owners can save permitted overrides. The catalog displays these saved values. Runtime settings and explicit saved native endpoint, Jira service user, timeout, and result/response limits are applied on the next API restart; untouched sample catalog defaults are not used as live connection settings. Native endpoint and service-user edits require a platform administrator. Jira project scope and Splunk index remain deployment-owned. Retry/rate labels and other reference-only metadata do not add runtime features. See the [parameter API](../app/api/routes/parameters.py), [validation and persistence](../app/configuration/parameters.py), [provider construction](../app/connectors/providers/registry.py), and [startup](../app/runtime/bootstrap.py).
 
 ```mermaid
 flowchart TD

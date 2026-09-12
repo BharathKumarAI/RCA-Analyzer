@@ -5,7 +5,14 @@ import shutil
 import pytest
 from sqlalchemy import func, select, update
 
-from app.configuration.database_bundle import active, bundles, metadata, seed_bundle
+from app.configuration.database_bundle import (
+    active,
+    bundles,
+    metadata,
+    seed_bundle,
+    update_bundle_file,
+)
+from app.connectors.providers.project_storage import project_prefix
 from app.persistence.database import initialize_tables
 from app.persistence.store import InvestigationStore
 from app.settings import CONTENT_ROOT, Settings
@@ -73,5 +80,29 @@ async def test_template_update_requires_current_hash_and_preserves_snapshots(tmp
             await seed_bundle(database.engine, settings, first)
         async with database.engine.connect() as c:
             assert await c.scalar(select(active.c.content_hash)) == first
+    finally:
+        await database.aclose()
+
+
+@pytest.mark.asyncio
+async def test_project_file_update_is_durable_in_active_bundle(tmp_path):
+    settings = Settings(content_root=tmp_path / "platform", tenant_id="acme", project_id="first")
+    shutil.copytree(CONTENT_ROOT, settings.content_root)
+    database = InvestigationStore("sqlite+aiosqlite:///:memory:")
+    await initialize_tables(database.engine, metadata)
+    try:
+        original = await seed_bundle(database.engine, settings)
+        relative = f"projects/{project_prefix(settings.tenant_id, settings.project_id)}/configuration/project.yaml"
+        content = "tenant_id: acme\nproject_id: first\nskills: {}\n"
+        revised = await update_bundle_file(database.engine, settings, relative, content)
+        assert revised != original
+        async with database.engine.connect() as c:
+            assert await c.scalar(select(active.c.content_hash)) == revised
+            row = (
+                await c.execute(
+                    select(bundles.c.files).where(bundles.c.content_hash == revised)
+                )
+            ).first()
+        assert row.files[relative] == content
     finally:
         await database.aclose()

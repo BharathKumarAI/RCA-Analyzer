@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from app.capabilities.models import CapabilityDefinition
 from app.settings import CONTENT_ROOT
 from app.configuration.layers import ConfigurationLayers
+from app.configuration.harness import HarnessCatalog
 from app.configuration.yaml_data import load_yaml_data
 
 
@@ -69,10 +70,15 @@ class CapabilityRegistry:
             loaded,
             self.projects_root,
         )
+        self.harness = HarnessCatalog(self.manifests_dir.parent / "config/harness.yaml").bind(self)
+        self.inheritance.harness = self.harness
+        for project in self.inheritance.projects.values():
+            self.harness.validate_selection(project.harness)
         canonical = [cap.model_dump(mode="json") for cap in self.list_all()]
         payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
         for path, data in sorted(skill_bytes.items()):
             payload += path.encode() + b"\0" + data
+        payload += self.harness.revision.encode()
         payload += json.dumps(self.inheritance.files, sort_keys=True).encode()
         payload += json.dumps(self.inheritance.project_files, sort_keys=True).encode()
         self.content_hash = "sha256:" + hashlib.sha256(payload).hexdigest()

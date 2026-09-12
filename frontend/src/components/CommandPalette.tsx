@@ -15,6 +15,9 @@ import {
   ShieldAlert,
   KeyRound,
   Zap,
+  BellRing,
+  HeartPulse,
+  FileCog,
   Settings
 } from 'lucide-react';
 import { ActivePage } from './Sidebar';
@@ -42,12 +45,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        if (isOpen) {
-          onClose();
-        }
-      }
       if (e.key === 'Escape' && isOpen) {
         onClose();
       }
@@ -55,6 +52,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  useEffect(() => { if (!isOpen) setQuery(''); }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -73,6 +72,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     { id: '12', title: 'System Settings, Diagnostics & Connection Tests', category: 'Settings', page: 'settings', icon: <Settings size={15} /> },
     { id: '13', title: 'Runbook & Postmortem Knowledge Stores', category: 'Knowledge', page: 'knowledge', icon: <BookOpen size={15} /> },
     { id: '14', title: 'Platform Health Overview & MTTR KPIs', category: 'Overview', page: 'overview', icon: <Layers size={15} /> },
+    { id: '15', title: 'Project Setup Snapshot', category: 'Configuration', page: 'project-setup', icon: <FileCog size={15} /> },
+    { id: '16', title: 'Connector Health Checks', category: 'Operations', page: 'health-checks', icon: <HeartPulse size={15} /> },
+    { id: '18', title: 'Harness Library & Project Selection', category: 'Configuration', page: 'harness-library', icon: <Layers size={15} /> },
+    { id: '19', title: 'Users & Access', category: 'Access', page: 'users', icon: <KeyRound size={15} /> },
+    { id: '20', title: 'Token Usage & Cost', category: 'Usage', page: 'billing', icon: <Sliders size={15} /> },
+    { id: '17', title: 'Operational Alerts & Notices', category: 'Operations', page: 'alerts', icon: <BellRing size={15} /> },
   ];
 
   const filtered = items.filter(i =>
@@ -82,18 +87,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-dialog" style={{ maxWidth: '540px' }} onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="Search workspace" className="modal-dialog" style={{ maxWidth: '540px' }} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
           <Search size={18} style={{ color: 'var(--muted)' }} />
           <input
             type="text"
+            aria-label="Search pages"
             placeholder="Type a command or jump to page..."
             value={query}
             onChange={e => setQuery(e.target.value)}
             autoFocus
             style={{ flex: 1, border: 'none', background: 'transparent', fontSize: '14px', color: 'var(--text)', outline: 'none' }}
           />
-          <button type="button" className="icon-btn" onClick={onClose}>
+          <button type="button" className="icon-btn" aria-label="Close search" onClick={onClose}>
             <X size={16} />
           </button>
         </div>
@@ -105,13 +111,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             </div>
           ) : (
             filtered.map(item => (
-              <div
+              <button
+                type="button"
                 key={item.id}
                 onClick={() => {
                   onNavigate(item.page);
                   onClose();
                 }}
                 style={{
+                  background: 'transparent',
+                  border: 'none',
+                  textAlign: 'left',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -131,7 +141,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 <span style={{ fontSize: '10px', color: 'var(--muted)', background: 'var(--bg)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--line)' }}>
                   Jump
                 </span>
-              </div>
+              </button>
             ))
           )}
         </div>

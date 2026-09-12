@@ -26,7 +26,12 @@ async def invoke(operation):
 @router.get("")
 async def list_parameters(request: Request, principal: Principal):
     return await invoke(
-        request.app.state.parameters.resolve(principal.tenant_id, principal.project_id)
+        request.app.state.parameters.resolve(
+            principal.tenant_id,
+            principal.project_id,
+            request.app.state.platform.connector_templates,
+            request.app.state.platform.connector_options,
+        )
     )
 
 

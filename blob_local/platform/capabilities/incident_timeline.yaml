@@ -1,0 +1,38 @@
+id: incident_timeline
+version: 1.0.0
+enabled: true
+name: "Incident Timeline"
+description: "Builds an incident timeline from a Jira ticket and, when available, bounded Splunk evidence."
+category: investigation
+agent_stages:
+  - triage
+  - logs
+
+skills:
+  - incident-timeline
+
+requires:
+  connectors:
+    - itsm
+
+optional:
+  connectors:
+    - log_search
+
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+    - PLATFORM_ADMIN
+    - PROJECT_OWNER
+    - PROJECT_MANAGER
+    - PROJECT_ANALYST
+  allowed_actions:
+    - itsm.get_ticket
+    - log_search.query_range
+
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: project_scoped
+  raw_payload_access: restricted
+
+model_profile: balanced-investigation

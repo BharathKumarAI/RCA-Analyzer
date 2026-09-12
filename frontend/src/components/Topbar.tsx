@@ -4,7 +4,8 @@ import {
   Search,
   Sun,
   Moon,
-  Plus
+  Plus,
+  Bell
 } from 'lucide-react';
 import { Principal, SystemHealth } from '../types/api';
 import { ActivePage } from './Sidebar';
@@ -21,7 +22,7 @@ interface TopbarProps {
   onNewInvestigation?: () => void;
 }
 
-const PAGE_TITLES: Record<string, string> = {
+const PAGE_TITLES: Record<ActivePage, string> = {
   overview: 'Overview',
   agents: 'Fleet & Specialists',
   tools: 'Connectors & Tools',
@@ -32,6 +33,17 @@ const PAGE_TITLES: Record<string, string> = {
   users: 'Users & Roles',
   billing: 'Usage & Quotas',
   settings: 'System Settings',
+  skills: 'Skills Catalog',
+  parameters: 'Parameter Studio',
+  optimization: 'Optimization & Evaluation',
+  persistence: 'Persistence & Storage',
+  policy: 'Policy & Guardrails',
+  roles: 'Roles & Access',
+  runtime: 'Runtime & ADK',
+  alerts: 'Operational Alerts',
+  'health-checks': 'Health Checks',
+  'project-setup': 'Project Setup',
+  'harness-library': 'Harness Library',
 };
 
 export const Topbar: React.FC<TopbarProps> = ({
@@ -42,6 +54,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   onToggleTheme,
   onOpenSearch,
   onOpenSession,
+  onOpenAlerts,
   onNewInvestigation,
 }) => {
   const currentCrumb = PAGE_TITLES[activePage] || 'Overview';
@@ -95,6 +108,14 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span>{health.mode === 'live' ? 'Live' : 'Demo'}</span>
         </div>
 
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={onOpenAlerts}
+          title="Open operational alerts"
+        >
+          <Bell size={15} />
+        </button>
         <button
           type="button"
           className="icon-btn"

@@ -19,6 +19,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
+from app.configuration.parameters import ParameterStore
 from app.configuration.platform import PlatformConfiguration
 from app.connectors.providers.registry import ConnectorOptions
 from app.optimization.content import read_platform
@@ -205,17 +206,63 @@ async def load_bundle(engine, settings, cleanup):
     )
 
 
+async def update_bundle_file(engine, settings, relative_path: str, content: str):
+    """Persist one declarative project file and atomically activate its bundle."""
+    if not isinstance(relative_path, str) or not (
+        relative_path.startswith("projects/") or relative_path.startswith("config/")
+    ):
+        raise ValueError("Only declarative project or platform configuration files can be updated")
+    if not isinstance(content, str):
+        raise ValueError("Configuration content must be text")
+    async with engine.connect() as c:
+        row = (
+            await c.execute(
+                select(bundles.c.files, bundles.c.content_hash)
+                .join(
+                    active,
+                    (bundles.c.tenant_id == active.c.tenant_id)
+                    & (bundles.c.project_id == active.c.project_id)
+                    & (bundles.c.content_hash == active.c.content_hash),
+                )
+                .where(
+                    active.c.tenant_id == settings.tenant_id,
+                    active.c.project_id == settings.project_id,
+                )
+            )
+        ).first()
+    if row is None:
+        raise ValueError("Seed project configuration before saving project files")
+    validate_files(row.files)
+    if content_hash(row.files) != row.content_hash:
+        raise ValueError("Configuration bundle failed integrity verification")
+    files = dict(row.files)
+    files[relative_path] = content
+    validate_files(files)
+    digest = content_hash(files)
+    return await _store_bundle(engine, settings, files, digest, row.content_hash)
+
+
 async def load_effective_settings(engine, settings, cleanup):
     """Shared database configuration resolution for API and maintenance jobs."""
+    store = ParameterStore(engine)
+    platform = PlatformConfiguration.load(settings)
+    await store.seed_connector_template_definitions(
+        settings.tenant_id,
+        platform.connector_templates,
+        platform.connector_options,
+    )
     if not settings.database_configuration:
         return settings, []
     import os
-    from app.configuration.parameters import ParameterStore, RUNTIME_FIELDS
+    from app.configuration.parameters import RUNTIME_FIELDS
     from app.settings import Settings
 
     configured = await load_bundle(engine, settings, cleanup)
-    rows = await ParameterStore(engine).resolve(
-        configured.tenant_id, configured.project_id
+    rows = await store.resolve(
+        configured.tenant_id,
+        configured.project_id,
+        platform.connector_templates,
+        platform.connector_options,
     )
     runtime = {
         row["variable_name"]: row["effective_value"]

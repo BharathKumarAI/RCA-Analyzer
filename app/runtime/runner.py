@@ -54,6 +54,7 @@ class ExecutionRunner:
             connectors,
         )
         self.chat_artifacts = chat_artifacts
+        self.harness = registry.harness
         self.configuration_service = configuration_service
         self.model_factory = model_factory
         self.optimization_service = optimization_service
@@ -134,6 +135,10 @@ class ExecutionRunner:
                 if self.configuration_service and runtime["workflow"].specialists
                 else []
             )
+            project = self.registry.inheritance.project(principal)
+            approved = self.harness.filter_approved(
+                approved, project.harness if project else None
+            )
             if len(approved) > self.settings.max_project_agents:
                 raise ValueError(
                     "Approved specialist count exceeds configured per-run limit"
@@ -172,9 +177,15 @@ class ExecutionRunner:
                 runtime["max_tool_calls"] or profile.tool_call_limit,
             )
             snapshot = {
+                "harness_revision": self.harness.revision,
+                "harness_selection": project.harness.model_dump(mode="json") if project else {},
                 "workflow": runtime["workflow"].model_dump(mode="json"),
                 "preferences": runtime["preferences"].model_dump(mode="json"),
                 "disabled_connectors": list(runtime["disabled_connectors"]),
+                "environments": [
+                    env.model_dump(mode="json")
+                    for env in runtime.get("environments", ())
+                ],
                 "limits": {
                     name: getattr(effective_settings, name)
                     for name in ExecutionLimits.model_fields

@@ -122,9 +122,19 @@ def test_effective_discovery_native_execution_and_snapshot_agree(tmp_path):
             == "summary"
         )
         capabilities = client.get("/api/v1/capabilities", headers=token()).json()
-        assert [cap["id"] for cap in capabilities] == ["incident_triage"]
-        assert capabilities[0]["permissions"]["allowed_actions"] == ["itsm.get_ticket"]
-        assert capabilities[0]["model_profile"] == "fast-investigation"
+        assert {cap["id"] for cap in capabilities} == {
+            "attachment_review",
+            "incident_timeline",
+            "incident_triage",
+            "ticket_review",
+        }
+        triage_capability = next(
+            cap for cap in capabilities if cap["id"] == "incident_triage"
+        )
+        assert triage_capability["permissions"]["allowed_actions"] == [
+            "itsm.get_ticket"
+        ]
+        assert triage_capability["model_profile"] == "fast-investigation"
         health = client.get("/api/v1/connectors/health", headers=token()).json()
         assert health["disabled"] == ["log_search"]
         response = client.post(
@@ -153,7 +163,8 @@ def test_effective_discovery_native_execution_and_snapshot_agree(tmp_path):
     assert resolved["preferences"]["presentation"] == "timeline"
     assert not resolved["workflow"]["planning"]
     assert (
-        resolved["allowed_actions"] == capabilities[0]["permissions"]["allowed_actions"]
+        resolved["allowed_actions"]
+        == triage_capability["permissions"]["allowed_actions"]
     )
 
 
