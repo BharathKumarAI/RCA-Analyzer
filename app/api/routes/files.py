@@ -25,11 +25,9 @@ async def upload_files(
         principal,
         {
             Role.PLATFORM_ADMIN,
-            Role.TENANT_ADMIN,
             Role.PROJECT_OWNER,
             Role.PROJECT_MANAGER,
             Role.PROJECT_ANALYST,
-            Role.OPERATOR,
         },
     )
     if chat_id:

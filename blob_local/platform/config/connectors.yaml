@@ -17,3 +17,59 @@ log_search:
   max_window_seconds: 86400
   secrets:
     token: "env://SPLUNK_TOKEN"
+
+confluence:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+signalfx:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+qtest:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+gitlab:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+oracle:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+kafka:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+unix:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100
+
+kubernetes:
+  enabled: false
+  transport: native
+  timeout_s: 10
+  max_response_bytes: 1048576
+  max_results: 100

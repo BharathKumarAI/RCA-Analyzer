@@ -15,7 +15,7 @@ from app.identity.principals import Role
 
 from app.runtime.bootstrap import application_lifespan
 from app.api.routes import catalog, files, runs, agents, optimization, chats, parameters, harness
-from app.api.routes import integrations
+from app.api.routes import integrations, harness_workspace
 
 
 def create_app(settings=None, *, connectors=None, model_factory=None):
@@ -33,7 +33,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
                 request.state.principal = await authenticated_principal(request)
                 if request.url.path != "/api/v1/me" and set(
                     request.state.principal.roles
-                ) <= {Role.GENERIC_VIEWER}:
+                ) <= {Role.GENERIC_USER}:
                     raise HTTPException(403, "Project membership role required")
             except HTTPException as exc:
                 return JSONResponse(
@@ -65,6 +65,8 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
                 maximum = (
                     request.app.state.settings.max_upload_batch_bytes + 65536
                     if is_upload
+                    else max(request.app.state.settings.max_json_body_bytes, 1048576)
+                    if request.url.path.startswith("/api/v1/harness/")
                     else request.app.state.settings.max_json_body_bytes
                 )
                 pieces, size = [], 0
@@ -114,7 +116,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             status_code=422,
         )
 
-    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness):
+    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace):
         api.include_router(module.router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

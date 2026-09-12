@@ -33,7 +33,6 @@ class PolicyCapabilityTests(unittest.TestCase):
             (
                 Role.PLATFORM_ADMIN,
                 Role.PROJECT_OWNER,
-                Role.PROJECT_MANAGER,
                 Role.PROJECT_ANALYST,
             ),
         )
@@ -56,7 +55,7 @@ class PolicyCapabilityTests(unittest.TestCase):
         )
         self.assertFalse(
             resolver.resolve(
-                "incident_triage", principal(roles=[Role.OPERATOR])
+                "incident_triage", principal(roles=[Role.PROJECT_MANAGER])
             ).is_authorized
         )
 

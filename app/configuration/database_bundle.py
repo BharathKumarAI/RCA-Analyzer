@@ -21,7 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from app.configuration.parameters import ParameterStore
 from app.configuration.platform import PlatformConfiguration
-from app.connectors.providers.registry import ConnectorOptions
+from app.connectors.providers.registry import ConnectorOptions, CONNECTOR_IDS
 from app.optimization.content import read_platform
 from app.persistence.database import initialize_tables
 from app.runtime.run_contract import content_hash
@@ -77,7 +77,7 @@ async def seed_bundle(engine, settings, expected_bundle_hash=None):
     platform = PlatformConfiguration.load(settings)
     if not isinstance(platform.connector_options, dict) or set(
         platform.connector_options
-    ) != {"itsm", "log_search"}:
+    ) - CONNECTOR_IDS or not {"itsm", "log_search"} <= set(platform.connector_options):
         raise ValueError("connectors.yaml must define itsm and log_search")
     for options in platform.connector_options.values():
         ConnectorOptions.model_validate(options)

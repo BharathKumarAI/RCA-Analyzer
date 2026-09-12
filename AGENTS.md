@@ -21,3 +21,10 @@ Custom agent YAML is submitted through `/api/v1/agent-configurations`, validated
 Run `make lint`, `make test`, and `make smoke` before handoff. `make eval` runs four offline fixture contracts through local MLflow checks; it is not a live model quality score. Retention cleanup is manual via `python -m scripts.cleanup`. Keep docs honest about demo versus live behavior and link to the source file implementing each claim.
 
 Keep `__init__.py` files in active Python packages only. Documentation, YAML configuration and infrastructure directories are not Python packages. Do not create empty package trees for future features.
+
+## Engineering standards & implementation rules
+
+- **Zero Mockups**: Never use hardcoded mock data, dummy JSON fixtures, or synthetic delays. All features must be powered by real backend data and APIs.
+- **Reuse & Extend First**: Before building new components or endpoints, inspect existing code and extend or compose existing capabilities.
+- **Backend-First Streamlining**: If an endpoint or schema is missing, implement the real backend functionality first so that no mockup data exists anywhere.
+- **Production-Grade Delivery**: Deliver complete, streamlined vertical slices with strong typing, robust error handling, and production-ready quality.

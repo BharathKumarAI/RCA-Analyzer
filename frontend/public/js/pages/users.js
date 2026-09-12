@@ -139,7 +139,7 @@ export async function renderUsers(container) {
                 </div>
               </div>
             </td>
-            <td><span class="badge badge-mono">OPERATOR</span></td>
+            <td><span class="badge badge-mono">PROJECT_ANALYST</span></td>
             <td><span>Core Infrastructure</span></td>
             <td><span class="badge badge-mono">Review Only</span></td>
             <td><span style="font-size: 12px; color: var(--dim);">1h ago</span></td>

@@ -223,7 +223,9 @@ class ConnectorTests(unittest.TestCase):
             await connector.aclose()
 
         asyncio.run(run())
-        self.assertEqual(ALLOWED_ACTIONS, {"itsm.get_ticket", "log_search.query_range"})
+        self.assertNotIn("database.query_readonly", ALLOWED_ACTIONS)
+        self.assertNotIn("itsm.add_comment", ALLOWED_ACTIONS)
+        self.assertTrue({"itsm.get_ticket", "log_search.query_range"} <= ALLOWED_ACTIONS)
 
 
 if __name__ == "__main__":

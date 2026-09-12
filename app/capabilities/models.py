@@ -41,7 +41,7 @@ class CapabilityDefinition(StrictModel):
     category: str
     # Source agents are capability policy. The default preserves existing
     # manifests while allowing narrowly scoped capabilities to select branches.
-    agent_stages: Tuple[Literal["triage", "logs", "file"], ...] = Field(
+    agent_stages: Tuple[Literal["triage", "logs", "file", "evidence"], ...] = Field(
         default=("triage", "logs", "file"), min_length=1
     )
     skills: Tuple[str, ...] = Field(default_factory=tuple)

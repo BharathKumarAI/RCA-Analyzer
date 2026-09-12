@@ -1,7 +1,8 @@
 """Strict, data-only agent configuration models."""
 
 from typing import Any, Annotated, Literal, Tuple
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, AfterValidator
+from app.tools.catalog import ALLOWED_ACTIONS
 from app.capabilities.models import StrictModel
 from app.identity.principals import Role
 
@@ -42,12 +43,13 @@ class AgentDraft(BaseModel):
 
 
 SkillId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")]
-Action = Annotated[
-    str,
-    Field(
-        pattern=r"^(itsm\.get_ticket|log_search\.query_range|database\.query_readonly)$"
-    ),
-]
+def registered_action(value: str) -> str:
+    if value not in ALLOWED_ACTIONS | {"database.query_readonly"}:
+        raise ValueError("Unknown tool action")
+    return value
+
+
+Action = Annotated[str, AfterValidator(registered_action)]
 
 
 class SkillRule(StrictModel):
@@ -72,7 +74,7 @@ ProjectSection = Literal[
 StageName = Literal[
     "orchestrator", "triage", "logs", "extraction", "router", "synthesis"
 ]
-ConnectorName = Literal["itsm", "log_search"]
+ConnectorName = Literal["itsm", "log_search", "confluence", "signalfx", "qtest", "gitlab", "oracle", "kafka", "unix", "kubernetes"]
 
 ConnectorValueType = Literal["string", "integer", "number", "boolean", "json", "secret_ref"]
 

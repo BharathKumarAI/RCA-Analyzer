@@ -16,6 +16,7 @@ PostgreSQL manages configuration snapshots, platform/project parameters, run rec
 | [Architecture](docs/architecture.md) | Ownership, package layout and detailed request/agent/tool/file/result flows |
 | [Security model](docs/security-model.md) | Identity, scope, authorization, input safety and redaction |
 | [Blob storage](docs/blob-storage.md) | Framework stages, chat uploads, generated outputs, retention and repair |
+| [Connector runtime setup](docs/connector-runtime.md) | Native/MCP setup for all ten connectors, scoped operations and agent binding |
 | [Connector onboarding](docs/connector-onboarding.md) | Provider boundaries, health checks and adding a read-only connector |
 | [Capability authoring](docs/capability-authoring.md) | Capability YAML contract and validation rules |
 | [Skill inheritance](docs/skill-inheritance.md) | Delegation, instruction precedence and action intersection |
@@ -58,7 +59,7 @@ The React admin workspace is available at `/admin/`. See the [frontend setup gui
 
 From the source checkout, run `make lint`, `make test`, `make smoke`, and `make eval`. Smoke checks invoke the actual ADK runner with local model/HTTP fixtures. The four-case MLflow evaluation checks status handling, citation existence and redaction; it does not measure live root-cause accuracy. Its summary is written to `data/evaluation/summary.json`.
 
-Images support local OCR, not visual scene reasoning. Scanned PDFs without extractable text are rejected. Model availability, live Jira/Splunk permissions, GCS access and production PostgreSQL operation must be verified in the deployment environment. Concurrency limits are per process. Runs persist across restarts but are not resumed automatically; expired runs become failed when read. See [operations](docs/operations.md) for retention and telemetry.
+Images support local OCR, not visual scene reasoning. Scanned PDFs without extractable text are rejected. Model availability, live connector permissions, GCS access and production PostgreSQL operation must be verified in the deployment environment. Concurrency limits are per process. Runs persist across restarts but are not resumed automatically; expired runs become failed when read. See [operations](docs/operations.md) for retention and telemetry.
 
 Configuration inheritance, optimization and storage lifecycle are documented in [architecture](docs/architecture.md), [optimization](docs/optimization.md), and [blob storage](docs/blob-storage.md).
 

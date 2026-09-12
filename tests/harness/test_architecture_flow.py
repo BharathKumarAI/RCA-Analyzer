@@ -127,6 +127,8 @@ def test_effective_discovery_native_execution_and_snapshot_agree(tmp_path):
             "incident_timeline",
             "incident_triage",
             "ticket_review",
+            "confluence_review", "signalfx_review", "qtest_review", "gitlab_review",
+            "oracle_review", "kafka_review", "unix_review", "kubernetes_review",
         }
         triage_capability = next(
             cap for cap in capabilities if cap["id"] == "incident_triage"

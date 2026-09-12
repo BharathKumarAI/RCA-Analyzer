@@ -23,6 +23,10 @@ class BaseConnector(ABC):
         """Execute a bounded health request against the external system."""
         raise NotImplementedError
 
+    async def read_evidence(self) -> dict:
+        """Read a fixed scoped snapshot when implemented by this provider."""
+        raise ConnectorError("Snapshot operation is not supported by this provider")
+
     @abstractmethod
     async def aclose(self) -> None:
         """Close the connector's shared HTTP client."""

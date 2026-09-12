@@ -19,7 +19,6 @@ permissions:
   allowed_roles:
     - PLATFORM_ADMIN
     - PROJECT_OWNER
-    - PROJECT_MANAGER
     - PROJECT_ANALYST
   allowed_actions:
     - itsm.get_ticket

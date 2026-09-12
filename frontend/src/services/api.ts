@@ -1,9 +1,12 @@
-import {
+import type {
   Principal, AgentConfiguration, Run, ToolDefinition, AuditLog, SystemHealth, SystemDiagnostics, CapabilityItem, ConnectorTemplateItem, RuntimeConfig,
   ConnectorsHealthResponse, AlertsResponse, NotificationsResponse, ProjectSetupResponse,
   ParameterDefinitionRow,
-  ConnectorHealthRecord, SkillItem, SkillSaveResponse, ProjectValidationResult, ConnectionTestResponse
-  , HarnessResponse, HarnessSelection
+  ConnectorHealthRecord, SkillItem, SkillSaveResponse, ProjectValidationResult, ConnectionTestResponse,
+  HarnessResponse, HarnessSelection,
+  UserItem, UserPayload, RoleItem, RolePayload, BillingConfig, BillingPayload,
+  PolicyConfig, RedactionPattern, FileLimitsConfig, CleanupResult, KnowledgeItem, KnowledgePayload,
+  RuntimeStageItem, RuntimeStagePayload, CustomAlertPayload, AlertConfig, PlatformSettingsConfig
 } from '../types/api';
 // Session credentials stay in memory; discard storage left by older builds.
 let inMemoryToken: string | null = null;
@@ -66,8 +69,43 @@ export async function testSystemConnection(target: 'all' | 'database' | 'memory'
 }
 export async function fetchOptimizationDatasets(): Promise<unknown[]> { return request<unknown[]>('/api/v1/optimization-datasets'); }
 export async function fetchOptimization(id: string): Promise<unknown> { return request(`/api/v1/optimizations/${encodeURIComponent(id)}`); }
-export async function fetchUsers(): Promise<Array<{ id: string; name: string; email?: string; roles: string[]; status: string }>> { return request('/api/v1/users'); }
-export async function fetchKnowledge(): Promise<any[]> { return request('/api/v1/knowledge'); }
+export async function fetchUsers(): Promise<UserItem[]> { return request<UserItem[]>('/api/v1/users'); }
+export async function createUser(payload: UserPayload): Promise<UserItem> { return request('/api/v1/users', { method: 'POST', body: payload }); }
+export async function updateUser(id: string, payload: UserPayload): Promise<UserItem> { return request(`/api/v1/users/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
+export async function deleteUser(id: string): Promise<void> { await request(`/api/v1/users/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+
+export async function fetchRoles(): Promise<RoleItem[]> { return request<RoleItem[]>('/api/v1/roles'); }
+export async function createRole(payload: RolePayload): Promise<RoleItem> { return request('/api/v1/roles', { method: 'POST', body: payload }); }
+export async function updateRole(id: string, payload: RolePayload): Promise<RoleItem> { return request(`/api/v1/roles/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
+export async function deleteRole(id: string): Promise<void> { await request(`/api/v1/roles/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+export async function fetchPermissions(): Promise<string[]> { return request<string[]>('/api/v1/permissions'); }
+
+export async function fetchBilling(): Promise<BillingConfig> { return request<BillingConfig>('/api/v1/billing'); }
+export async function updateBilling(payload: BillingPayload): Promise<BillingConfig> { return request('/api/v1/billing', { method: 'PUT', body: payload }); }
+
+export async function fetchPolicy(): Promise<PolicyConfig> { return request<PolicyConfig>('/api/v1/policy'); }
+export async function updatePolicy(payload: Partial<PolicyConfig>): Promise<PolicyConfig> { return request('/api/v1/policy', { method: 'PUT', body: payload }); }
+
+export async function fetchFileLimits(): Promise<FileLimitsConfig> { return request<FileLimitsConfig>('/api/v1/persistence/limits'); }
+export async function updateFileLimits(payload: Partial<FileLimitsConfig>): Promise<FileLimitsConfig> { return request('/api/v1/persistence/limits', { method: 'PUT', body: payload }); }
+export async function triggerRetentionCleanup(): Promise<CleanupResult> { return request<CleanupResult>('/api/v1/persistence/cleanup', { method: 'POST' }); }
+
+export async function fetchKnowledge(): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge'); }
+export async function createKnowledgeDoc(payload: KnowledgePayload): Promise<KnowledgeItem> { return request('/api/v1/knowledge', { method: 'POST', body: payload }); }
+export async function updateKnowledgeDoc(id: string, payload: KnowledgePayload): Promise<KnowledgeItem> { return request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
+export async function deleteKnowledgeDoc(id: string): Promise<void> { await request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+
+export async function fetchRuntimeStages(): Promise<RuntimeStageItem[]> { return request<RuntimeStageItem[]>('/api/v1/runtime/stages'); }
+export async function updateRuntimeStage(stageId: string, payload: RuntimeStagePayload): Promise<RuntimeStageItem> { return request(`/api/v1/runtime/stages/${encodeURIComponent(stageId)}`, { method: 'PUT', body: payload }); }
+
+export async function createAlert(payload: CustomAlertPayload): Promise<any> { return request('/api/v1/alerts', { method: 'POST', body: payload }); }
+export async function updateAlertStatus(id: string, status: 'acknowledged' | 'resolved', resolutionNote?: string): Promise<any> { return request(`/api/v1/alerts/${encodeURIComponent(id)}`, { method: 'PATCH', body: { status, resolution_note: resolutionNote } }); }
+export async function fetchAlertConfig(): Promise<AlertConfig> { return request<AlertConfig>('/api/v1/alerts/config'); }
+export async function updateAlertConfig(payload: AlertConfig): Promise<AlertConfig> { return request('/api/v1/alerts/config', { method: 'PUT', body: payload }); }
+
+export async function fetchPlatformSettings(): Promise<PlatformSettingsConfig> { return request<PlatformSettingsConfig>('/api/v1/platform/settings'); }
+export async function updatePlatformSettings(payload: Partial<PlatformSettingsConfig>): Promise<PlatformSettingsConfig> { return request('/api/v1/platform/settings', { method: 'PUT', body: payload }); }
+
 export async function fetchConfig(): Promise<RuntimeConfig> { return request<RuntimeConfig>('/api/v1/config'); }
 export async function fetchParameters(): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>('/api/v1/parameters'); }
 export async function fetchOptimizations(): Promise<any[]> { return request('/api/v1/optimizations'); }
@@ -83,6 +121,9 @@ export async function defineParameter(tool: string, name: string, body: {
   expected_revision: number;
 }): Promise<{ revision: number }> {
   return request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/definition`, { method: 'PUT', body });
+}
+export async function deleteParameterDefinition(tool: string, name: string, revision: number): Promise<void> {
+  await request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/definition?expected_revision=${revision}`, { method: 'DELETE' });
 }
 export async function resetParameterOverride(tool: string, name: string, revision: number): Promise<void> { await request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/override?expected_revision=${revision}`, { method: 'DELETE' }); }
 export async function fetchSkills(): Promise<SkillItem[]> { return request<SkillItem[]>('/api/v1/skills'); }
@@ -112,8 +153,6 @@ export async function resetHarnessLibrary(expectedProjectRevision: string): Prom
 export async function updatePlatformHarness(document: import('../types/api').HarnessDocument, expectedRevision: string): Promise<HarnessResponse> {
   return request<HarnessResponse>('/api/v1/harness/platform', { method: 'PUT', body: { document, expected_revision: expectedRevision } });
 }
-export async function fetchRoles(): Promise<any> { return request('/api/v1/roles'); }
-export async function fetchPolicy(): Promise<any> { return request('/api/v1/policy'); }
 
 export interface RunEvidence {
   evidence_id: string;
@@ -151,4 +190,19 @@ export async function testIntegration(id: string): Promise<IntegrationTestResult
 
 export async function registerOptimizationDataset(body: Record<string, unknown>): Promise<{ dataset_id: string; version: string }> {
   return request('/api/v1/optimization-datasets', { method: 'POST', body });
+}
+
+
+export async function previewMcpImport(source: string, format: 'json' | 'command'): Promise<{
+  connections: { id: string; definition: import('../types/api').IntegrationDefinition }[];
+}> {
+  return request('/api/v1/integrations/mcp/preview', {
+    method: 'POST', headers: { 'Content-Type': format === 'json' ? 'application/json' : 'text/plain' }, body: source,
+  });
+}
+
+export async function setProjectAvailability(kind: 'connectors' | 'capabilities', id: string, enabled: boolean, expectedEnabled: boolean): Promise<void> {
+  await request(`/api/v1/project/availability/${kind}/${encodeURIComponent(id)}`, {
+    method: 'PUT', body: { enabled, expected_enabled: expectedEnabled },
+  });
 }

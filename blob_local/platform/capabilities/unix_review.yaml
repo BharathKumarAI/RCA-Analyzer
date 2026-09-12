@@ -1,0 +1,28 @@
+id: unix_review
+version: 1.0.0
+enabled: true
+name: Unix Tuxedo Review
+description: Read the deployment-approved Unix/Tuxedo MCP evidence snapshot. Report
+  service status and supplied log observations. Never request arbitrary shell commands,
+  scripts, file writes or service restarts.
+category: investigation
+agent_stages:
+- evidence
+skills:
+- unix-review
+requires:
+  connectors:
+  - unix
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+  - PLATFORM_ADMIN
+  - PROJECT_OWNER
+  - PROJECT_ANALYST
+  allowed_actions:
+  - unix.read_evidence
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: restricted
+model_profile: balanced-investigation

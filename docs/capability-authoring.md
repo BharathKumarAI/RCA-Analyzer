@@ -68,3 +68,5 @@ The manifests for these contracts live in [`blob_local/platform/capabilities`](.
 `agent_stages` selects the native source branches in [`root.py`](../app/agents/root.py); planning and synthesis remain shared workflow stages. Source branches still require their permitted tool actions, declared connectors, and enabled model stages. Supplied attachments can contribute captured evidence to synthesis even when a dedicated file agent is not selected.
 
 Catalog specialist bindings describe configuration eligibility, not a successful live health probe. [`runner.py`](../app/runtime/runner.py) checks connector health before each live run. Demo runs do not invoke connectors or models.
+
+The `evidence` source stage attaches bounded snapshot tools for Confluence, SignalFx, qTest, GitLab, Oracle, Kafka, Unix/Tuxedo and Kubernetes. Each has a shipped `<connector>_review` capability and skill; see [connector runtime setup](connector-runtime.md). Native and MCP transports use the same action names. Implementation: [tool inventory](../app/tools/catalog.py) and [source assembly](../app/agents/root.py).

@@ -10,4 +10,9 @@ Use `RCA_MODE=demo` for offline simulation and `RCA_MODE=live` only with real cr
 
 Approved project-specialist YAML is the supported exception to static topology: submit it at `/api/v1/agent-configurations`, review it with an expected content hash, and use it only after a same-scope administrator approves it. The router wraps approved definitions as ADK `AgentTool` instances; pending, rejected, and revoked definitions are invisible to runs. Storage is local by default and can use GCS via `RCA_CONFIG_BLOB_URI`.
 
-## No mockup data
+## No mockup data & production-grade engineering
+
+- **Zero Mockup Data**: Never introduce mock arrays, fake data fixtures, synthetic API stubs, or placeholder objects in frontend or agent code. All views and workflows must connect to authentic, live backend APIs and storage.
+- **Reuse & Extend First**: Always inspect and reuse or extend existing components, services, tools, and endpoints before creating new ones. Do not build redundant or fragmented components.
+- **Backend-First Implementation**: If backend support (endpoints, models, migrations, or domain tools) is missing, develop and connect the real backend first so that no mockup data is used anywhere.
+- **Streamlined Full-Stack Quality**: Every feature must be built as a complete, production-grade vertical slice with strict typing, robust error handling, loading/empty states, and full contract fidelity.

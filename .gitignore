@@ -74,6 +74,13 @@ design-review/
 .coverage.*
 htmlcov/
 
+# Impeccable CLI outputs and critiques
+.impeccable/*
+!.impeccable/config.json
+
+# Local HTML prototypes and scratch files in repository root
+/*.html
+
 # Operating System & IDE files
 .DS_Store
 .DS_Store?

@@ -539,6 +539,26 @@ class ParameterStore:
             raise ParameterConflict("Definition revision changed") from None
         return {"revision": revision}
 
+    async def delete_definition(self, p, tool, name, expected_revision):
+        if Role.PLATFORM_ADMIN not in p.roles:
+            raise PermissionError("Platform administrator required")
+        key = self.key(definitions, p.tenant_id, tool, name)
+        async with self.engine.begin() as c:
+            row = (
+                await c.execute(select(definitions).where(*key).with_for_update())
+            ).first()
+            if not row:
+                raise ValueError("Parameter definition not found")
+            if row.revision != expected_revision:
+                raise ParameterConflict("Definition revision changed")
+            await c.execute(
+                delete(overrides).where(
+                    *self.key(overrides, p.tenant_id, tool, name)
+                )
+            )
+            await c.execute(delete(definitions).where(*key))
+            await self.record(c, p, tool, name, "delete_definition", expected_revision)
+
     async def seed_connector_template_definitions(
         self,
         tenant: str,
@@ -584,8 +604,8 @@ class ParameterStore:
     async def set_override(self, p, tool, name, body):
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
-            Role.TENANT_ADMIN,
             Role.PROJECT_OWNER,
+            Role.PROJECT_MANAGER,
         }:
             raise PermissionError("Project owner or administrator required")
         body = ParameterOverride.model_validate(body.model_dump())
@@ -666,8 +686,8 @@ class ParameterStore:
     async def reset_override(self, p, tool, name, expected_revision):
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
-            Role.TENANT_ADMIN,
             Role.PROJECT_OWNER,
+            Role.PROJECT_MANAGER,
         }:
             raise PermissionError("Project owner or administrator required")
         async with self.engine.begin() as c:

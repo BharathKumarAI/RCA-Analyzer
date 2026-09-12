@@ -19,7 +19,6 @@ const Settings = lazy(() => import('./pages/Settings').then(module => ({ default
 // New Agent Harness Suite Pages
 const Skills = lazy(() => import('./pages/Skills').then(module => ({ default: module.Skills })));
 const ParameterStudio = lazy(() => import('./pages/ParameterStudio').then(module => ({ default: module.ParameterStudio })));
-const Roles = lazy(() => import('./pages/Roles').then(module => ({ default: module.Roles })));
 const Optimization = lazy(() => import('./pages/Optimization').then(module => ({ default: module.Optimization })));
 const Persistence = lazy(() => import('./pages/Persistence').then(module => ({ default: module.Persistence })));
 const Policy = lazy(() => import('./pages/Policy').then(module => ({ default: module.Policy })));
@@ -56,6 +55,7 @@ class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, {
 
 export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<ActivePage>('overview');
+  const [initialRunId, setInitialRunId] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
@@ -229,12 +229,13 @@ export const App: React.FC = () => {
 
   const handleRunCreated = (newRun: Run) => {
     setRuns(prev => [newRun, ...prev]);
+    setInitialRunId(newRun.id);
     setActivePage('runs');
     window.location.hash = 'runs';
     void loadData();
   };
 
-  if (!principal) return <div className="app-layout"><div className="card" style={{ margin: 'auto', padding: 32, textAlign: 'center' }}><h1>Connect your session</h1><p>Authenticate with a deployment JWT to view scoped RCA data.</p></div><SessionModal isOpen sessionError={sessionError} principal={{ subject: '', roles: [], tenant_id: '', project_id: '' }} onClose={() => undefined} onAuthenticated={handleAuthenticated} onSignedOut={clearScopedData} /></div>;
+  if (!principal) return <div className="app-layout"><div style={{ padding: 24, fontWeight: 650 }}>RCA Analyzer</div><SessionModal isOpen sessionError={sessionError} principal={{ subject: '', roles: [], tenant_id: '', project_id: '' }} onClose={() => undefined} onAuthenticated={handleAuthenticated} onSignedOut={clearScopedData} /></div>;
 
   return (
     <div className="app-layout">
@@ -273,11 +274,12 @@ export const App: React.FC = () => {
               runs={runs}
               onNavigate={handleSelectPage}
               onNewInvestigation={() => openInvestigation()}
+              onOpenRun={id => { setInitialRunId(id); handleSelectPage('runs'); }}
             />
           )}
 
           {activePage === 'runs' && (
-            <Runs runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
+            <Runs initialRunId={initialRunId} runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
           )}
 
           {activePage === 'capabilities' && (
@@ -285,11 +287,11 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'skills' && (
-            <Skills />
+            <Skills principal={principal} onNavigate={setActivePage} />
           )}
 
           {activePage === 'harness-library' && (
-            <HarnessLibrary />
+            <HarnessLibrary principal={principal} onNavigate={setActivePage} />
           )}
 
           {activePage === 'runtime' && (
@@ -305,11 +307,11 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'agents' && (
-            <Agents agents={agents} principal={principal} onRefresh={loadData} />
+            <Agents agents={agents} principal={principal} onRefresh={loadData} onNavigate={setActivePage} />
           )}
 
           {activePage === 'tools' && (
-            <Tools tools={tools} principal={principal} />
+            <Tools tools={tools} principal={principal} onNavigate={handleSelectPage} />
           )}
 
           {activePage === 'alerts' && (
@@ -333,7 +335,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'roles' && (
-            <Roles />
+            <Users onSelectPage={handleSelectPage} initialTab="roles" />
           )}
 
           {activePage === 'governance' && (
@@ -345,7 +347,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'users' && (
-            <Users />
+            <Users onSelectPage={handleSelectPage} />
           )}
 
           {activePage === 'billing' && (

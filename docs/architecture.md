@@ -278,7 +278,7 @@ sequenceDiagram
   R->>R: Build eligible specialists as AgentTools
 ```
 
-Only `PLATFORM_ADMIN` or `TENANT_ADMIN` can review, within the deployment's tenant/project scope. Authors cannot review their own drafts. Rejecting a draft never activates it. A new approval replaces the active version for that agent ID; previous approved records remain history. Revocation removes that version from future discovery. Already-running investigations retain their pinned snapshot.
+Only `PLATFORM_ADMIN` or `PROJECT_OWNER` can review, within the deployment's tenant/project scope. Authors cannot review their own drafts. Rejecting a draft never activates it. A new approval replaces the active version for that agent ID; previous approved records remain history. Revocation removes that version from future discovery. Already-running investigations retain their pinned snapshot.
 
 ### Approved project specialists
 

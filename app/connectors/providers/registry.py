@@ -2,14 +2,41 @@
 
 from app.connectors.providers.secrets import environment_secret
 import re
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.connectors.providers.jira import JiraConnector
 from app.connectors.providers.splunk import SplunkConnector
+
+from app.connectors.providers.evidence import (
+    ConfluenceConnector, GitLabConnector, QTestConnector, SignalFxConnector, KubernetesConnector,
+)
+from app.connectors.providers.oracle import OracleConnector
+from app.connectors.providers.infrastructure import KafkaConnector, UnixConnector
+from app.connectors.providers.mcp_evidence import McpEvidenceConnector
+
+NATIVE_FACTORIES = {
+    "itsm": JiraConnector, "log_search": SplunkConnector,
+    "confluence": ConfluenceConnector, "gitlab": GitLabConnector,
+    "qtest": QTestConnector, "signalfx": SignalFxConnector,
+    "kubernetes": KubernetesConnector, "oracle": OracleConnector,
+    "kafka": KafkaConnector, "unix": UnixConnector,
+}
+CONNECTOR_IDS = frozenset(NATIVE_FACTORIES)
+
+
+class McpBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,128}$")
+    scope_argument: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+    arguments: dict = Field(default_factory=dict)
+    argument_map: dict[str, str] = Field(default_factory=dict)
 
 
 class ConnectorOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: bool = True
+    transport: Literal["native", "mcp"] = "native"
+    mcp_tools: dict[str, McpBinding] = Field(default_factory=dict)
     timeout_s: float = Field(default=5, gt=0, le=60)
     max_connections: int = Field(default=8, ge=1, le=100)
     max_keepalive_connections: int = Field(default=4, ge=0, le=100)
@@ -20,6 +47,10 @@ class ConnectorOptions(BaseModel):
 
     @model_validator(mode="after")
     def validate_secrets(self):
+        if set(self.mcp_tools) - {"read_evidence", "get_ticket", "query_range"}:
+            raise ValueError("Unknown MCP operation binding")
+        if self.transport == "mcp" and self.enabled and not self.mcp_tools:
+            raise ValueError("Enabled MCP connectors require approved tool bindings")
         for argument, reference in self.secrets.items():
             if not re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", argument):
                 raise ValueError("Invalid connector secret argument name")
@@ -56,31 +87,44 @@ def configured_connector_values(parameter_rows):
 
 
 def build_connectors(raw_options, mode, cleanup, injected=None, secret_references=None, runtime_values=None):
-    factories = {"itsm": JiraConnector, "log_search": SplunkConnector}
-    if not isinstance(raw_options, dict) or set(raw_options) != set(factories):
+    factories = NATIVE_FACTORIES
+    if not isinstance(raw_options, dict) or not {"itsm", "log_search"} <= set(raw_options) or set(raw_options) - CONNECTOR_IDS:
         raise ValueError("connectors.yaml must define itsm and log_search")
     options = {
-        name: ConnectorOptions.model_validate(raw_options[name]) for name in factories
+        name: ConnectorOptions.model_validate(raw_options[name]) for name in raw_options
     }
     providers = {}
     if injected is not None:
-        if set(injected) - set(factories):
+        if set(injected) - CONNECTOR_IDS:
             raise ValueError("Unknown injected connector")
         providers.update(injected)
     elif mode == "live":
-        for name, factory in factories.items():
+        for name, option in options.items():
+            factory = factories.get(name)
             if not options[name].enabled:
                 continue
-            values = options[name].model_dump(exclude={"enabled", "secrets"})
+            values = options[name].model_dump(exclude={"enabled", "secrets", "transport", "mcp_tools"})
             values.update((runtime_values or {}).get(name, {}))
-            connector_secrets = _resolve_secret_values(name, options[name], secret_references)
-            for arg_name, reference in connector_secrets.items():
-                values[arg_name] = environment_secret(reference)
-            if name == "itsm":
+            if name == "itsm" and option.transport == "native":
                 values.pop("max_results")
                 values.pop("max_window_seconds")
             try:
-                provider = factory(**values)
+                connector_secrets = (
+                    {} if option.transport == "mcp"
+                    else _resolve_secret_values(name, options[name], secret_references)
+                )
+                for arg_name, reference in connector_secrets.items():
+                    values[arg_name] = environment_secret(reference)
+                if option.transport == "mcp":
+                    # Native endpoint/service-user edits do not retarget MCP credentials.
+                    for key in ("base_url", "user_email", "api_token"):
+                        values.pop(key, None)
+                    values.pop("endpoint", None)
+                    provider = McpEvidenceConnector(name, mcp_tools=option.mcp_tools, **values)
+                elif factory is not None:
+                    provider = factory(**values)
+                else:
+                    raise ValueError("This connector requires MCP transport")
             except ValueError:
                 continue  # Missing deployment credentials remain unavailable.
             cleanup.push_async_callback(provider.aclose)

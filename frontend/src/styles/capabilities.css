@@ -1,0 +1,642 @@
+/* ==========================================================================
+   Capabilities & Execution Topology Modern Workspace Styles
+   Aligns with Agentic ADK design tokens and bounded workspace architecture.
+   ========================================================================== */
+
+.view-container.capabilities-page {
+  padding: 20px 24px 36px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  overflow-x: hidden;
+}
+
+.capabilities-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+/* Breadcrumbs */
+.capabilities-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.capabilities-breadcrumbs span.separator {
+  color: var(--line-strong);
+}
+
+.capabilities-breadcrumbs .active-crumb {
+  color: var(--tx);
+  font-weight: 600;
+}
+
+/* Page Header */
+.capabilities-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.capabilities-header-main {
+  flex: 1;
+  min-width: 320px;
+}
+
+.capabilities-header-main h1 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--tx);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.capabilities-header-main p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 10px;
+  line-height: 1.4;
+}
+
+.capabilities-stats-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capabilities-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: all 0.15s ease;
+}
+
+.capabilities-stat-chip.interactive {
+  cursor: pointer;
+}
+
+.capabilities-stat-chip.interactive:hover {
+  border-color: var(--acc);
+  color: var(--tx);
+  background: var(--card-hover);
+}
+
+.capabilities-stat-chip.is-active {
+  border-color: var(--acc);
+  color: var(--acc);
+  background: var(--acc-glow);
+  font-weight: 600;
+}
+
+.capabilities-stat-chip b {
+  color: var(--tx);
+}
+
+/* Header Actions / View Switcher */
+.capabilities-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.capabilities-view-switcher {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  gap: 3px;
+}
+
+.capabilities-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.capabilities-view-btn:hover {
+  color: var(--tx);
+}
+
+.capabilities-view-btn.is-active {
+  background: var(--card);
+  color: var(--acc);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* ==========================================================================
+   Master-Detail Bounded Workspace Layout (No Infinite Scroll)
+   ========================================================================== */
+
+.capabilities-workspace-layout {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1100px) {
+  .capabilities-workspace-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Left Column: Workflow Catalog Panel
+   ========================================================================== */
+
+.capabilities-catalog-column {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 8px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.capabilities-catalog-header {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+
+.capabilities-catalog-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.capabilities-catalog-title-row h2 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--tx);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.capabilities-catalog-count-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--card-subtle);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+/* Search Box */
+.capabilities-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.capabilities-search-wrap svg {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.capabilities-search-input {
+  width: 100%;
+  padding: 7px 10px 7px 32px;
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--tx);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.capabilities-search-input:focus {
+  border-color: var(--acc);
+  box-shadow: 0 0 0 2px var(--acc-glow);
+}
+
+/* Category Filter Tabs */
+.capabilities-filter-tabs {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.capabilities-filter-tab {
+  padding: 3px 8px;
+  border-radius: var(--radius-full, 999px);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--card-subtle);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.capabilities-filter-tab:hover {
+  color: var(--tx);
+  border-color: var(--line-strong);
+}
+
+.capabilities-filter-tab.is-active {
+  background: var(--acc);
+  color: #fff;
+  border-color: var(--acc);
+}
+
+/* Bounded Items List (Independent Scroll) */
+.capabilities-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  max-height: calc(100vh - 270px);
+  min-height: 480px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.capabilities-items-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+.capabilities-items-list::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 4px;
+}
+
+/* Compact Workflow Item Card */
+.capability-item-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.capability-item-card:hover {
+  background: var(--card-hover);
+  border-color: var(--line);
+}
+
+.capability-item-card.is-selected {
+  background: var(--card-active);
+  border-color: var(--acc);
+  box-shadow: 0 0 0 1px var(--acc-glow);
+}
+
+/* Capability Avatar Icon */
+.capability-avatar-icon {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  color: var(--acc);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.capability-avatar-icon.disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.capability-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.capability-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.capability-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capability-item-id {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  margin-bottom: 4px;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capability-item-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--card-subtle);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.capability-chip.conn {
+  color: var(--acc-teal);
+  border-color: rgba(91, 192, 158, 0.25);
+}
+
+/* ==========================================================================
+   Right Column: Deep Capability Inspector Panel
+   ========================================================================== */
+
+.capabilities-inspector-column {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 8px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  max-height: calc(100vh - 270px);
+  min-height: 480px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.capabilities-inspector-column::-webkit-scrollbar {
+  width: 5px;
+}
+
+.capabilities-inspector-column::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 4px;
+}
+
+.capabilities-inspector-header {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.capabilities-inspector-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.capabilities-inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capabilities-desc-text {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Inspector Tabs Bar */
+.capabilities-tabs-bar {
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  background: var(--card-subtle);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  position: sticky;
+  top: 86px;
+  z-index: 9;
+}
+
+.capabilities-tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.capabilities-tab-item:hover {
+  color: var(--tx);
+}
+
+.capabilities-tab-item.is-active {
+  color: var(--acc);
+  border-bottom-color: var(--acc);
+  font-weight: 600;
+  background: rgba(110, 164, 232, 0.05);
+}
+
+.capabilities-tab-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Clickable Skill Link */
+.capability-skill-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.15s ease;
+}
+
+.capability-skill-link:hover {
+  border-color: var(--acc);
+  background: var(--card-hover);
+}
+
+/* ==========================================================================
+   View 2: Dedicated Model Profiles Matrix View
+   ========================================================================== */
+
+.model-profiles-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.model-profiles-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg, 8px);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.model-profiles-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.model-profiles-switcher {
+  display: flex;
+  gap: 6px;
+}
+
+.model-profiles-strip {
+  padding: 10px 20px;
+  background: var(--card-subtle);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.model-profiles-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.model-profiles-table th {
+  text-align: left;
+  padding: 10px 20px;
+  background: var(--card-subtle);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--line);
+}
+
+.model-profiles-table td {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  color: var(--tx);
+}
+
+.model-profiles-table tr:hover td {
+  background: var(--card-hover);
+}
+
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.limit-tile {
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+}
+
+.limit-tile-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.limit-tile-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--tx);
+  font-family: var(--font-mono);
+}

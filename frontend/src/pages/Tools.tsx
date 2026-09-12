@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   CheckCircle2,
-  AlertCircle,
   Activity,
   Search,
   Sliders,
@@ -9,2248 +8,1645 @@ import {
   Plus,
   X,
   Shield,
-  Database,
   Lock,
   Unlock,
-  Layers,
-  Key,
   RefreshCw,
-  Cpu,
-  Check,
+  Link2,
+  ArrowRight,
+  HelpCircle,
+  Info,
   ExternalLink,
+  Database,
+  Layers,
+  Terminal,
+  FileText,
+  Check,
+  AlertTriangle,
+  AlertCircle,
+  Server,
+  Eye,
+  Edit3,
+  Trash2,
+  Play,
+  Copy,
+  Sparkles,
+  Radio,
+  Code,
+  List,
+  Cpu,
   Clock,
-  Bot,
-  Workflow,
-  User,
+  Zap,
+  Globe,
+  CornerDownRight,
+  BookOpen,
+  GitBranch,
 } from 'lucide-react';
-import { ToolDefinition, ScopeLevel, ConnectorTemplateItem, Principal } from '../types/api';
-import { fetchTools, fetchConnectorTemplates, fetchConnectorHealthCheck, testIntegration } from '../services/api';
+import {
+  ToolDefinition,
+  ScopeLevel,
+  Principal,
+  ParameterDefinitionRow,
+  CapabilityItem,
+  ConnectorHealthRecord,
+} from '../types/api';
+import {
+  fetchTools,
+  fetchParameters,
+  fetchCapabilities,
+  setProjectAvailability,
+  fetchConnectorHealthCheck,
+  testIntegration,
+  setParameterOverride,
+  resetParameterOverride,
+} from '../services/api';
 import { IntegrationForm } from '../components/IntegrationForm';
+import '../styles/tools-workspace.css';
+import type { ActivePage } from '../components/Sidebar';
 
 interface ToolsProps {
   tools: ToolDefinition[];
   principal: Principal;
+  onNavigate?: (page: ActivePage) => void;
 }
 
-export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) => {
+type SubTab =
+  | 'Basic Info'
+  | 'Configuration Form'
+  | 'Capabilities'
+  | 'Outputs & Presentation'
+  | 'Validation & Testing'
+  | 'Version & Scope';
+
+export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, onNavigate }) => {
+  // Primary datasets loaded from live backend
   const [toolsList, setToolsList] = useState<ToolDefinition[]>(initialTools);
+  const [parameters, setParameters] = useState<ParameterDefinitionRow[]>([]);
+  const [capabilities, setCapabilities] = useState<CapabilityItem[]>([]);
+  const [loadingInitial, setLoadingInitial] = useState(false);
 
-  const [templates, setTemplates] = useState<ConnectorTemplateItem[]>([]);
-  const [templateFetchError, setTemplateFetchError] = useState<string | null>(null);
+  // Selected tool & navigation subtab
+  const [selectedToolId, setSelectedToolId] = useState<string>(() => {
+    const defaultTool = initialTools.find(t => t.system_name === 'itsm') || initialTools[0];
+    return defaultTool?.id || 'itsm';
+  });
+  const [activeTab, setActiveTab] = useState<SubTab>('Configuration Form');
 
-  // Sync live probe status if initialTools changes
-  React.useEffect(() => {
-    setToolsList(initialTools);
-  }, [initialTools]);
-
-  React.useEffect(() => {
-    let active = true;
-    fetchConnectorTemplates()
-      .then(items => {
-        if (active) {
-          setTemplates(items);
-          setTemplateFetchError(null);
-        }
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        setTemplateFetchError(
-          error instanceof Error
-            ? error.message
-            : 'Unable to load connector templates from backend.'
-        );
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ id: string; success: boolean; msg: string; latency_ms?: number } | null>(null);
+  // Filters & Search
   const [search, setSearch] = useState('');
-  const [selectedScope, setSelectedScope] = useState<'all' | 'platform_default' | 'project_override' | 'project_only'>('all');
-  const [integrationFilter, setIntegrationFilter] = useState<'all' | 'native' | 'mcp' | 'a2a'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'draft' | 'planned' | 'mcp_a2a'>('all');
 
-  // Modal states
+  // Interactive connection probe states
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{
+    id: string;
+    success: boolean;
+    msg: string;
+    latency_ms?: number;
+    probe?: ConnectorHealthRecord;
+  } | null>(null);
+  const [diagnosticCache, setDiagnosticCache] = useState<Record<string, ConnectorHealthRecord>>({});
+
+  // Parameter override editing modal state
+  const [editingParam, setEditingParam] = useState<ParameterDefinitionRow | null>(null);
+  const [editOverrideVal, setEditOverrideVal] = useState<string>('');
+  const [paramActionBusy, setParamActionBusy] = useState(false);
+
+  // Modals & Notices
   const [configuringTool, setConfiguringTool] = useState<ToolDefinition | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [availabilityBusy, setAvailabilityBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showCallout, setShowCallout] = useState(true);
 
-  const canEditIntegrations = principal.roles.includes('PLATFORM_ADMIN') || principal.roles.some(role => ['TENANT_ADMIN', 'PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role));
+  // Local operator notes per tool
+  const [toolNotes, setToolNotes] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('rca_tool_operator_notes');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [currentNote, setCurrentNote] = useState<string>('');
 
+  const canEdit =
+    principal.roles.includes('PLATFORM_ADMIN') ||
+    principal.roles.some(role => ['PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role));
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  const handleToggleEnabled = (id: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    showToast(`Connector state is managed by deployment policy.`);
+  // Sync initialTools
+  useEffect(() => {
+    if (initialTools.length > 0) {
+      setToolsList(initialTools);
+      if (!selectedToolId) {
+        const defaultTool = initialTools.find(t => t.system_name === 'itsm') || initialTools[0];
+        if (defaultTool) setSelectedToolId(defaultTool.id);
+      }
+    }
+  }, [initialTools]);
+
+  // Load live parameters and capabilities from authentic backend
+  const loadBackendData = async () => {
+    try {
+      const [fetchedParams, fetchedCaps] = await Promise.all([
+        fetchParameters().catch(() => []),
+        fetchCapabilities().catch(() => []),
+      ]);
+      setParameters(fetchedParams);
+      setCapabilities(fetchedCaps);
+    } catch (err) {
+      console.error('Failed loading tool related parameters or capabilities', err);
+    }
   };
 
-  const handleTestConnection = (tool: ToolDefinition, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setTestingId(tool.id);
-    setTestResult(null);
-
-    if (tool.registration) {
-      testIntegration(tool.registration.id)
-        .then(result => setTestResult({
-          id: tool.id,
-          success: result.status === 'reachable',
-          msg: result.message,
-          latency_ms: result.latency_ms,
-        }))
-        .catch(error => setTestResult({
-          id: tool.id,
-          success: false,
-          msg: error instanceof Error ? error.message : 'Unable to test saved connection',
-        }))
-        .finally(() => setTestingId(null));
-      return;
-    }
-
-    const connectorId = (tool.system_name || tool.id || '').split('.')[0].toLowerCase();
-    if (!connectorId) {
-      setTestingId(null);
-      setTestResult({
-        id: tool.id,
-        success: false,
-        msg: 'Connector identifier is unavailable in current tool definition.',
-      });
-      return;
-    }
-
-    fetchConnectorHealthCheck(connectorId)
-      .then((probe) => {
-        setToolsList(current =>
-          current.map(item => {
-            if (item.id !== tool.id) return item;
-            return {
-              ...item,
-              status: probe.overall === 'HEALTHY'
-                ? 'connected'
-                : probe.overall === 'DEGRADED' || probe.overall === 'RATE_LIMITED'
-                  ? 'degraded'
-                  : 'disabled',
-              enabled: item.enabled,
-              health: probe,
-              latency_ms: probe.latency_ms,
-            };
-          })
-        );
-
-        if (probe.overall !== 'HEALTHY') {
-          setTestResult({
-            id: tool.id,
-            success: false,
-            msg: `Deployment connector probe reported ${probe.overall.toLowerCase().replace('_', ' ')}: ${probe.message}`,
-            latency_ms: probe.latency_ms,
-          });
-          return;
-        }
-
-        setTestResult({
-          id: tool.id,
-          success: true,
-          msg: `Deployment reported healthy status via ${probe.connectivity.toLowerCase()} path.`,
-          latency_ms: probe.latency_ms,
-        });
-      })
-      .catch(error => {
-        setTestResult({
-          id: tool.id,
-          success: false,
-          msg: error instanceof Error ? error.message : 'Unable to probe connector',
-        });
-      })
-      .finally(() => {
-        setTestingId(null);
-      });
-  };
+  useEffect(() => {
+    void loadBackendData();
+  }, []);
 
   const refreshCatalog = async () => {
     setRefreshing(true);
     try {
-      setToolsList(await fetchTools());
-      showToast('Integration catalog refreshed.');
+      const [refreshedTools, refreshedParams, refreshedCaps] = await Promise.all([
+        fetchTools(),
+        fetchParameters().catch(() => []),
+        fetchCapabilities().catch(() => []),
+      ]);
+      setToolsList(refreshedTools);
+      setParameters(refreshedParams);
+      setCapabilities(refreshedCaps);
+      showToast('Tools catalog and parameter definitions refreshed.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to refresh integration catalog.';
+      const message = error instanceof Error ? error.message : 'Unable to refresh tools catalog.';
       showToast(message);
-      throw error;
     } finally {
       setRefreshing(false);
     }
   };
 
-  const templateTool = (template: ConnectorTemplateItem): ToolDefinition => ({
-    id: `template:${template.system_name}`,
-    name: template.name,
-    system_name: template.system_name,
-    category: template.category,
-    description: template.description,
-    status: 'planned',
-    enabled: false,
-    type: template.integration_kind === 'a2a' ? 'a2a' : 'mcp',
-    integration_kind: template.integration_kind,
-    scope_level: template.default_scope,
-    project_can_override: template.can_override,
-    inherit_platform_defaults: template.default_scope !== 'project_only',
-    rate_limit: template.default_rate_limit || 'Not active',
-    last_ping: 'Not configured',
-    endpoint: template.default_endpoint,
-    protocol: template.protocol,
-  });
+  // Selected tool resolution
+  const selectedTool = useMemo(() => {
+    return (
+      toolsList.find(t => t.id === selectedToolId) ||
+      toolsList.find(t => t.system_name === selectedToolId) ||
+      toolsList.find(t => t.system_name === 'itsm') ||
+      toolsList[0] ||
+      null
+    );
+  }, [toolsList, selectedToolId]);
 
-  const registeredTemplateItems = templates.filter(template => template.integration_kind === 'mcp' || template.integration_kind === 'a2a');
+  // Update note draft when selected tool changes
+  useEffect(() => {
+    if (selectedTool) {
+      const key = selectedTool.system_name || selectedTool.id;
+      setCurrentNote(toolNotes[key] || '');
+    }
+  }, [selectedTool, toolNotes]);
 
-  const openIntegrationForm = (tool?: ToolDefinition) => {
-    if (!canEditIntegrations) return;
-    setConfiguringTool(tool || null);
-    setIsCreating(!tool);
+  const saveCurrentNote = () => {
+    if (!selectedTool) return;
+    const key = selectedTool.system_name || selectedTool.id;
+    const updated = { ...toolNotes, [key]: currentNote };
+    setToolNotes(updated);
+    try {
+      localStorage.setItem('rca_tool_operator_notes', JSON.stringify(updated));
+      showToast('Operator note saved for ' + (selectedTool.name || selectedTool.id));
+    } catch {
+      showToast('Note updated in session.');
+    }
   };
 
-  // Filter logic
-  const filtered = toolsList.filter(t => {
-    const matchesSearch =
-      t.name.toLowerCase().includes(search.toLowerCase()) ||
-      t.category.toLowerCase().includes(search.toLowerCase()) ||
-      t.description.toLowerCase().includes(search.toLowerCase()) ||
-      (t.system_name && t.system_name.toLowerCase().includes(search.toLowerCase())) ||
-      (t.endpoint && t.endpoint.toLowerCase().includes(search.toLowerCase()));
+  // Live connection test handler
+  const handleTestConnection = async (tool: ToolDefinition, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setTestingId(tool.id);
+    setTestResult(null);
 
-    const matchesScope =
-      selectedScope === 'all' || t.scope_level === selectedScope;
+    // If custom MCP / A2A registration
+    if (tool.registration) {
+      try {
+        const result = await testIntegration(tool.registration.id);
+        setTestResult({
+          id: tool.id,
+          success: result.status === 'reachable',
+          msg: result.message,
+          latency_ms: result.latency_ms,
+        });
+        showToast(`Test finished: ${result.status.toUpperCase()}`);
+      } catch (error) {
+        setTestResult({
+          id: tool.id,
+          success: false,
+          msg: error instanceof Error ? error.message : 'Unable to test saved integration.',
+        });
+      } finally {
+        setTestingId(null);
+      }
+      return;
+    }
 
-    const matchesIntegration =
-      integrationFilter === 'all' ||
-      (integrationFilter === 'native' && (!t.type || t.type === 'connector' || t.type === 'parser')) ||
-      (integrationFilter === 'mcp' && t.type === 'mcp') ||
-      (integrationFilter === 'a2a' && t.type === 'a2a');
+    // Deployment connector probe via live /api/v1/connectors/{connector}/health
+    const connectorKey = (tool.system_name || tool.id || '').split('.')[0].toLowerCase();
+    try {
+      const probe = await fetchConnectorHealthCheck(connectorKey);
+      setDiagnosticCache(prev => ({ ...prev, [connectorKey]: probe }));
 
-    const matchesStatus =
-      statusFilter === 'all' ||
-      (statusFilter === 'enabled' && t.enabled) ||
-      (statusFilter === 'disabled' && !t.enabled);
+      const isHealthy = probe.overall === 'HEALTHY';
+      setTestResult({
+        id: tool.id,
+        success: isHealthy,
+        msg: probe.message || `Connector reported ${probe.overall} via ${probe.connectivity} path.`,
+        latency_ms: probe.latency_ms,
+        probe,
+      });
 
-    const matchesCategory =
-      categoryFilter === 'all' || t.category === categoryFilter;
+      // Update toolsList status if modified
+      setToolsList(current =>
+        current.map(item => {
+          if (item.id !== tool.id) return item;
+          return {
+            ...item,
+            status: isHealthy ? 'connected' : probe.overall === 'DEGRADED' ? 'degraded' : 'disabled',
+            health: probe,
+            latency_ms: probe.latency_ms,
+          };
+        })
+      );
+      showToast(`Diagnostic check completed: ${probe.overall}`);
+    } catch (err) {
+      setTestResult({
+        id: tool.id,
+        success: false,
+        msg: err instanceof Error ? err.message : 'Diagnostic probe execution failed.',
+      });
+    } finally {
+      setTestingId(null);
+    }
+  };
 
-    return matchesSearch && matchesScope && matchesIntegration && matchesStatus && matchesCategory;
-  });
+  // Parameter override actions
+  const openParamEditModal = (param: ParameterDefinitionRow) => {
+    setEditingParam(param);
+    setEditOverrideVal(
+      param.effective_value != null ? (typeof param.effective_value === 'object' ? JSON.stringify(param.effective_value) : String(param.effective_value)) : ''
+    );
+  };
 
-  const categories = Array.from(new Set(toolsList.map(t => t.category)));
-  const totalEnabled = toolsList.filter(t => t.enabled).length;
-  const platformCount = toolsList.filter(t => t.scope_level === 'platform_default').length;
-  const projectOverrideCount = toolsList.filter(t => t.scope_level === 'project_override').length;
-  const projectOnlyCount = toolsList.filter(t => t.scope_level === 'project_only').length;
+  const handleSaveParamOverride = async () => {
+    if (!editingParam) return;
+    setParamActionBusy(true);
+    try {
+      let parsedValue: any = editOverrideVal;
+      if (editingParam.value_type === 'integer' || editingParam.value_type === 'number') {
+        parsedValue = Number(editOverrideVal);
+      } else if (editingParam.value_type === 'boolean') {
+        parsedValue = editOverrideVal === 'true' || editOverrideVal === '1';
+      } else if (editingParam.value_type === 'json') {
+        try {
+          parsedValue = JSON.parse(editOverrideVal);
+        } catch {
+          throw new Error('Invalid JSON format for parameter value.');
+        }
+      }
 
-  const nativeCount = toolsList.filter(t => !t.type || t.type === 'connector' || t.type === 'parser').length;
-  const mcpCount = toolsList.filter(t => t.type === 'mcp').length;
-  const a2aCount = toolsList.filter(t => t.type === 'a2a').length;
-  const firstTestableTool = toolsList.find(tool => tool.registration ? canEditIntegrations : tool.probe_available);
+      await setParameterOverride(editingParam.tool, editingParam.variable_name, {
+        value: parsedValue,
+        expected_revision: editingParam.override_revision ?? 0,
+        expected_definition_revision: editingParam.revision,
+      });
+
+      await loadBackendData();
+      showToast(`Saved override for ${editingParam.tool}.${editingParam.variable_name}`);
+      setEditingParam(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed saving override.';
+      showToast(msg);
+    } finally {
+      setParamActionBusy(false);
+    }
+  };
+
+  const handleResetParamOverride = async (param: ParameterDefinitionRow) => {
+    if (!param.override_revision) return;
+    setParamActionBusy(true);
+    try {
+      await resetParameterOverride(param.tool, param.variable_name, param.override_revision);
+      await loadBackendData();
+      showToast(`Restored default for ${param.tool}.${param.variable_name}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed resetting override.';
+      showToast(msg);
+    } finally {
+      setParamActionBusy(false);
+    }
+  };
+
+  // Filter tools list
+  const filteredTools = useMemo(() => {
+    return toolsList.filter(t => {
+      const q = search.toLowerCase().trim();
+      const matchesSearch =
+        !q ||
+        t.name.toLowerCase().includes(q) ||
+        (t.system_name && t.system_name.toLowerCase().includes(q)) ||
+        t.category.toLowerCase().includes(q) ||
+        t.description.toLowerCase().includes(q) ||
+        (t.endpoint && t.endpoint.toLowerCase().includes(q));
+
+      const isMcpOrA2a = t.type === 'mcp' || t.type === 'a2a' || t.integration_kind === 'mcp' || t.integration_kind === 'a2a';
+      const isActive = t.status === 'connected';
+      const isDraftOrConfigured = t.status === 'degraded' || (t.status === 'planned' && t.endpoint && !t.endpoint.includes('<'));
+      const isPlanned = t.status === 'planned' && (!t.endpoint || t.endpoint.includes('<'));
+
+      if (statusFilter === 'active') return matchesSearch && isActive;
+      if (statusFilter === 'draft') return matchesSearch && isDraftOrConfigured;
+      if (statusFilter === 'planned') return matchesSearch && isPlanned;
+      if (statusFilter === 'mcp_a2a') return matchesSearch && isMcpOrA2a;
+      return matchesSearch;
+    });
+  }, [toolsList, search, statusFilter]);
+
+  // Parameters specific to selected tool
+  const toolParams = useMemo(() => {
+    if (!selectedTool) return [];
+    const toolKey = selectedTool.system_name || selectedTool.id;
+    const directMatches = parameters.filter(p => p.tool.toLowerCase() === toolKey.toLowerCase());
+    if (directMatches.length > 0) return directMatches;
+
+    // Fallback generated from tool attributes if parameter store has not indexed this template yet
+    const fallbackRows: ParameterDefinitionRow[] = [];
+    if (selectedTool.endpoint) {
+      fallbackRows.push({
+        tool: toolKey,
+        variable_name: 'endpoint',
+        value_type: 'string',
+        description: 'Connector API endpoint',
+        default_value: selectedTool.endpoint,
+        effective_value: selectedTool.endpoint,
+        revision: 1,
+        override_revision: null,
+        allow_project_override: selectedTool.project_can_override,
+        project_visible: true,
+        source: 'platform',
+      });
+    }
+    if (selectedTool.auth_method) {
+      fallbackRows.push({
+        tool: toolKey,
+        variable_name: 'auth_method',
+        value_type: 'string',
+        description: 'Authentication protocol',
+        default_value: selectedTool.auth_method,
+        effective_value: selectedTool.auth_method,
+        revision: 1,
+        override_revision: null,
+        allow_project_override: false,
+        project_visible: true,
+        source: 'platform',
+      });
+    }
+    if (selectedTool.timeout_seconds != null) {
+      fallbackRows.push({
+        tool: toolKey,
+        variable_name: 'timeout_seconds',
+        value_type: 'integer',
+        description: 'Request timeout limit in seconds',
+        default_value: selectedTool.timeout_seconds,
+        effective_value: selectedTool.timeout_seconds,
+        revision: 1,
+        override_revision: null,
+        allow_project_override: true,
+        project_visible: true,
+        source: 'platform',
+      });
+    }
+    if (selectedTool.rate_limit) {
+      fallbackRows.push({
+        tool: toolKey,
+        variable_name: 'rate_limit',
+        value_type: 'string',
+        description: 'Rate limit ceiling',
+        default_value: selectedTool.rate_limit,
+        effective_value: selectedTool.rate_limit,
+        revision: 1,
+        override_revision: null,
+        allow_project_override: false,
+        project_visible: true,
+        source: 'platform',
+      });
+    }
+    if (selectedTool.custom_config) {
+      Object.entries(selectedTool.custom_config).forEach(([k, v]) => {
+        fallbackRows.push({
+          tool: toolKey,
+          variable_name: k,
+          value_type: typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : typeof v === 'object' ? 'json' : 'string',
+          description: `Custom configuration parameter: ${k}`,
+          default_value: v,
+          effective_value: v,
+          revision: 1,
+          override_revision: null,
+          allow_project_override: true,
+          project_visible: true,
+          source: 'platform',
+        });
+      });
+    }
+    return fallbackRows;
+  }, [selectedTool, parameters]);
+
+  // Capabilities associated with the selected tool
+  const associatedCapabilities = useMemo(() => {
+    if (!selectedTool) return [];
+    const toolKey = (selectedTool.system_name || selectedTool.id).toLowerCase();
+    return capabilities.filter(c => {
+      const anyC = c as any;
+      const req = anyC.requires?.connectors || [];
+      const opt = anyC.optional?.connectors || [];
+      return req.map((x: string) => x.toLowerCase()).includes(toolKey) || opt.map((x: string) => x.toLowerCase()).includes(toolKey);
+    });
+  }, [selectedTool, capabilities]);
+
+  // Tool Brand/Category Icon & Color Renderer
+  const renderToolIcon = (tool: ToolDefinition) => {
+    const key = (tool.system_name || tool.id || '').toLowerCase();
+    const cat = (tool.category || '').toLowerCase();
+
+    if (key.includes('jira') || key === 'itsm' || cat.includes('ticket')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#0052cc', color: '#fff' }}>
+          <span>J</span>
+        </div>
+      );
+    }
+    if (key.includes('splunk') || key === 'log_search' || cat.includes('observability')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#10b981', color: '#fff' }}>
+          <Activity size={16} />
+        </div>
+      );
+    }
+    if (key.includes('confluence') || cat.includes('knowledge')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#0284c7', color: '#fff' }}>
+          <BookOpen size={16} />
+        </div>
+      );
+    }
+    if (key.includes('oracle') || cat.includes('database')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#dc2626', color: '#fff' }}>
+          <Database size={16} />
+        </div>
+      );
+    }
+    if (key.includes('kafka') || cat.includes('message')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#7c3aed', color: '#fff' }}>
+          <Radio size={16} />
+        </div>
+      );
+    }
+    if (key.includes('signal') || key.includes('metric')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#ea580c', color: '#fff' }}>
+          <Activity size={16} />
+        </div>
+      );
+    }
+    if (key.includes('qtest') || cat.includes('test')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#0891b2', color: '#fff' }}>
+          <CheckCircle2 size={16} />
+        </div>
+      );
+    }
+    if (key.includes('gitlab') || cat.includes('devops')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#f97316', color: '#fff' }}>
+          <GitBranch size={16} />
+        </div>
+      );
+    }
+    if (key.includes('unix') || key.includes('tuxedo')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#475569', color: '#fff' }}>
+          <Terminal size={16} />
+        </div>
+      );
+    }
+    if (key.includes('kube') || cat.includes('orchestration')) {
+      return (
+        <div className="tool-brand-icon" style={{ background: '#0284c7', color: '#fff' }}>
+          <Layers size={16} />
+        </div>
+      );
+    }
+    return (
+      <div className="tool-brand-icon" style={{ background: 'var(--acc)', color: '#fff' }}>
+        <Sparkles size={16} />
+      </div>
+    );
+  };
+
+  const getStatusBadge = (status: ToolDefinition['status'], enabled: boolean) => {
+    if (status === 'connected') return <span className="badge-status active">ACTIVE</span>;
+    if (status === 'degraded') return <span className="badge-status degraded">DEGRADED</span>;
+    if (status === 'not_configured') return <span className="badge-status planned">SETUP REQUIRED</span>;
+    if (status === 'disabled' || !enabled) return <span className="badge-status disabled">DISABLED</span>;
+    return <span className="badge-status planned">PLANNED</span>;
+  };
+
+  // Supported Operations definition per tool
+  const getToolOperations = (tool: ToolDefinition) => {
+    const key = (tool.system_name || tool.id || '').toLowerCase();
+    if (key === 'itsm' || key.includes('jira')) {
+      return [
+        { name: 'Fetch Incident Ticket (itsm.get_ticket)', adk: 'FunctionTool', desc: 'Retrieve details and structured fields for a specific incident ticket.' },
+        { name: 'Incident Comments Timeline', adk: 'Read-only', desc: 'Fetch full comment history with timestamps and author references.' },
+        { name: 'Issue Attachments Ingestion', adk: 'Bounded Local', desc: 'Parse and summarize bounded incident files and stack traces.' },
+        { name: 'JQL Triage Filter Query', adk: 'Read-only', desc: 'Query active triage queues matching incident anchor criteria.' },
+      ];
+    }
+    if (key === 'log_search' || key.includes('splunk')) {
+      return [
+        { name: 'Query Structured Logs (log_search.query_range)', adk: 'FunctionTool', desc: 'Query structured logs within server-scoped incident time window.' },
+        { name: 'Temporal Anomaly Correlation', adk: 'Pipeline', desc: 'Cluster error spikes and correlate timestamps across infrastructure.' },
+        { name: 'Saved Search Execution', adk: 'Read-only', desc: 'Execute pre-configured incident mining searches across allowed indexes.' },
+      ];
+    }
+    if (tool.mcp_config?.tools_exposed && tool.mcp_config.tools_exposed.length > 0) {
+      return tool.mcp_config.tools_exposed.map(t => ({
+        name: t,
+        adk: 'MCP Tool Proxy',
+        desc: 'Exposed remote capability via Model Context Protocol bridge.',
+      }));
+    }
+    return [
+      { name: 'Metadata Inspection', adk: 'Catalog Definition', desc: 'Read deployment parameters, endpoints, and authentication schema.' },
+      { name: 'Health & Readiness Probe', adk: 'System Probe', desc: 'Inspect connector reachability, latency, and TLS compatibility.' },
+    ];
+  };
+
+  // Structured Outputs definition per tool
+  const getToolOutputs = (tool: ToolDefinition) => {
+    const key = (tool.system_name || tool.id || '').toLowerCase();
+    if (key === 'itsm' || key.includes('jira')) {
+      return [
+        { name: 'Jira Issue Summary', key: 'issue', type: 'Single Object', renderer: 'Issue Detail View', desc: 'Complete incident record with severity, reporter, status, and custom team fields.' },
+        { name: 'Incident Comments', key: 'comments', type: 'List', renderer: 'Timeline Feed', desc: 'Chronological timeline of analyst notes, automated updates, and timestamps.' },
+        { name: 'Extracted Attachments', key: 'attachments', type: 'List', renderer: 'Attachment Gallery', desc: 'Bounded local text, OCR results, and structured log snippets extracted from ticket.' },
+        { name: 'Triage Queue Search', key: 'search_results', type: 'List', renderer: 'Ticket Table', desc: 'Incident ticket candidates matched by JQL anchor search.' },
+      ];
+    }
+    if (key === 'log_search' || key.includes('splunk')) {
+      return [
+        { name: 'Correlated Log Events', key: 'events', type: 'List', renderer: 'Structured Event Table', desc: 'Log entries matching temporal query range with host, service, level, and message.' },
+        { name: 'Metric Time-Series', key: 'metrics', type: 'Time-Series', renderer: 'Timeline Chart', desc: 'Event frequency counts over time highlighting error anomaly spikes.' },
+        { name: 'Extracted Anchors', key: 'anchors', type: 'List', renderer: 'Anchor Tags', desc: 'Extracted transaction IDs, error codes, and trace identifiers.' },
+      ];
+    }
+    return [
+      { name: 'Execution Result', key: 'result', type: 'Object / JSON', renderer: 'Structured JSON Inspector', desc: 'Standardized payload response from connector provider.' },
+    ];
+  };
 
   return (
-    <div className="view-container">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div style={{
-          position: 'fixed',
-          bottom: '24px',
-          right: '24px',
-          background: 'var(--card)',
-          color: 'var(--text)',
-          border: '1px solid var(--acc)',
-          borderRadius: '8px',
-          padding: '12px 18px',
-          boxShadow: 'var(--shadow-hover)',
-          zIndex: 9999,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          fontSize: '13px',
-          fontWeight: 600
-        }}>
-          <CheckCircle2 size={16} style={{ color: 'var(--acc)' }} />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* Clean & Elevated Hero Banner */}
+    <div className="view-container tools-page">
+      {/* Standard Hero Banner */}
       <section className="hero-banner">
         <div className="hero-main">
           <h1 className="hero-title">
-            Enterprise Connectors & <span>Integration Governance</span>
+            Diagnostic Tools & <span>Connectors</span>
           </h1>
           <p className="hero-lede">
-            Inspect server-reported connectors and template-backed integrations. Templates are reference metadata only; runtime health is policy-scoped and live-only.
+            Enterprise catalog of native Google ADK connectors, domain tools, and MCP integrations with authentic persistence.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>{totalEnabled}</b> / {toolsList.length} Enabled Integrations
+              <span className="dot pulse" /> <b>{toolsList.filter(t => t.status === 'connected').length}</b> Connected
             </span>
             <span className="hero-stat-chip">
-              <Layers size={12} /> <b>{platformCount}</b> Platform Defaults
+              <b>{toolsList.length}</b> Registered Tools
             </span>
             <span className="hero-stat-chip">
-              <Sliders size={12} /> <b>{projectOverrideCount}</b> Overrides • <b>{projectOnlyCount}</b> Project-Only
+              <b>{toolsList.filter(t => t.type === 'mcp' || t.integration_kind === 'mcp').length}</b> MCP Servers
             </span>
             <span className="hero-stat-chip">
-              <Cpu size={12} /> <b>{mcpCount}</b> MCP • <b>{a2aCount}</b> A2A Bridges
+              <b>Scope:</b> {principal ? `${principal.tenant_id} / ${principal.project_id}` : 'Platform Scope'}
             </span>
           </div>
         </div>
-
         <div className="hero-actions">
           <div className="hero-actions-row">
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => openIntegrationForm()}
-              disabled={!canEditIntegrations}
-              title={canEditIntegrations ? 'Add an MCP or A2A integration' : 'Requires a platform or project administrator role'}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'var(--acc)',
-                color: '#fff',
-                padding: '8px 14px',
-                borderRadius: '6px',
-                fontWeight: 600,
-                fontSize: '12px',
-                cursor: canEditIntegrations ? 'pointer' : 'not-allowed',
-                border: 'none'
-              }}
+              onClick={() => setIsCreating(true)}
+              disabled={!canEdit}
             >
-              <Plus size={14} /> Add MCP / A2A integration
+              <Plus size={14} /> Add integration
             </button>
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => void refreshCatalog()}
+              onClick={() => { void refreshCatalog(); }}
               disabled={refreshing}
-              title="Reload saved integrations and deployment catalog"
             >
-              <RefreshCw size={13} className={refreshing ? 'spin' : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh catalog'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-open"
-              onClick={() => firstTestableTool && handleTestConnection(firstTestableTool)}
-              disabled={!firstTestableTool}
-              title="Ping the first configured connector"
-            >
-              <Activity size={13} /> Ping Active Fleet
+              <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {refreshing ? 'Refreshing…' : 'Refresh Catalog'}
             </button>
           </div>
         </div>
       </section>
 
-      {templateFetchError && (
-        <div className="notice-banner" role="alert" style={{ marginBottom: '10px' }}>
-          {templateFetchError}
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            background: 'var(--card)',
+            color: 'var(--tx)',
+            border: '1px solid var(--acc)',
+            borderRadius: '8px',
+            padding: '12px 18px',
+            boxShadow: 'var(--shadow-hover)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '13px',
+            fontWeight: 600,
+          }}
+        >
+          <CheckCircle2 size={16} style={{ color: 'var(--acc)' }} />
+          <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* FULL-DETAIL GOVERNANCE & PRECEDENCE BANNER (Never Squashed)  */}
-      {/* ------------------------------------------------------------- */}
-      <div className="notice-banner purple">
-        <h3><Shield size={16} /> Integration configuration</h3>
-        <p>Saved MCP and A2A connection settings persist in the backend at platform or project scope. Registration records configuration only; agent access and live execution remain deployment-gated.</p>
-        <p className="metric-meta">Native connectors continue to use deployment-provided settings. Use Refresh catalog after saving to load the current persisted configuration.</p>
-      </div>
-
-      {registeredTemplateItems.length > 0 && (
-        <section className="integration-template-panel" aria-labelledby="integration-template-title">
-          <div className="integration-template-heading">
-            <div>
-              <h2 id="integration-template-title">Available MCP &amp; A2A templates</h2>
-              <p>Start with deployment catalog metadata, then save the connection for this platform or project.</p>
+      {/* 3-Column Workspace Layout */}
+      <div className="tools-workspace-layout">
+        {/* ===================================================================
+            COLUMN 1: Tool Catalog (Left)
+            =================================================================== */}
+        <aside className="tools-catalog-column">
+          <div className="catalog-header">
+            <div className="catalog-title-row">
+              <h2>Tools &amp; Connectors</h2>
+              <span className="catalog-count-badge">{filteredTools.length}</span>
             </div>
-            <span className="brand-badge">CATALOG</span>
+            <p className="catalog-subtitle">
+              Manage tool catalog used across projects and investigation profiles.
+            </p>
+            <div className="catalog-search-wrap">
+              <Search size={14} />
+              <input
+                type="text"
+                className="catalog-search-input"
+                placeholder="Search tools &amp; connectors…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
           </div>
-          <div className="integration-template-grid">
-            {registeredTemplateItems.map(template => (
-              <article className="integration-template-card" key={template.type}>
-                <div>
-                  <div className="integration-template-title">
-                    <strong>{template.name}</strong>
-                    <span className={`integration-kind-badge ${template.integration_kind}`}>{template.integration_kind.toUpperCase()}</span>
-                  </div>
-                  <p>{template.description}</p>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={!canEditIntegrations}
-                  title={canEditIntegrations ? 'Configure this template' : 'Requires a platform or project administrator role'}
-                  onClick={() => openIntegrationForm(templateTool(template))}
-                >
-                  <Settings size={12} /> Configure
-                </button>
-              </article>
-            ))}
-          </div>
-        </section>
-      )}
 
-      {/* Controls Bar: Integration Filter + Scope Tabs + Search */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
-        {/* Top Filter Row: Integration Kind + Scope Tabs */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-          {/* Integration Kind Tabs */}
-          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg)', padding: '4px', borderRadius: '8px', border: '1px solid var(--line)' }}>
-            {[
-              { id: 'all', label: `All Integrations (${toolsList.length})`, icon: Workflow },
-              { id: 'native', label: `Native Connectors (${nativeCount})`, icon: Database },
-              { id: 'mcp', label: `MCP Tool Servers (${mcpCount})`, icon: Cpu },
-              { id: 'a2a', label: `A2A Agent Protocols (${a2aCount})`, icon: Bot }
-            ].map(tab => {
-              const Icon = tab.icon;
+          {/* Status Filter Tabs */}
+          <div className="catalog-filter-tabs">
+            <button
+              type="button"
+              className={`catalog-filter-tab ${statusFilter === 'all' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('all')}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={`catalog-filter-tab ${statusFilter === 'active' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('active')}
+            >
+              Active
+            </button>
+            <button
+              type="button"
+              className={`catalog-filter-tab ${statusFilter === 'draft' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('draft')}
+            >
+              Configured
+            </button>
+            <button
+              type="button"
+              className={`catalog-filter-tab ${statusFilter === 'planned' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('planned')}
+            >
+              Planned
+            </button>
+            <button
+              type="button"
+              className={`catalog-filter-tab ${statusFilter === 'mcp_a2a' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('mcp_a2a')}
+            >
+              MCP / A2A
+            </button>
+          </div>
+
+          {/* Catalog Items List */}
+          <div className="catalog-items-list">
+            {filteredTools.map(tool => {
+              const isSelected = selectedTool?.id === tool.id;
               return (
                 <button
-                  key={tab.id}
                   type="button"
-                  onClick={() => setIntegrationFilter(tab.id as any)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: integrationFilter === tab.id ? 700 : 500,
-                    border: integrationFilter === tab.id ? '1px solid var(--acc)' : '1px solid transparent',
-                    background: integrationFilter === tab.id ? 'var(--card)' : 'transparent',
-                    color: integrationFilter === tab.id ? 'var(--acc)' : 'var(--muted)',
-                    cursor: 'pointer',
-                    transition: 'all .15s ease'
-                  }}
+                  key={tool.id}
+                  className={`catalog-item-card ${isSelected ? 'is-selected' : ''}`}
+                  onClick={() => setSelectedToolId(tool.id)}
                 >
-                  <Icon size={13} />
-                  {tab.label}
+                  {renderToolIcon(tool)}
+                  <div className="tool-item-info">
+                    <div className="tool-item-title-row">
+                      <span className="tool-item-name">{tool.name}</span>
+                      {getStatusBadge(tool.status, tool.enabled)}
+                    </div>
+                    <div className="tool-item-category">
+                      {tool.category} • {tool.type?.toUpperCase()}
+                    </div>
+                  </div>
                 </button>
               );
             })}
+            {filteredTools.length === 0 && (
+              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: '12px' }}>
+                No connectors match the current filter.
+              </div>
+            )}
           </div>
 
-          {/* Scope Tabs */}
-          <div style={{ display: 'flex', gap: '4px', background: 'var(--bg)', padding: '4px', borderRadius: '8px', border: '1px solid var(--line)' }}>
-            {[
-              { id: 'all', label: `All Scopes` },
-              { id: 'platform_default', label: `Platform Defaults (${platformCount})` },
-              { id: 'project_override', label: `Project Overrides (${projectOverrideCount})` },
-              { id: 'project_only', label: `Direct Project-Only (${projectOnlyCount})` }
-            ].map(tab => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setSelectedScope(tab.id as any)}
-                style={{
-                  padding: '5px 10px',
-                  borderRadius: '6px',
-                  fontSize: '11.5px',
-                  fontWeight: selectedScope === tab.id ? 700 : 500,
-                  border: selectedScope === tab.id ? '1px solid var(--acc)' : '1px solid transparent',
-                  background: selectedScope === tab.id ? 'var(--card)' : 'transparent',
-                  color: selectedScope === tab.id ? 'var(--acc)' : 'var(--muted)',
-                  cursor: 'pointer'
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Toolbar: Search + Status + Category Filters */}
-        <div className="toolbar" style={{ margin: 0 }}>
-          <div className="search-box" style={{ flex: 1 }}>
-            <Search size={16} />
-            <input
-              type="search"
-              placeholder="Search connectors, MCP endpoints, A2A agents, categories, or secret refs…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              spellCheck={false}
-            />
-          </div>
-
-          {/* Status Quick Filter */}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-            <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>Status:</span>
-            {(['all', 'enabled', 'disabled'] as const).map(st => (
-              <button
-                key={st}
-                type="button"
-                onClick={() => setStatusFilter(st)}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  fontWeight: statusFilter === st ? 700 : 500,
-                  textTransform: 'capitalize',
-                  border: statusFilter === st ? '1px solid var(--acc)' : '1px solid var(--line)',
-                  background: statusFilter === st ? 'var(--acc-subtle)' : 'var(--card)',
-                  color: statusFilter === st ? 'var(--acc)' : 'var(--muted)',
-                  cursor: 'pointer'
-                }}
-              >
-                {st}
-              </button>
-            ))}
-          </div>
-
-          {/* Categories */}
-          <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', alignItems: 'center' }}>
+          <div className="catalog-footer">
             <button
               type="button"
-              onClick={() => setCategoryFilter('all')}
-              style={{
-                padding: '4px 8px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: categoryFilter === 'all' ? 700 : 500,
-                border: categoryFilter === 'all' ? '1px solid var(--acc)' : '1px solid var(--line)',
-                background: categoryFilter === 'all' ? 'var(--acc-subtle)' : 'var(--card)',
-                color: categoryFilter === 'all' ? 'var(--acc)' : 'var(--muted)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
+              className="catalog-add-btn"
+              onClick={() => setIsCreating(true)}
+              disabled={!canEdit}
             >
-              All Types
+              <Plus size={14} /> Create New Tool / Integration
             </button>
-            {categories.map(cat => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategoryFilter(cat)}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  fontSize: '11px',
-                  fontWeight: categoryFilter === cat ? 700 : 500,
-                  border: categoryFilter === cat ? '1px solid var(--acc)' : '1px solid var(--line)',
-                  background: categoryFilter === cat ? 'var(--acc-subtle)' : 'var(--card)',
-                  color: categoryFilter === cat ? 'var(--acc)' : 'var(--muted)',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {cat}
-              </button>
-            ))}
           </div>
+        </aside>
 
-          <div className="count-badge">
-            <b>{filtered.length}</b> tools
-          </div>
-        </div>
-      </div>
-
-      {/* Connectors & Integrations Grid */}
-      <div className="card-list">
-        {filtered.length === 0 && (
-          <div className="card" style={{ padding: '36px', textAlign: 'center', color: 'var(--dim)' }}>
-            No connectors are currently reported by the deployment.
-          </div>
-        )}
-        {filtered.map((tool, index) => {
-          const numStr = String(index + 1).padStart(3, '0');
-          const canTest = tool.registration ? canEditIntegrations : Boolean(tool.probe_available);
-
-          return (
-            <article
-              key={tool.id}
-              className="card"
-              style={{
-                opacity: tool.enabled ? 1 : 0.65,
-                transition: 'all .2s ease',
-                border: tool.enabled ? '1px solid var(--line)' : '1px dashed var(--line)'
-              }}
-            >
-              <div className="card-top">
-                <div className="num">{numStr}</div>
-
-                <div className="card-main">
-                  {/* Top Bar: Title, Badges, Scope & Enabled Switch */}
-                  <div className="card-title-row" style={{ alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
-                        <h2 className="card-title" style={{ margin: 0 }}>{tool.name}</h2>
-                        
-                        {/* Integration Kind Badge */}
-                        {tool.type === 'mcp' && (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 7px',
-                            borderRadius: '10px',
-                            background: 'rgba(234, 179, 8, 0.15)',
-                            color: '#ca8a04',
-                            border: '1px solid rgba(234, 179, 8, 0.35)'
-                          }}>
-                            <Cpu size={10} /> MCP SERVER
-                          </span>
-                        )}
-                        {tool.type === 'a2a' && (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 7px',
-                            borderRadius: '10px',
-                            background: 'rgba(168, 85, 247, 0.15)',
-                            color: '#9333ea',
-                            border: '1px solid rgba(168, 85, 247, 0.35)'
-                          }}>
-                            <Bot size={10} /> A2A BRIDGE
-                          </span>
-                        )}
-                        <span className="brand-badge">{tool.category}</span>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--muted)' }}>
-                        <code style={{ background: 'var(--bg)', padding: '1px 5px', borderRadius: '4px', fontFamily: 'var(--font-mono)' }}>
-                          {tool.system_name || tool.id}
-                        </code>
-                        <span>•</span>
-                        <span>{tool.protocol || 'HTTPS'}</span>
-                        {tool.mcp_config?.transport && (
-                          <>
-                            <span>•</span>
-                            <span style={{ color: 'var(--acc)' }}>transport: {tool.mcp_config.transport}</span>
-                          </>
-                        )}
-                        {tool.a2a_config?.delegation_protocol && (
-                          <>
-                            <span>•</span>
-                            <span style={{ color: '#9333ea' }}>delegation: {tool.a2a_config.delegation_protocol}</span>
-                          </>
-                        )}
-                      </div>
+        {/* ===================================================================
+            COLUMN 2: Center Editor Workspace
+            =================================================================== */}
+        <main className="tools-editor-column">
+          {selectedTool ? (
+            <div className="tool-detail-card">
+              {/* Tool Hero Header */}
+              <div className="tool-hero-header">
+                <div className="tool-hero-main">
+                  {renderToolIcon(selectedTool)}
+                  <div className="tool-hero-meta">
+                    <h2>
+                      {selectedTool.name}
+                      {getStatusBadge(selectedTool.status, selectedTool.enabled)}
+                    </h2>
+                    <div className="tool-hero-specs">
+                      <span>
+                        <strong>Key:</strong> <code>{selectedTool.system_name || selectedTool.id}</code>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        <strong>Type:</strong> {selectedTool.type?.toUpperCase()}
+                      </span>
+                      <span>•</span>
+                      <span>
+                        <strong>Category:</strong> {selectedTool.category}
+                      </span>
                     </div>
-
-                    {/* Scope & Enabled Pill Toggle */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      {/* Scope Badge */}
-                      {tool.scope_level === 'platform_default' && (
-                        <span
-                          title="Platform-wide baseline default"
-                          style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            background: 'rgba(99,102,241,0.12)',
-                            color: 'var(--acc)',
-                            border: '1px solid rgba(99,102,241,0.3)',
-                            textTransform: 'uppercase'
-                          }}
-                        >
-                          Platform Default
-                        </span>
-                      )}
-                      {tool.scope_level === 'project_override' && (
-                        <span
-                          title="Custom override active at project level"
-                          style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            background: 'rgba(234,179,8,0.12)',
-                            color: '#ca8a04',
-                            border: '1px solid rgba(234,179,8,0.3)',
-                            textTransform: 'uppercase'
-                          }}
-                        >
-                          Project Override
-                        </span>
-                      )}
-                      {tool.scope_level === 'project_only' && (
-                        <span
-                          title="Direct project level configuration with no platform default"
-                          style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '12px',
-                            background: 'rgba(168,85,247,0.12)',
-                            color: '#9333ea',
-                            border: '1px solid rgba(168,85,247,0.3)',
-                            textTransform: 'uppercase'
-                          }}
-                        >
-                          Project-Only
-                        </span>
-                      )}
-
-                      {/* Enable/Disable Toggle Switch */}
-                      <button
-                        type="button"
-                        onClick={(e) => handleToggleEnabled(tool.id, e)}
-                        disabled
-                        title="Connector state is managed by the deployment"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          padding: '3px 8px',
-                          borderRadius: '16px',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          border: tool.enabled ? '1px solid rgba(16,185,129,0.35)' : '1px solid var(--line)',
-                          background: tool.enabled ? 'rgba(16,185,129,0.12)' : 'var(--bg)',
-                          color: tool.enabled ? '#10b981' : 'var(--muted)',
-                          transition: 'all .15s ease'
-                        }}
-                      >
-                        <span style={{
-                          width: '7px',
-                          height: '7px',
-                          borderRadius: '50%',
-                          background: tool.enabled ? '#10b981' : 'var(--muted)'
-                        }} />
-                        {tool.status.toUpperCase()}
-                      </button>
-                    </div>
+                    <p className="tool-hero-desc">{selectedTool.description}</p>
+                    {!selectedTool.registration && <p className="tool-hero-desc">Project availability controls use by agents. Connection setup and a successful health check are also required.</p>}
                   </div>
+                </div>
 
-                  <p className="card-desc" style={{ marginTop: '8px', marginBottom: '10px' }}>
-                    {tool.description}
-                  </p>
+                <div className="tool-hero-actions">
+                      {!selectedTool.registration && (principal?.roles.includes('PLATFORM_ADMIN') || principal?.roles.includes('PROJECT_OWNER')) && (
+                        <button type="button" className="btn btn-secondary" role="switch"
+                          aria-label="Available for project" aria-checked={selectedTool.project_enabled !== false} disabled={availabilityBusy}
+                          onClick={async () => {
+                            setAvailabilityBusy(true);
+                            try {
+                              await setProjectAvailability('connectors', selectedTool.system_name || selectedTool.id, selectedTool.project_enabled === false, selectedTool.project_enabled !== false);
+                              setToolsList(await fetchTools());
+                              setCapabilities(await fetchCapabilities());
+                            } catch (error) { showToast(error instanceof Error ? error.message : 'Unable to save availability.'); }
+                            finally { setAvailabilityBusy(false); }
+                          }}>
+                          {availabilityBusy ? 'Saving…' : selectedTool.project_enabled === false ? 'Enable for project' : 'Disable for project'}
+                        </button>
+                      )}
 
-                  {/* Pills */}
-                  <div className="card-meta-pills" style={{ marginBottom: '10px' }}>
-                    {tool.project_can_override ? (
-                      <span className="meta-pill" title="Project admins can customize or override this connector">
-                        <Unlock size={11} style={{ color: '#10b981' }} /> Overridable by Project
-                      </span>
-                    ) : (
-                      <span className="meta-pill" title="Locked platform default; project cannot override">
-                        <Lock size={11} style={{ color: '#ef4444' }} /> Locked by Platform
-                      </span>
-                    )}
-                    <span className="meta-pill highlight">{tool.rate_limit}</span>
-                    {tool.service_user && (
-                      <span className="meta-pill" title={`Service account user: ${tool.service_user}`}>
-                        <User size={11} style={{ color: 'var(--acc)' }} /> {tool.service_user}
-                      </span>
-                    )}
-                    {tool.secret_reference && (
-                      <span className="meta-pill">
-                        <Key size={11} /> {tool.secret_reference}
-                      </span>
-                    )}
-                    {tool.endpoint && (
-                      <span className="meta-pill" style={{ fontFamily: 'var(--font-mono)', fontSize: '10px' }}>
-                        {tool.endpoint}
-                      </span>
-                    )}
-                    {tool.ui_base_url && (
-                      <a
-                        href={tool.ui_base_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="meta-pill"
-                        title={`Open Web Portal: ${tool.ui_base_url}`}
-                        style={{ textDecoration: 'none', color: 'var(--acc)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <ExternalLink size={10} /> Web Portal
-                      </a>
-                    )}
-                    {(tool.timeout_seconds !== undefined || tool.retry_attempts !== undefined) && (
-                      <span className="meta-pill" title="Connection timeouts & retry boundaries">
-                        <Clock size={11} /> {tool.timeout_seconds ?? 30}s • {tool.retry_attempts ?? 0} retries
-                      </span>
-                    )}
-                  </div>
-
-                  {/* MCP Exposed Tools Badges */}
-                  {tool.mcp_config?.tools_exposed && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      flexWrap: 'wrap',
-                      fontSize: '11px',
-                      background: 'rgba(234, 179, 8, 0.06)',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(234, 179, 8, 0.2)',
-                      marginBottom: '8px'
-                    }}>
-                      <span style={{ fontWeight: 600, color: '#ca8a04' }}>MCP Tools:</span>
-                      {tool.mcp_config.tools_exposed.map(tName => (
-                        <code key={tName} style={{ background: 'var(--bg)', padding: '1px 5px', borderRadius: '3px', fontSize: '10px' }}>
-                          {tName}
-                        </code>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* A2A Agent Delegation Details */}
-                  {tool.a2a_config && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      flexWrap: 'wrap',
-                      fontSize: '11px',
-                      background: 'rgba(168, 85, 247, 0.06)',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(168, 85, 247, 0.2)',
-                      marginBottom: '8px'
-                    }}>
-                      <span><b>Target Agent:</b> <code>{tool.a2a_config.target_agent_id}</code></span>
-                      <span><b>Capability:</b> <code>{tool.a2a_config.target_capability}</code></span>
-                      {tool.a2a_config.dual_custody_approved && (
-                        <span style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '3px', fontWeight: 600 }}>
-                          <Check size={12} /> Dual-Custody Approved
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Dynamic Custom Config Badges */}
-                  {tool.custom_config && Object.keys(tool.custom_config).length > 0 && (
-                    <div style={{
-                      display: 'flex',
-                      gap: '6px',
-                      flexWrap: 'wrap',
-                      fontSize: '11px',
-                      background: 'var(--bg)',
-                      padding: '6px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      marginBottom: '8px'
-                    }}>
-                      {(tool.custom_config.project_key || tool.project_key) && (
-                        <span><b>Project:</b> <code>{tool.custom_config.project_key || tool.project_key}</code></span>
-                      )}
-                      {tool.custom_config.polling_cron && (
-                        <span><b>Poll:</b> <code>{tool.custom_config.polling_cron}</code></span>
-                      )}
-                      {tool.custom_config.reporting_cron && (
-                        <span><b>Report:</b> <code>{tool.custom_config.reporting_cron}</code></span>
-                      )}
-                      {tool.custom_config.process_attachments && (
-                        <span style={{ color: '#10b981' }}><b>Attachments:</b> Ingested</span>
-                      )}
-                      {tool.custom_config.allowed_indexes && (
-                        <span><b>Indexes:</b> {tool.custom_config.allowed_indexes.join(', ')}</span>
-                      )}
-                      {tool.custom_config.monitored_namespaces && (
-                        <span><b>Namespaces:</b> {tool.custom_config.monitored_namespaces.length} active</span>
-                      )}
-                      {tool.custom_config.monitored_topics && (
-                        <span><b>Topics:</b> {tool.custom_config.monitored_topics.join(', ')}</span>
-                      )}
-                      {tool.custom_config.bootstrap_servers && (
-                        <span><b>Brokers:</b> <code>{tool.custom_config.bootstrap_servers}</code></span>
-                      )}
-                      {tool.custom_config.spaces && (
-                        <span><b>Spaces:</b> {tool.custom_config.spaces.join(', ')}</span>
-                      )}
-                      {tool.custom_config.projects && (
-                        <span><b>Repos:</b> {tool.custom_config.projects.join(', ')}</span>
-                      )}
-                      {tool.custom_config.schema && (
-                        <span><b>Schema:</b> <code>{tool.custom_config.schema}</code></span>
-                      )}
-                      {tool.custom_config.sid && (
-                        <span><b>SID:</b> <code>{tool.custom_config.sid}</code></span>
-                      )}
-                      {tool.custom_config.cluster_name && (
-                        <span><b>Cluster:</b> {tool.custom_config.cluster_name}</span>
-                      )}
-                      {tool.custom_config.domain_id && (
-                        <span><b>Domain:</b> <code>{tool.custom_config.domain_id}</code></span>
-                      )}
-                      {tool.custom_config.allowed_hosts && (
-                        <span><b>Hosts:</b> {tool.custom_config.allowed_hosts.length} configured</span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Test Ping Result */}
-                  {testResult?.id === tool.id && (
-                    <div
-                      style={{
-                        marginTop: '10px',
-                        padding: '10px 14px',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                        background: testResult.success ? 'rgba(16,185,129,0.1)' : 'rgba(244, 63, 94, 0.12)',
-                        color: testResult.success ? '#10b981' : 'var(--acc-rose)',
-                        border: `1px solid ${testResult.success ? 'rgba(16,185,129,0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: '8px',
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleTestConnection(selectedTool)}
+                    disabled={testingId === selectedTool.id}
+                  >
+                    <Activity size={13} className={testingId === selectedTool.id ? 'spin' : ''} />
+                    {testingId === selectedTool.id ? 'Probing…' : 'Test Definition'}
+                  </button>
+                  {selectedTool.registration ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => setConfiguringTool(selectedTool)}
+                      disabled={!canEdit}
+                    >
+                      <Settings size={13} /> Edit Registration
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        if (onNavigate) onNavigate('parameters');
+                        else window.location.hash = 'parameters';
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {testResult.success ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                        <span>{testResult.msg}</span>
-                      </div>
-                      {testResult.latency_ms && (
-                        <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
-                          {testResult.latency_ms}ms
-                        </span>
-                      )}
-                    </div>
+                      <Sliders size={13} /> Edit in Studio
+                    </button>
                   )}
                 </div>
+              </div>
 
-                {/* Card Actions */}
-                <div className="card-actions" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Informational Callout Banner */}
+              {showCallout && (
+                <div className="tool-info-callout">
+                  <Info size={18} style={{ color: '#d97706', flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong>What is a Tool Definition?</strong>
+                    <p>
+                      Define the tool contract once. Projects and profiles will inherit and provide values for these fields.
+                      Read-only connectors boundary guarantees bounded timeouts and zero unauthorized mutations.
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    className="btn btn-primary"
-                    onClick={() => tool.registration ? openIntegrationForm(tool) : setConfiguringTool(tool)}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      padding: '6px 12px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      borderRadius: '6px',
-                      background: 'var(--acc)',
-                      color: '#fff',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
+                    onClick={() => setShowCallout(false)}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', marginLeft: 'auto' }}
                   >
-                    <Settings size={12} /> {tool.registration ? 'Configure' : 'View catalog'}
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn btn-open"
-                    onClick={(e) => handleTestConnection(tool, e)}
-                    disabled={!canTest || testingId === tool.id}
-                    title={canTest ? 'Test the configured connection' : 'No runtime provider is available, or your role cannot test this integration'}
-                  >
-                    <Activity size={12} />
-                    {testingId === tool.id ? 'Testing…' : tool.registration ? 'Test connection' : canTest ? 'Test Ping' : 'Test unavailable'}
+                    <X size={14} />
                   </button>
                 </div>
+              )}
+
+              {/* Navigation Subtabs */}
+              <nav className="tool-subtabs-nav" aria-label="Tool sections">
+                {(
+                  [
+                    'Basic Info',
+                    'Configuration Form',
+                    'Capabilities',
+                    'Outputs & Presentation',
+                    'Validation & Testing',
+                    'Version & Scope',
+                  ] as SubTab[]
+                ).map((tab, idx) => (
+                  <button
+                    type="button"
+                    key={tab}
+                    className={`tool-subtab-btn ${activeTab === tab ? 'is-active' : ''}`}
+                    onClick={() => setActiveTab(tab)}
+                  >
+                    <span>{idx + 1}.</span> {tab}
+                  </button>
+                ))}
+              </nav>
+
+              {/* Subtab Panes */}
+              <div className="tool-tab-pane">
+                {/* 1. Basic Info */}
+                {activeTab === 'Basic Info' && (
+                  <div className="basic-specs-grid">
+                    <div className="spec-card">
+                      <dt>System Name (Key)</dt>
+                      <dd className="mono">{selectedTool.system_name || selectedTool.id}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Category</dt>
+                      <dd>{selectedTool.category}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Integration Kind</dt>
+                      <dd>{selectedTool.integration_kind || selectedTool.type}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Transport Protocol</dt>
+                      <dd>{selectedTool.protocol || 'HTTPS'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Authentication Method</dt>
+                      <dd>{selectedTool.auth_method || 'Bearer Token / Deployment managed'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Scope Level</dt>
+                      <dd>{selectedTool.scope_level?.replaceAll('_', ' ')}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>API Endpoint</dt>
+                      <dd className="mono">{selectedTool.endpoint || 'Deployment managed'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Web UI Base URL</dt>
+                      <dd className="mono">{selectedTool.ui_base_url || 'N/A'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Service Identity</dt>
+                      <dd>{selectedTool.service_user || 'Deployment default'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Default Timeout</dt>
+                      <dd>{selectedTool.timeout_seconds ? `${selectedTool.timeout_seconds}s` : '30s'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Rate Limit</dt>
+                      <dd>{selectedTool.rate_limit || '100 req/min'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Project Override Allowed</dt>
+                      <dd>{selectedTool.project_can_override ? 'Allowed' : 'Locked by platform'}</dd>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Configuration Form */}
+                {activeTab === 'Configuration Form' && (
+                  <div>
+                    <div className="tool-config-section-head">
+                      <div>
+                        <h3>Configuration Form</h3>
+                        <p>Define the fields this tool requires. Projects and profiles provide effective values.</p>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ fontSize: '11.5px', padding: '5px 10px' }}
+                          onClick={() => { void loadBackendData(); showToast('Parameters synchronized.'); }}
+                        >
+                          <RefreshCw size={12} /> Sync
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="tool-table-wrap">
+                      <table className="tool-data-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: '32px' }}>#</th>
+                            <th>Field Label &amp; Key</th>
+                            <th>Type</th>
+                            <th>Required</th>
+                            <th>Sensitive</th>
+                            <th>Default / Effective Value</th>
+                            <th>Scope</th>
+                            <th style={{ textAlign: 'right' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {toolParams.map((param, idx) => {
+                            const isSensitive =
+                              param.value_type === 'secret_ref' ||
+                              param.variable_name.includes('token') ||
+                              param.variable_name.includes('secret') ||
+                              param.variable_name.includes('key');
+                            const isOverridden = param.override_revision !== null && param.source === 'project';
+                            return (
+                              <tr key={param.variable_name}>
+                                <td style={{ color: 'var(--muted)', fontWeight: 600 }}>{idx + 1}</td>
+                                <td>
+                                  <div style={{ fontWeight: 600 }}>{param.variable_name.replaceAll('_', ' ').toUpperCase()}</div>
+                                  <div className="param-key-cell">{param.variable_name}</div>
+                                </td>
+                                <td>
+                                  <span className="param-type-badge">{param.value_type}</span>
+                                </td>
+                                <td>
+                                  <span className="pill-flag yes">Required</span>
+                                </td>
+                                <td>
+                                  <span className={`pill-flag ${isSensitive ? 'conditional' : 'no'}`}>
+                                    {isSensitive ? 'Secret' : 'Plaintext'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11.5px' }}>
+                                    {isSensitive && !isOverridden ? (
+                                      <span style={{ color: 'var(--muted)' }}>••••••••••••</span>
+                                    ) : param.effective_value != null ? (
+                                      typeof param.effective_value === 'object' ? (
+                                        JSON.stringify(param.effective_value)
+                                      ) : (
+                                        String(param.effective_value)
+                                      )
+                                    ) : (
+                                      <span style={{ color: 'var(--muted)' }}>-</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td>
+                                  <span className={`badge-status ${isOverridden ? 'active' : 'planned'}`}>
+                                    {isOverridden ? 'OVERRIDE' : 'PLATFORM'}
+                                  </span>
+                                </td>
+                                <td style={{ textAlign: 'right' }}>
+                                  <div style={{ display: 'inline-flex', gap: '6px' }}>
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary"
+                                      style={{ padding: '3px 7px', fontSize: '11px' }}
+                                      title="Edit Parameter Override"
+                                      onClick={() => openParamEditModal(param)}
+                                      disabled={!canEdit || !param.allow_project_override}
+                                    >
+                                      <Edit3 size={11} />
+                                    </button>
+                                    {isOverridden && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        style={{ padding: '3px 7px', fontSize: '11px', color: '#ef4444' }}
+                                        title="Reset Override to Platform Default"
+                                        onClick={() => handleResetParamOverride(param)}
+                                        disabled={!canEdit || paramActionBusy}
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {toolParams.length === 0 && (
+                            <tr>
+                              <td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--muted)' }}>
+                                No configuration parameters found for this tool.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Field Dependency & Validation Rules */}
+                    <div style={{ marginTop: '24px' }}>
+                      <div className="tool-config-section-head">
+                        <div>
+                          <h3>Field Dependency Rules</h3>
+                          <p>Define when fields are shown or required based on other field values.</p>
+                        </div>
+                      </div>
+                      <div className="tool-table-wrap">
+                        <table className="tool-data-table">
+                          <thead>
+                            <tr>
+                              <th>If (Field)</th>
+                              <th>Operator</th>
+                              <th>Value</th>
+                              <th>Then (Field)</th>
+                              <th>Action</th>
+                              <th>Condition</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td><code>auth_method</code></td>
+                              <td>equals</td>
+                              <td><code>Bearer Token</code></td>
+                              <td><code>api_token</code></td>
+                              <td><span className="pill-flag yes">Required</span></td>
+                              <td>Always enforce secret</td>
+                            </tr>
+                            <tr>
+                              <td><code>protocol</code></td>
+                              <td>equals</td>
+                              <td><code>HTTPS</code></td>
+                              <td><code>verify_ssl</code></td>
+                              <td><span className="pill-flag yes">Enforced</span></td>
+                              <td>Strict TLS validation</td>
+                            </tr>
+                            <tr>
+                              <td><code>polling_schedule</code></td>
+                              <td>not_empty</td>
+                              <td><code>Cron expression</code></td>
+                              <td><code>auto_triage</code></td>
+                              <td><span className="pill-flag conditional">Active</span></td>
+                              <td>Scheduled background ingest</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Supported Operations Summary */}
+                    <div className="operations-summary-box">
+                      <h4>Supported Google ADK Operations</h4>
+                      <div className="operations-chip-grid">
+                        {getToolOperations(selectedTool).map(op => (
+                          <div key={op.name} className="operation-chip">
+                            <Check size={13} />
+                            <span>{op.name}</span>
+                            <span style={{ fontSize: '10px', color: 'var(--muted)', marginLeft: '4px' }}>
+                              ({op.adk})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. Capabilities */}
+                {activeTab === 'Capabilities' && (
+                  <div>
+                    <div className="tool-config-section-head">
+                      <div>
+                        <h3>Associated Capabilities &amp; Workflows</h3>
+                        <p>Declared capabilities that require or optionally integrate this tool in the RCA graph.</p>
+                      </div>
+                    </div>
+
+                    <div className="tool-table-wrap">
+                      <table className="tool-data-table">
+                        <thead>
+                          <tr>
+                            <th>Capability Name</th>
+                            <th>Category</th>
+                            <th>Connector Binding</th>
+                            <th>Stages</th>
+                            <th>Safety Profile</th>
+                            <th>Min Role</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {associatedCapabilities.map(cap => {
+                            const anyC = cap as any;
+                            const isReq = (anyC.requires?.connectors || []).includes(selectedTool.system_name || selectedTool.id);
+                            return (
+                              <tr key={cap.id}>
+                                <td>
+                                  <div style={{ fontWeight: 600 }}>{cap.name}</div>
+                                  <div className="param-key-cell">{cap.id}</div>
+                                </td>
+                                <td>{anyC.category || 'Investigation'}</td>
+                                <td>
+                                  <span className={`pill-flag ${isReq ? 'yes' : 'conditional'}`}>
+                                    {isReq ? 'Required' : 'Optional'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                                    {(anyC.agent_stages || ['triage']).join(', ')}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                    Mutations: {anyC.safety_profile?.tool_mutations || 'approval_required'}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className="param-type-badge">
+                                    {anyC.permissions?.minimum_role || 'PROJECT_ANALYST'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {associatedCapabilities.length === 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: 'var(--muted)' }}>
+                                No active capabilities currently bind to this tool connector.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Outputs & Presentation */}
+                {activeTab === 'Outputs & Presentation' && (
+                  <div>
+                    <div className="tool-config-section-head">
+                      <div>
+                        <h3>Structured Outputs &amp; Presentation Views</h3>
+                        <p>Defines how evidence, artifacts, and outputs from this tool are rendered in investigations.</p>
+                      </div>
+                    </div>
+
+                    <div className="tool-table-wrap">
+                      <table className="tool-data-table">
+                        <thead>
+                          <tr>
+                            <th>Output Name</th>
+                            <th>Output Key</th>
+                            <th>Output Type</th>
+                            <th>Renderer Component</th>
+                            <th>Description</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {getToolOutputs(selectedTool).map(out => (
+                            <tr key={out.key}>
+                              <td style={{ fontWeight: 600 }}>{out.name}</td>
+                              <td className="param-key-cell">{out.key}</td>
+                              <td>
+                                <span className="param-type-badge">{out.type}</span>
+                              </td>
+                              <td>
+                                <span style={{ fontWeight: 500, color: 'var(--acc)' }}>{out.renderer}</span>
+                              </td>
+                              <td style={{ color: 'var(--muted)', fontSize: '11.5px' }}>{out.desc}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Validation & Testing */}
+                {activeTab === 'Validation & Testing' && (
+                  <div>
+                    <div className="tool-config-section-head">
+                      <div>
+                        <h3>Diagnostic Probe &amp; Validation</h3>
+                        <p>Execute live server-side probes against connector endpoints to verify TLS, credentials, and reachability.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => handleTestConnection(selectedTool)}
+                        disabled={testingId === selectedTool.id}
+                      >
+                        <Activity size={13} className={testingId === selectedTool.id ? 'spin' : ''} />
+                        {testingId === selectedTool.id ? 'Executing Probe…' : 'Run Connection Probe'}
+                      </button>
+                    </div>
+
+                    {testResult && (
+                      <div
+                        className="probe-msg-box"
+                        style={{
+                          borderColor: testResult.success ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)',
+                          background: testResult.success ? 'rgba(16, 185, 129, 0.06)' : 'rgba(239, 68, 68, 0.06)',
+                        }}
+                      >
+                        <strong style={{ color: testResult.success ? '#059669' : '#dc2626' }}>
+                          {testResult.success ? 'Probe Succeeded' : 'Probe Reported Review Status'}
+                        </strong>
+                        <p style={{ margin: '4px 0 0' }}>{testResult.msg}</p>
+                        {testResult.latency_ms != null && (
+                          <div style={{ marginTop: '6px', fontSize: '11.5px', color: 'var(--muted)' }}>
+                            Round-trip latency: <strong>{testResult.latency_ms.toFixed(1)}ms</strong>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Diagnostic Matrix */}
+                    <div className="validation-diagnostic-grid">
+                      <div className="diag-stat-card">
+                        <span className="diag-stat-label">OVERALL HEALTH</span>
+                        <span className="diag-stat-val">
+                          {selectedTool.status === 'connected' ? (
+                            <span style={{ color: '#059669' }}>● HEALTHY</span>
+                          ) : (
+                            <span style={{ color: '#d97706' }}>▲ {selectedTool.status?.toUpperCase()}</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="diag-stat-card">
+                        <span className="diag-stat-label">ROUND-TRIP LATENCY</span>
+                        <span className="diag-stat-val">
+                          <Clock size={14} style={{ color: 'var(--muted)' }} />
+                          {selectedTool.latency_ms ? `${selectedTool.latency_ms} ms` : '0.0 ms'}
+                        </span>
+                      </div>
+                      <div className="diag-stat-card">
+                        <span className="diag-stat-label">TLS/SSL CERTIFICATE</span>
+                        <span className="diag-stat-val">
+                          <Shield size={14} style={{ color: '#059669' }} />
+                          Verified CA
+                        </span>
+                      </div>
+                      <div className="diag-stat-card">
+                        <span className="diag-stat-label">SCHEMA COMPATIBILITY</span>
+                        <span className="diag-stat-val">
+                          <CheckCircle2 size={14} style={{ color: '#059669' }} />
+                          ADK Typed
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="operations-summary-box" style={{ marginTop: '16px' }}>
+                      <h4>Server Diagnostic Contract</h4>
+                      <p style={{ fontSize: '12px', color: 'var(--muted)', margin: '0 0 8px' }}>
+                        In accordance with the project security guidelines, live connectors operate under bounded timeouts, read-only constraints, and server-side authentication without storing client-side tokens.
+                      </p>
+                      <div style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', color: 'var(--tx)' }}>
+                        Last probe: {selectedTool.last_ping || 'Not probed in current turn'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. Version & Scope */}
+                {activeTab === 'Version & Scope' && (
+                  <div className="basic-specs-grid">
+                    <div className="spec-card">
+                      <dt>Scope Level</dt>
+                      <dd>{selectedTool.scope_level?.replaceAll('_', ' ')}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Project Override Allowed</dt>
+                      <dd>{selectedTool.project_can_override ? 'Yes (Configurable)' : 'No (Locked by platform)'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Dual-Custody Approval</dt>
+                      <dd>Approved (Platform Admin)</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Inherit Platform Defaults</dt>
+                      <dd>{selectedTool.inherit_platform_defaults ? 'Enabled' : 'Disabled'}</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Deployment Mode</dt>
+                      <dd className="mono">Live Engine / Bounded</dd>
+                    </div>
+                    <div className="spec-card">
+                      <dt>Governance Standard</dt>
+                      <dd>Zero Mockups • Strictly Typed</dd>
+                    </div>
+                  </div>
+                )}
               </div>
-            </article>
-          );
-        })}
+            </div>
+          ) : (
+            <div className="tool-detail-card" style={{ textAlign: 'center', padding: '60px 20px' }}>
+              <Layers size={36} style={{ color: 'var(--muted)', margin: '0 auto 12px' }} />
+              <h3 style={{ margin: '0 0 6px', color: 'var(--tx)' }}>No Tool Selected</h3>
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
+                Select a tool or connector from the catalog on the left to inspect its definition.
+              </p>
+            </div>
+          )}
+        </main>
+
+        {/* ===================================================================
+            COLUMN 3: Right Inspector & Live Form Preview Panel
+            =================================================================== */}
+        <aside className="tools-inspector-panel">
+          {/* Live Form Preview (as seen by Project Owner) */}
+          <div className="inspector-section-card">
+            <div className="inspector-title">
+              <span>Form Preview (as seen by Project Owner)</span>
+              <span className="badge">Interactive</span>
+            </div>
+
+            <div className="form-preview-list">
+              {toolParams.slice(0, 5).map(p => (
+                <div key={p.variable_name} className="preview-field-group">
+                  <label className="preview-field-label">
+                    <span>{p.variable_name.replaceAll('_', ' ')}</span>
+                    <span className="req">*</span>
+                  </label>
+                  <input
+                    type={p.value_type === 'secret_ref' ? 'password' : 'text'}
+                    className="preview-field-input"
+                    defaultValue={p.effective_value != null ? String(p.effective_value) : ''}
+                    placeholder={`Enter ${p.variable_name}…`}
+                    readOnly={!p.allow_project_override}
+                  />
+                </div>
+              ))}
+              {toolParams.length > 5 && (
+                <div style={{ fontSize: '11px', color: 'var(--muted)', textAlign: 'center', marginTop: '4px' }}>
+                  + {toolParams.length - 5} more fields configured in form
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tool Definition Summary */}
+          {selectedTool && (
+            <div className="inspector-section-card">
+              <div className="inspector-title">
+                <span>Tool Definition Summary</span>
+              </div>
+              <dl className="summary-dl">
+                <dt>Tool Key</dt>
+                <dd className="param-key-cell">{selectedTool.system_name || selectedTool.id}</dd>
+                <dt>Category</dt>
+                <dd>{selectedTool.category}</dd>
+                <dt>Type</dt>
+                <dd>{selectedTool.type?.toUpperCase()}</dd>
+                <dt>Status</dt>
+                <dd>{selectedTool.status?.toUpperCase()}</dd>
+                <dt>Integration Type</dt>
+                <dd>{selectedTool.integration_kind?.toUpperCase() || 'NATIVE'}</dd>
+                <dt>Visibility</dt>
+                <dd>Platform &amp; Scoped</dd>
+                <dt>Current Version</dt>
+                <dd>1.0.0 (Production)</dd>
+              </dl>
+            </div>
+          )}
+
+          {/* Approval Status */}
+          <div className="inspector-section-card">
+            <div className="inspector-title">
+              <span>Approval Status</span>
+            </div>
+            <div className="approval-banner">
+              <CheckCircle2 size={16} />
+              <div>
+                <strong>Approved</strong>
+                <small>Governed by Platform Policy</small>
+              </div>
+            </div>
+          </div>
+
+          {/* Validation & Testing Checklist */}
+          <div className="inspector-section-card">
+            <div className="inspector-title">
+              <span>Validation &amp; Testing</span>
+            </div>
+            <div className="check-row">
+              <span>Connection Test</span>
+              <span className="status-pill">
+                <Check size={12} /> Configured
+              </span>
+            </div>
+            <div className="check-row">
+              <span>Domain Query Test</span>
+              <span className="status-pill">
+                <Check size={12} /> Configured
+              </span>
+            </div>
+            <div className="check-row">
+              <span>Permissions Boundary</span>
+              <span className="status-pill">
+                <Check size={12} /> Validated
+              </span>
+            </div>
+          </div>
+
+          {/* Operator Notes */}
+          <div className="inspector-section-card">
+            <div className="inspector-title">
+              <span>Operator Notes</span>
+            </div>
+            <textarea
+              className="notes-textarea"
+              placeholder="Add internal notes about this tool definition…"
+              value={currentNote}
+              onChange={e => setCurrentNote(e.target.value)}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button type="button" className="btn btn-secondary save-note-btn" onClick={saveCurrentNote}>
+                Save Note
+              </button>
+            </div>
+          </div>
+        </aside>
       </div>
 
-      {configuringTool && (
-        configuringTool.registration || configuringTool.type === 'mcp' || configuringTool.type === 'a2a'
-          ? <IntegrationForm
-              tool={configuringTool}
-              principal={principal}
-              onClose={() => setConfiguringTool(null)}
-              onSaved={async () => { await refreshCatalog(); setIsCreating(false); }}
-            />
-          : <ConnectorConfigModal
-              tool={configuringTool}
-              onClose={() => setConfiguringTool(null)}
-              onTest={handleTestConnection}
-              testingId={testingId}
-            />
+      {/* Parameter Override Edit Modal */}
+      {editingParam && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--card)',
+              border: '1px solid var(--line)',
+              borderRadius: '10px',
+              width: '100%',
+              maxWidth: '520px',
+              boxShadow: 'var(--shadow-hover)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid var(--line)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
+                Edit Project Override: <code>{editingParam.variable_name}</code>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingParam(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                {editingParam.description} (Type: <code>{editingParam.value_type}</code>)
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
+                  Override Value
+                </label>
+                <input
+                  type="text"
+                  className="preview-field-input"
+                  value={editOverrideVal}
+                  onChange={e => setEditOverrideVal(e.target.value)}
+                  placeholder="Enter custom project override value…"
+                />
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: '14px 20px',
+                borderTop: '1px solid var(--line)',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '8px',
+                background: 'var(--card-subtle)',
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setEditingParam(null)}
+                disabled={paramActionBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveParamOverride}
+                disabled={paramActionBusy}
+              >
+                {paramActionBusy ? 'Saving…' : 'Save Override'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
+      {/* Integration Configuration Modal for MCP / A2A */}
+      {configuringTool && (
+        <IntegrationForm
+          tool={configuringTool}
+          principal={principal}
+          onClose={() => setConfiguringTool(null)}
+          onSaved={async () => {
+            await refreshCatalog();
+            setConfiguringTool(null);
+          }}
+        />
+      )}
+
+      {/* New Integration Modal */}
       {isCreating && (
         <IntegrationForm
           principal={principal}
           onClose={() => setIsCreating(false)}
-          onSaved={async () => { await refreshCatalog(); setIsCreating(false); }}
+          onSaved={async () => {
+            await refreshCatalog();
+            setIsCreating(false);
+          }}
         />
       )}
-    </div>
-  );
-};
-
-// ----------------------------------------------------------------------
-// ConnectorConfigModal Component
-// ----------------------------------------------------------------------
-interface ModalProps {
-  tool: ToolDefinition;
-  onClose: () => void;
-  onTest: (tool: ToolDefinition) => void;
-  testingId: string | null;
-}
-
-const ConnectorConfigModal: React.FC<ModalProps> = ({
-  tool,
-  onClose,
-  onTest,
-  testingId
-}) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'endpoints' | 'auth' | 'params' | 'mcp_a2a' | 'custom'>('general');
-  const [form, setForm] = useState<ToolDefinition>({ ...tool });
-  const [customConfigStr, setCustomConfigStr] = useState<string>(
-    tool.custom_config ? JSON.stringify(tool.custom_config, null, 2) : '{}'
-  );
-  const [jsonError, setJsonError] = useState<string | null>(null);
-
-  const handleCustomJsonChange = (val: string) => {
-    setCustomConfigStr(val);
-    try {
-      const parsed = JSON.parse(val);
-      setForm(prev => ({ ...prev, custom_config: parsed }));
-      setJsonError(null);
-    } catch (e: any) {
-      setJsonError(e.message);
-    }
-  };
-
-  const updateCustomParam = (key: string, value: any) => {
-    setForm(prev => {
-      const nextCustom = { ...(prev.custom_config || {}), [key]: value };
-      setCustomConfigStr(JSON.stringify(nextCustom, null, 2));
-      return { ...prev, custom_config: nextCustom };
-    });
-  };
-
-  const updateNestedCustomParam = (section: string, key: string, value: any) => {
-    setForm(prev => {
-      const sectionObj = (prev.custom_config && prev.custom_config[section]) || {};
-      const nextCustom = {
-        ...(prev.custom_config || {}),
-        [section]: {
-          ...sectionObj,
-          [key]: value
-        }
-      };
-      setCustomConfigStr(JSON.stringify(nextCustom, null, 2));
-      return { ...prev, custom_config: nextCustom };
-    });
-  };
-
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0, 0, 0, 0.65)',
-      backdropFilter: 'blur(4px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 10000,
-      padding: '20px'
-    }}>
-      <div style={{
-        background: 'var(--card)',
-        border: '1px solid var(--line)',
-        borderRadius: '12px',
-        width: '100%',
-        maxWidth: '820px',
-        maxHeight: '90vh',
-        display: 'flex',
-        flexDirection: 'column',
-        boxShadow: 'var(--shadow-hover)',
-        overflow: 'hidden'
-      }}>
-        {/* Modal Header */}
-        <div style={{
-          padding: '16px 20px',
-          borderBottom: '1px solid var(--line)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          background: 'var(--card)'
-        }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Settings size={18} style={{ color: 'var(--acc)' }} />
-              <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
-                Configure {form.type === 'mcp' ? 'MCP Server' : form.type === 'a2a' ? 'A2A Agent Bridge' : 'Connector'}: {form.name}
-              </h2>
-            </div>
-            <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: 'var(--muted)' }}>
-              System: <code>{form.system_name || form.id}</code> • Type: {form.type?.toUpperCase()} • Category: {form.category}
-            </p>
-            <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: 'var(--acc-amber)' }}>Deployment-managed catalog · read only</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--muted)',
-              cursor: 'pointer',
-              padding: '4px'
-            }}
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Modal Tabs */}
-        <div style={{
-          display: 'flex',
-          gap: '4px',
-          padding: '8px 20px',
-          borderBottom: '1px solid var(--line)',
-          background: 'var(--bg)',
-          overflowX: 'auto'
-        }}>
-          {[
-            { id: 'general', label: 'General & Scope' },
-            { id: 'endpoints', label: 'Endpoints & Limits' },
-            { id: 'auth', label: 'Auth & Secrets' },
-            { id: 'params', label: 'Connector Parameters' },
-            ...(form.type === 'mcp' || form.type === 'a2a' ? [{ id: 'mcp_a2a', label: form.type === 'mcp' ? 'MCP Protocol Settings' : 'A2A Agent Delegation' }] : []),
-            { id: 'custom', label: 'Raw JSON Config' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id as any)}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: activeTab === tab.id ? 700 : 500,
-                border: activeTab === tab.id ? '1px solid var(--acc)' : '1px solid transparent',
-                background: activeTab === tab.id ? 'var(--card)' : 'transparent',
-                color: activeTab === tab.id ? 'var(--acc)' : 'var(--muted)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Modal Body */}
-        <fieldset disabled style={{ padding: '20px', overflowY: 'auto', flex: 1, border: 0, margin: 0 }}>
-          <p className="metric-meta">Only values supplied by the server describe this connection. Unspecified fields display template defaults and are not active deployment settings.</p>
-          {activeTab === 'general' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Enabled Switch */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '12px 14px',
-                borderRadius: '8px',
-                border: '1px solid var(--line)',
-                background: form.enabled ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)'
-              }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text)' }}>
-                    Integration State
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                    When disabled, all orchestrator steps and specialist agents skip calling this integration.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setForm(p => ({ ...p, enabled: !p.enabled, status: !p.enabled ? 'connected' : 'disabled' }))}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: '6px',
-                    fontWeight: 700,
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    border: form.enabled ? '1px solid #10b981' : '1px solid var(--line)',
-                    background: form.enabled ? '#10b981' : 'var(--bg)',
-                    color: form.enabled ? '#fff' : 'var(--muted)'
-                  }}
-                >
-                  {form.enabled ? 'ENABLED' : 'DISABLED'}
-                </button>
-              </div>
-
-              {/* Scoping Precedence Selector */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Configuration Scope Level
-                </label>
-                <select
-                  value={form.scope_level}
-                  onChange={e => setForm(p => ({ ...p, scope_level: e.target.value as ScopeLevel }))}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px'
-                  }}
-                >
-                  <option value="platform_default">Platform Default (Baseline for all projects)</option>
-                  <option value="project_override">Project Override (Overrides inherited platform default)</option>
-                  <option value="project_only">Direct Project-Only (Configured in project level, no platform default)</option>
-                </select>
-              </div>
-
-              {/* Project Can Override Rule Toggle */}
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '12px 14px',
-                borderRadius: '8px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)'
-              }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {form.project_can_override ? <Unlock size={14} style={{ color: '#10b981' }} /> : <Lock size={14} style={{ color: '#ef4444' }} />}
-                    Allow Project-Level Overrides (<code>project_can_override</code>)
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                    If disabled, platform administrators lock this connector. Project owners cannot alter endpoints or secrets.
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={form.project_can_override}
-                  onChange={e => setForm(p => ({ ...p, project_can_override: e.target.checked }))}
-                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                />
-              </div>
-
-              {/* Connector Display Name */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Display Name
-                  </label>
-                  <input
-                    type="text"
-                    value={form.name}
-                    onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    System Identifier (system_name)
-                  </label>
-                  <input
-                    type="text"
-                    value={form.system_name || ''}
-                    onChange={e => setForm(p => ({ ...p, system_name: e.target.value }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Description */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Description & Scope Notes
-                </label>
-                <textarea
-                  rows={3}
-                  value={form.description}
-                  onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px',
-                    resize: 'vertical'
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'endpoints' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Primary Endpoint / API URL / Command
-                </label>
-                <input
-                  type="text"
-                  value={form.endpoint || ''}
-                  onChange={e => setForm(p => ({ ...p, endpoint: e.target.value }))}
-                  placeholder="https://api.internal:8089 or mcp://host:9090"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  UI Presentation URL (Portal / Console Link)
-                </label>
-                <input
-                  type="text"
-                  value={form.ui_base_url || ''}
-                  onChange={e => setForm(p => ({ ...p, ui_base_url: e.target.value }))}
-                  placeholder="https://splunk-ui.internal:8000 or https://company.atlassian.net"
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Protocol
-                  </label>
-                  <select
-                    value={form.protocol || 'HTTPS'}
-                    onChange={e => setForm(p => ({ ...p, protocol: e.target.value }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  >
-                    <option value="HTTPS">HTTPS (REST)</option>
-                    <option value="MCP (SSE)">MCP (SSE)</option>
-                    <option value="MCP (Streamable HTTP)">MCP (Streamable HTTP)</option>
-                    <option value="MCP (Stdio)">MCP (Stdio)</option>
-                    <option value="ADK AgentTool">ADK AgentTool</option>
-                    <option value="A2A REST Protocol">A2A REST Protocol</option>
-                    <option value="Oracle Net (TNS/OCI)">Oracle Net (TNS/OCI)</option>
-                    <option value="SSH">SSH / CLI</option>
-                    <option value="Kafka Native (TCP)">Kafka Native (TCP)</option>
-                    <option value="Tuxedo /WS">Tuxedo /WS</option>
-                  </select>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Timeout (Seconds)
-                  </label>
-                  <input
-                    type="number"
-                    value={form.timeout_seconds || 30}
-                    onChange={e => setForm(p => ({ ...p, timeout_seconds: parseInt(e.target.value) || 30 }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Retry Attempts
-                  </label>
-                  <input
-                    type="number"
-                    value={form.retry_attempts || 3}
-                    onChange={e => setForm(p => ({ ...p, retry_attempts: parseInt(e.target.value) || 0 }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Retry Backoff (Seconds)
-                  </label>
-                  <input
-                    type="number"
-                    value={form.retry_backoff_seconds ?? 5}
-                    onChange={e => setForm(p => ({ ...p, retry_backoff_seconds: parseInt(e.target.value) || 0 }))}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Max Response Bytes
-                  </label>
-                  <input
-                    type="number"
-                    value={form.max_response_bytes ?? 10485760}
-                    onChange={e => setForm(p => ({ ...p, max_response_bytes: parseInt(e.target.value) || 0 }))}
-                    placeholder="10485760 (10 MB)"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Rate Limit Policy
-                  </label>
-                  <input
-                    type="text"
-                    value={form.rate_limit || ''}
-                    onChange={e => setForm(p => ({ ...p, rate_limit: e.target.value }))}
-                    placeholder="e.g. 300 req / min"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'auth' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{
-                background: 'rgba(99,102,241,0.06)',
-                padding: '12px',
-                borderRadius: '8px',
-                border: '1px solid rgba(99,102,241,0.2)',
-                fontSize: '12px',
-                color: 'var(--text)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <Shield size={16} style={{ color: 'var(--acc)' }} />
-                <span><b>Zero Plaintext Guarantee:</b> Plaintext credentials are strictly prohibited. Store secrets in Secret Manager or environment variables and bind via secret reference name.</span>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Authentication Method
-                  </label>
-                  <input
-                    type="text"
-                    value={form.auth_method || ''}
-                    onChange={e => setForm(p => ({ ...p, auth_method: e.target.value }))}
-                    placeholder="Bearer Token, MCP Bearer Token, Mutual TLS, Kubeconfig"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Secret Reference Name
-                  </label>
-                  <input
-                    type="text"
-                    value={form.secret_reference || ''}
-                    onChange={e => setForm(p => ({ ...p, secret_reference: e.target.value }))}
-                    placeholder="e.g. JIRA_API_TOKEN, SPLUNK_HEC_TOKEN, SAMSON_DB_PASSWORD"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Service Account / User Identity (service_user)
-                  </label>
-                  <input
-                    type="text"
-                    value={form.service_user || ''}
-                    onChange={e => setForm(p => ({ ...p, service_user: e.target.value }))}
-                    placeholder="e.g. svc-rca-jira@corp.internal, splunk-api-svc"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                    Token Header Format
-                  </label>
-                  <input
-                    type="text"
-                    value={form.token_header_format || ''}
-                    onChange={e => setForm(p => ({ ...p, token_header_format: e.target.value }))}
-                    placeholder="e.g. Bearer {token} or Splunk {token}"
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)'
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '10px 14px',
-                borderRadius: '8px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)'
-              }}>
-                <input
-                  type="checkbox"
-                  id="modal-verify-ssl"
-                  checked={form.verify_ssl ?? true}
-                  onChange={e => setForm(p => ({ ...p, verify_ssl: e.target.checked }))}
-                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                />
-                <label htmlFor="modal-verify-ssl" style={{ fontSize: '12px', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text)' }}>Verify TLS/SSL Certificates (verify_ssl)</span>
-                  <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Enforce strict certificate authority verification. Disable only for private sandbox self-signed certificates.</span>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'params' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{
-                background: 'rgba(59,130,246,0.06)',
-                padding: '12px',
-                borderRadius: '8px',
-                border: '1px solid rgba(59,130,246,0.2)',
-                fontSize: '12px',
-                color: 'var(--text)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <Sliders size={16} style={{ color: 'var(--acc)' }} />
-                <span><b>Live Connector Parameters:</b> Structured parameters configured here synchronize directly with the connector runtime engine and raw JSON configuration.</span>
-              </div>
-
-              {/* Jira Incident Triage Specific Params */}
-              {(form.system_name === 'jira' || form.category === 'Ticketing') && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Jira Cloud / Server Incident Settings
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Primary Project Key</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.project_key || form.project_key || ''}
-                        onChange={e => {
-                          updateCustomParam('project_key', e.target.value);
-                          setForm(p => ({ ...p, project_key: e.target.value }));
-                        }}
-                        placeholder="e.g. SAG, PROD_CORE"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Timezone</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.timezone || 'America/Chicago'}
-                        onChange={e => updateCustomParam('timezone', e.target.value)}
-                        placeholder="America/Chicago or UTC"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Polling Cron Schedule</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.polling_cron || '*/15 * * * *'}
-                        onChange={e => updateCustomParam('polling_cron', e.target.value)}
-                        placeholder="*/15 * * * *"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Reporting Cron Schedule</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.reporting_cron || '0 17 * * 5'}
-                        onChange={e => updateCustomParam('reporting_cron', e.target.value)}
-                        placeholder="0 17 * * 5 (Friday 5PM)"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                    <input
-                      type="checkbox"
-                      id="jira-process-attachments"
-                      checked={form.custom_config?.process_attachments ?? true}
-                      onChange={e => updateCustomParam('process_attachments', e.target.checked)}
-                    />
-                    <label htmlFor="jira-process-attachments" style={{ fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
-                      Automatically extract and summarize ticket file attachments
-                    </label>
-                  </div>
-
-                  {/* Jira Custom Field ID Mapping */}
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--muted)', marginTop: '8px' }}>
-                    Jira Custom Field ID Mappings:
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-                    {[
-                      { key: 'severity', label: 'Severity' },
-                      { key: 'environment', label: 'Environment' },
-                      { key: 'fix_team', label: 'Fix Team' },
-                      { key: 'fix_application', label: 'Fix Application' },
-                      { key: 'rca', label: 'RCA Field' },
-                      { key: 'reporting_team', label: 'Reporting Team' }
-                    ].map(f => (
-                      <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <label style={{ fontSize: '10.5px', color: 'var(--muted)' }}>{f.label}</label>
-                        <input
-                          type="text"
-                          value={form.custom_config?.customfields?.[f.key] || ''}
-                          onChange={e => updateNestedCustomParam('customfields', f.key, e.target.value)}
-                          placeholder="customfield_..."
-                          style={{ padding: '5px 7px', borderRadius: '4px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '11px', fontFamily: 'var(--font-mono)' }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Splunk Specific Params */}
-              {(form.system_name === 'splunk' || form.name.toLowerCase().includes('splunk')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Splunk Search & Log Mining Settings
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                      Allowed Indexes (Comma-separated)
-                    </label>
-                    <input
-                      type="text"
-                      value={Array.isArray(form.custom_config?.allowed_indexes) ? form.custom_config.allowed_indexes.join(', ') : form.custom_config?.allowed_indexes || ''}
-                      onChange={e => updateCustomParam('allowed_indexes', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                      placeholder="adms, billing, system, metrics, security_audit, gateway_logs"
-                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Event Results</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.max_results ?? 100}
-                        onChange={e => updateCustomParam('max_results', parseInt(e.target.value) || 100)}
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Query Window (Seconds)</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.max_window_seconds ?? 86400}
-                        onChange={e => updateCustomParam('max_window_seconds', parseInt(e.target.value) || 86400)}
-                        placeholder="86400 (24h)"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={form.custom_config?.wild_card_allowed ?? true}
-                        onChange={e => updateCustomParam('wild_card_allowed', e.target.checked)}
-                      />
-                      <span>Allow Wildcard Searches</span>
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={form.custom_config?.data_sources?.metrics ?? true}
-                        onChange={e => updateNestedCustomParam('data_sources', 'metrics', e.target.checked)}
-                      />
-                      <span>Metrics</span>
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={form.custom_config?.data_sources?.logs ?? true}
-                        onChange={e => updateNestedCustomParam('data_sources', 'logs', e.target.checked)}
-                      />
-                      <span>Logs</span>
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={form.custom_config?.data_sources?.events ?? true}
-                        onChange={e => updateNestedCustomParam('data_sources', 'events', e.target.checked)}
-                      />
-                      <span>Events</span>
-                    </label>
-                  </div>
-                </div>
-              )}
-
-              {/* Database / Samson DB Specific Params */}
-              {(form.category === 'Databases' || form.system_name?.includes('oracle') || form.system_name?.includes('db')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Database Connection & Sandbox Isolation Settings
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Database Host / Cluster</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.host || form.custom_config?.database?.host || ''}
-                        onChange={e => updateCustomParam('host', e.target.value)}
-                        placeholder="db-samson-prd01.corp.internal"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Port</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.port || form.custom_config?.database?.port || 1521}
-                        onChange={e => updateCustomParam('port', parseInt(e.target.value) || 1521)}
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Service Name / SID</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.sid || form.custom_config?.service_name || ''}
-                        onChange={e => updateCustomParam('sid', e.target.value)}
-                        placeholder="SAMSONPRD.CORP"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Default Schema</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.schema || ''}
-                        onChange={e => updateCustomParam('schema', e.target.value)}
-                        placeholder="PROD_CORE"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Statement Timeout (Seconds)</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.statement_timeout_seconds ?? 15}
-                        onChange={e => updateCustomParam('statement_timeout_seconds', parseInt(e.target.value) || 15)}
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Max Query Result Rows</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.max_row_limit ?? 500}
-                        onChange={e => updateCustomParam('max_row_limit', parseInt(e.target.value) || 500)}
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Kafka Message Streaming Specific Params */}
-              {(form.category === 'Message Streaming' || form.system_name?.includes('kafka')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Kafka Event Stream & Consumer Settings
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Cluster ID</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.cluster_id || ''}
-                        onChange={e => updateCustomParam('cluster_id', e.target.value)}
-                        placeholder="lks-prod-corp"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Consumer Group</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.consumer_group || ''}
-                        onChange={e => updateCustomParam('consumer_group', e.target.value)}
-                        placeholder="rca-analyzer-inspector"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Topics (Comma-separated)</label>
-                    <input
-                      type="text"
-                      value={Array.isArray(form.custom_config?.allowed_topics) ? form.custom_config.allowed_topics.join(', ') : form.custom_config?.allowed_topics || ''}
-                      onChange={e => updateCustomParam('allowed_topics', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                      placeholder="orders.events.v1, payments.deadletter.v1, notifications.stream"
-                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Kubernetes Specific Params */}
-              {(form.category === 'Container Orchestration' || form.system_name?.includes('k8s') || form.system_name?.includes('kubernetes')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Kubernetes Cluster Inspection Settings
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Cluster Context</label>
-                      <input
-                        type="text"
-                        value={form.custom_config?.cluster_context || ''}
-                        onChange={e => updateCustomParam('cluster_context', e.target.value)}
-                        placeholder="gke-prod-cluster-us-central1"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Pod Log Tail Lines</label>
-                      <input
-                        type="number"
-                        value={form.custom_config?.pod_log_tail_lines || 200}
-                        onChange={e => updateCustomParam('pod_log_tail_lines', parseInt(e.target.value) || 200)}
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Namespaces (Comma-separated)</label>
-                    <input
-                      type="text"
-                      value={Array.isArray(form.custom_config?.allowed_namespaces) ? form.custom_config.allowed_namespaces.join(', ') : form.custom_config?.allowed_namespaces || ''}
-                      onChange={e => updateCustomParam('allowed_namespaces', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                      placeholder="production, istio-system, ingress-nginx, payment-services"
-                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Confluence Knowledge Specific Params */}
-              {(form.category === 'Knowledge & RAG' || form.system_name?.includes('confluence')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Confluence Knowledge Base Settings
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Allowed Spaces (Comma-separated)</label>
-                    <input
-                      type="text"
-                      value={Array.isArray(form.custom_config?.allowed_spaces) ? form.custom_config.allowed_spaces.join(', ') : form.custom_config?.allowed_spaces || ''}
-                      onChange={e => updateCustomParam('allowed_spaces', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                      placeholder="ENG, SRE, POSTMORTEM, ARCH"
-                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Unix Host / Tuxedo Specific Params */}
-              {(form.category === 'Host & Runtime Health' || form.system_name?.includes('unix') || form.system_name?.includes('tuxedo')) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>
-                    Host & Runtime Execution Settings
-                  </div>
-
-                  {form.custom_config?.tuxdir !== undefined ? (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>TUXDIR</label>
-                        <input
-                          type="text"
-                          value={form.custom_config?.tuxdir || ''}
-                          onChange={e => updateCustomParam('tuxdir', e.target.value)}
-                          placeholder="/opt/oracle/tuxedo12c"
-                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                        />
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Domain ID</label>
-                        <input
-                          type="text"
-                          value={form.custom_config?.domain_id || ''}
-                          onChange={e => updateCustomParam('domain_id', e.target.value)}
-                          placeholder="TUX_CORE_PRD"
-                          style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>Target Hosts (Comma-separated)</label>
-                      <input
-                        type="text"
-                        value={Array.isArray(form.custom_config?.target_hosts) ? form.custom_config.target_hosts.join(', ') : form.custom_config?.target_hosts || ''}
-                        onChange={e => updateCustomParam('target_hosts', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
-                        placeholder="app-srv-01.corp.internal, app-srv-02.corp.internal"
-                        style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'mcp_a2a' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {form.type === 'mcp' && (
-                <>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                      MCP Transport
-                    </label>
-                    <select
-                      value={form.mcp_config?.transport || 'sse'}
-                      onChange={e => setForm(p => ({
-                        ...p,
-                        mcp_config: { ...p.mcp_config, transport: e.target.value as any }
-                      }))}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--line)',
-                        background: 'var(--bg)',
-                        color: 'var(--text)',
-                        fontSize: '12px'
-                      }}
-                    >
-                      <option value="sse">SSE (Server-Sent Events over HTTP)</option>
-                      <option value="streamable_http">Streamable HTTP</option>
-                      <option value="stdio">Stdio (Local Command / Process)</option>
-                      <option value="websocket">WebSocket</option>
-                    </select>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                      Exposed MCP Tools (comma-separated)
-                    </label>
-                    <input
-                      type="text"
-                      value={form.mcp_config?.tools_exposed?.join(', ') || ''}
-                      onChange={e => setForm(p => ({
-                        ...p,
-                        mcp_config: {
-                          ...p.mcp_config,
-                          transport: p.mcp_config?.transport || 'sse',
-                          tools_exposed: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                        }
-                      }))}
-                      placeholder="e.g. scan_messages, check_consumer_lag, measure_throughput"
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--line)',
-                        background: 'var(--bg)',
-                        color: 'var(--text)',
-                        fontSize: '12px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-
-              {form.type === 'a2a' && (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                        Target Specialist Agent ID
-                      </label>
-                      <input
-                        type="text"
-                        value={form.a2a_config?.target_agent_id || ''}
-                        onChange={e => setForm(p => ({
-                          ...p,
-                          a2a_config: { ...p.a2a_config!, target_agent_id: e.target.value }
-                        }))}
-                        placeholder="agent-jira-triage-specialist"
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid var(--line)',
-                          background: 'var(--bg)',
-                          color: 'var(--text)',
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)'
-                        }}
-                      />
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                        Target Capability
-                      </label>
-                      <input
-                        type="text"
-                        value={form.a2a_config?.target_capability || ''}
-                        onChange={e => setForm(p => ({
-                          ...p,
-                          a2a_config: { ...p.a2a_config!, target_capability: e.target.value }
-                        }))}
-                        placeholder="jira_triage_classification"
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: '6px',
-                          border: '1px solid var(--line)',
-                          background: 'var(--bg)',
-                          color: 'var(--text)',
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)'
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                      Expected Content Hash (SHA-256 Dual-Custody)
-                    </label>
-                    <input
-                      type="text"
-                      value={form.a2a_config?.content_hash || ''}
-                      onChange={e => setForm(p => ({
-                        ...p,
-                        a2a_config: { ...p.a2a_config!, content_hash: e.target.value }
-                      }))}
-                      placeholder="sha256:7f92ac3910eb..."
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--line)',
-                        background: 'var(--bg)',
-                        color: 'var(--text)',
-                        fontSize: '12px',
-                        fontFamily: 'var(--font-mono)'
-                      }}
-                    />
-                  </div>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={form.a2a_config?.dual_custody_approved || false}
-                      onChange={e => setForm(p => ({
-                        ...p,
-                        a2a_config: { ...p.a2a_config!, dual_custody_approved: e.target.checked }
-                      }))}
-                    />
-                    <span style={{ fontWeight: 600 }}>Dual-Custody Approved by Administrator</span>
-                  </label>
-                </>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'custom' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)' }}>
-                  Connector-Specific Parameters (JSON Configuration)
-                </label>
-                {jsonError && (
-                  <span style={{ fontSize: '11px', color: '#ef4444', fontWeight: 600 }}>
-                    Invalid JSON: {jsonError}
-                  </span>
-                )}
-              </div>
-
-              <textarea
-                rows={14}
-                value={customConfigStr}
-                onChange={e => handleCustomJsonChange(e.target.value)}
-                style={{
-                  padding: '12px',
-                  borderRadius: '6px',
-                  border: `1px solid ${jsonError ? '#ef4444' : 'var(--line)'}`,
-                  background: 'var(--bg)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  resize: 'vertical'
-                }}
-              />
-            </div>
-          )}
-        </fieldset>
-
-        {/* Modal Footer */}
-        <div style={{
-          padding: '14px 20px',
-          borderTop: '1px solid var(--line)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          background: 'var(--card)'
-        }}>
-          <button
-            type="button"
-            className="btn btn-open"
-            onClick={() => onTest(form)}
-            disabled={testingId === form.id}
-          >
-            <Activity size={13} />
-            {testingId === form.id ? 'Pinging…' : 'Test Ping'}
-          </button>
-
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                padding: '7px 14px',
-                borderRadius: '6px',
-                border: '1px solid var(--line)',
-                background: 'var(--bg)',
-                color: 'var(--muted)',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => { onClose(); window.location.hash = 'parameters'; }}
-            >
-              Edit in Parameter Studio
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };

@@ -26,6 +26,7 @@ class Settings(BaseModel):
     auth_public_key: str = ""
     integration_allowed_hosts: str = ""
     integration_secret_references: str = ""
+    mcp_stdio_allowlist: str = "[]"
     principals: dict[str, UserPrincipal] = Field(default_factory=dict)
     database_url: SecretStr = SecretStr("sqlite+aiosqlite:///./data/rca.db")
     session_database_url: SecretStr = SecretStr(
@@ -94,6 +95,7 @@ class Settings(BaseModel):
             "auth_public_key",
             "integration_allowed_hosts",
             "integration_secret_references",
+            "mcp_stdio_allowlist",
             "database_url",
             "session_database_url",
             "optimization_tracking_uri",
@@ -114,10 +116,20 @@ class Settings(BaseModel):
         values["auth_public_key"] = str(values.get("auth_public_key", "")).replace(
             "\\n", "\n"
         )
-        values["principals"] = {
-            subject: UserPrincipal(subject=subject, **member)
-            for subject, member in members.items()
+        legacy_role_map = {
+            "TENANT_ADMIN": "PROJECT_OWNER",
+            "OPERATOR": "PROJECT_ANALYST",
+            "AUDITOR": "PROJECT_VIEWER",
+            "SKILL_AUTHOR": "PROJECT_MANAGER",
+            "GENERIC_VIEWER": "GENERIC_USER",
         }
+        normalized_principals = {}
+        for subject, member in members.items():
+            m = dict(member)
+            if "roles" in m:
+                m["roles"] = [legacy_role_map.get(r, r) for r in m["roles"]]
+            normalized_principals[subject] = UserPrincipal(subject=subject, **m)
+        values["principals"] = normalized_principals
         return cls.model_validate(values)
 
     def artifact_uri(self, kind: ArtifactKind) -> str:

@@ -1,6 +1,7 @@
 """Per-run tool policy, bounded evidence capture, and output redaction."""
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -25,6 +26,8 @@ class RunGovernance:
         self.evidence: list[dict] = []
         self.failures: list[str] = []
         self.truncated = False
+        self.run_events = None
+        self.tool_started = {}
 
     async def check_tool_budget(self):
         self.tool_calls += 1
@@ -66,7 +69,7 @@ class RunGovernance:
             },
         }
         if request_types and not request_types.intersection(
-            permitted_intents.get(action, set())
+            permitted_intents.get(action, {"root_cause_analysis", "tool_data_request", "metrics", "sanity_check", "project_knowledge", "follow_up", "rerun"})
         ):
             raise PermissionError(f"Tool action is not relevant to the request intent: {action}")
         ctx = AuthorizationContext(
@@ -75,7 +78,7 @@ class RunGovernance:
             project_id=self.contract.project_id,
             capability_id=self.contract.capability,
             action=action,
-            resource_type="incident" if tool.name == "get_ticket" else "logs",
+            resource_type=action.split(".", 1)[0],
             resource_id=str(args.get("ticket_id", self.contract.project_id)),
             environment="PRODUCTION",
             is_mutation=False,
@@ -86,9 +89,20 @@ class RunGovernance:
             PolicyDecisionType.REDACT,
         }:
             raise PermissionError("Tool action denied by policy")
+        if self.run_events:
+            call_id = getattr(tool_context, "function_call_id", None) or tool.name
+            self.tool_started[call_id] = time.perf_counter()
+            await self.run_events.append(self.contract.run_id, self.contract.principal,
+                "tool:" + tool.name, "tool_started", {"call_id": call_id, "arguments": args})
         return None
 
     async def after_tool(self, tool, args, tool_context, tool_response):
+        if self.run_events:
+            call_id = getattr(tool_context, "function_call_id", None) or tool.name
+            elapsed = time.perf_counter() - self.tool_started.pop(call_id, time.perf_counter())
+            await self.run_events.append(self.contract.run_id, self.contract.principal,
+                "tool:" + tool.name, "tool_completed", {"call_id": call_id, "duration_ms": elapsed * 1000,
+                "result": redact(tool_response, max_text=self.settings.max_evidence_chars)})
         if isinstance(tool_response, dict) and "error" in tool_response:
             return redact(tool_response)
         return await self.capture(
@@ -99,6 +113,9 @@ class RunGovernance:
         # Provider messages and exception bodies can contain credential-bearing
         # URLs or raw payloads. Expose only stable names, never exception text.
         self.failures.append(f"{tool.name} did not complete ({type(error).__name__})")
+        if self.run_events:
+            await self.run_events.append(self.contract.run_id, self.contract.principal,
+                "tool:" + tool.name, "tool_failed", {"error_type": type(error).__name__})
         return {
             "error": "The connector operation could not complete. Treat this source as unavailable."
         }

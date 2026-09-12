@@ -57,6 +57,10 @@ class PlatformConfiguration:
                 raise ValueError(
                     "Enabled capability references an unimplemented tool action"
                 )
+            if cap.enabled:
+                declared = set(cap.requires.connectors) | set(cap.optional.connectors)
+                if {action.split(".", 1)[0] for action in cap.allowed_actions} - declared:
+                    raise ValueError("Enabled capability action references an undeclared connector")
         referenced = {cap.model_profile for cap in registry.list_all()}
         referenced.update(registry.inheritance.policy.model_profiles)
         if referenced - profiles.profiles.keys():

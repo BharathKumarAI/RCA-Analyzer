@@ -20,14 +20,23 @@ import {
   ShieldAlert,
   ArrowRight,
   SlidersHorizontal,
-  FileCode
+  FileCode,
+  Edit3,
+  Save
 } from 'lucide-react';
-import { fetchConfig, fetchSystemDiagnostics, testSystemConnection } from '../services/api';
+import {
+  fetchConfig,
+  fetchSystemDiagnostics,
+  testSystemConnection,
+  fetchPlatformSettings,
+  updatePlatformSettings
+} from '../services/api';
 import type {
   Principal,
   SystemDiagnostics,
   SystemHealth,
-  ConnectionTestTargetResult
+  ConnectionTestTargetResult,
+  PlatformSettingsConfig
 } from '../types/api';
 
 interface SettingsProps {
@@ -69,20 +78,63 @@ export function Settings({ principal, health }: SettingsProps) {
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestTargetResult>>({});
   const [copiedEnv, setCopiedEnv] = useState(false);
 
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettingsConfig | null>(null);
+  const [showEditSettingsModal, setShowEditSettingsModal] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({
+    run_timeout_seconds: 120,
+    max_concurrent_runs: 4,
+    max_llm_calls: 10,
+    max_input_chars: 20000,
+    max_context_chars: 50000,
+    retention_days: 30,
+    mode: 'demo',
+  });
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+
   async function refresh() {
     setLoading(true);
     setError(null);
     try {
-      const [nextDiagnostics, nextConfig] = await Promise.all([
+      const [nextDiagnostics, nextConfig, nextSettings] = await Promise.all([
         fetchSystemDiagnostics(),
-        fetchConfig()
+        fetchConfig(),
+        fetchPlatformSettings()
       ]);
       setDiagnostics(nextDiagnostics);
       setConfig(nextConfig);
+      setPlatformSettings(nextSettings);
+      setSettingsForm({
+        run_timeout_seconds: nextSettings.run_timeout_seconds ?? 120,
+        max_concurrent_runs: nextSettings.max_concurrent_runs ?? 4,
+        max_llm_calls: nextSettings.max_llm_calls ?? 10,
+        max_input_chars: nextSettings.max_input_chars ?? 20000,
+        max_context_chars: nextSettings.max_context_chars ?? 50000,
+        retention_days: nextSettings.retention_days ?? 30,
+        mode: nextSettings.mode || 'demo',
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to load settings');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSaveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingSettings(true);
+    setError(null);
+    try {
+      const updated = await updatePlatformSettings(settingsForm);
+      setPlatformSettings(updated);
+      setSettingsSuccess('Platform execution settings saved and applied to runtime!');
+      setShowEditSettingsModal(false);
+      setTimeout(() => setSettingsSuccess(null), 4000);
+      void refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Failed to update platform settings');
+    } finally {
+      setSavingSettings(false);
     }
   }
 
@@ -180,45 +232,58 @@ RCA_INTEGRATION_SECRET_REFERENCES=env://JIRA_API_TOKEN,env://SPLUNK_API_TOKEN
 
   return (
     <div className="view-container">
-      {/* Page Header */}
-      <header className="page-header">
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-            <h1 style={{ margin: 0 }}>Platform <span>Settings</span></h1>
-            <span className="badge badge-active" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Deployment Scope
-            </span>
-          </div>
-          <p className="page-subtitle">
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
+            Platform <span>Settings</span> & Infrastructure
+          </h1>
+          <p className="hero-lede">
             Server-wide infrastructure, persistence engines, MLflow tracking store, and hardware diagnostics. Managed by platform administrators.
           </p>
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip">
+              <span className="dot pulse" /> <b>Scope:</b> {principal.tenant_id} / {principal.project_id}
+            </span>
+            <span className="hero-stat-chip">
+              <b>Mode:</b> {health.mode.toUpperCase()}
+            </span>
+            <span className="hero-stat-chip">
+              <b>Database:</b> {diagnostics?.database?.status || 'Active'}
+            </span>
+            <span className="hero-stat-chip">
+              <b>Role:</b> Deployment Admin
+            </span>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <a
-            className="btn btn-secondary"
-            href="#project-setup"
-            title="Configure project-specific overrides, stage prompts, and capabilities"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-          >
-            <FolderGit2 size={15} /> Project Settings →
-          </a>
-          <button
-            className="btn btn-secondary"
-            onClick={() => void handleRunTest('all')}
-            disabled={loading || testRunning['all']}
-            title="Run diagnostics test on Database, Memory, Storage, MLflow, and Connectors"
-          >
-            <Play size={15} /> {testRunning['all'] ? 'Testing all…' : 'Test All Connections'}
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => void refresh()}
-            disabled={loading}
-          >
-            <RefreshCw size={15} className={loading ? 'spin' : ''} /> {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <a
+              className="btn btn-secondary"
+              href="#project-setup"
+              title="Configure project-specific overrides, stage prompts, and capabilities"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <FolderGit2 size={15} /> Project Settings →
+            </a>
+            <button
+              className="btn btn-secondary"
+              onClick={() => void handleRunTest('all')}
+              disabled={loading || testRunning['all']}
+              title="Run diagnostics test on Database, Memory, Storage, MLflow, and Connectors"
+            >
+              <Play size={15} /> {testRunning['all'] ? 'Testing all…' : 'Test All Connections'}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => void refresh()}
+              disabled={loading}
+            >
+              <RefreshCw size={15} className={loading ? 'spin' : ''} /> {loading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
         </div>
-      </header>
+      </section>
 
       {/* Scope Clarification Alert */}
       <div
@@ -371,15 +436,172 @@ RCA_INTEGRATION_SECRET_REFERENCES=env://JIRA_API_TOKEN,env://SPLUNK_API_TOKEN
                       Deployment-wide parameters and infrastructure secrets configured strictly via server environment.
                     </p>
                   </div>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={handleCopyEnv}
-                    title="Copy full server .env template to clipboard"
-                  >
-                    {copiedEnv ? <Check size={15} style={{ color: 'var(--green, #10b981)' }} /> : <Copy size={15} />}
-                    {copiedEnv ? 'Copied Server .env!' : 'Copy Platform .env Template'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleCopyEnv}
+                      title="Copy full server .env template to clipboard"
+                    >
+                      {copiedEnv ? <Check size={15} style={{ color: 'var(--green, #10b981)' }} /> : <Copy size={15} />}
+                      {copiedEnv ? 'Copied Server .env!' : 'Copy Platform .env Template'}
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => setShowEditSettingsModal(true)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <Edit3 size={15} /> Edit Platform Settings
+                    </button>
+                  </div>
                 </div>
+
+                {settingsSuccess && (
+                  <div className="notice-banner green" style={{ marginBottom: 16 }}>
+                    <CheckCircle2 size={15} /> {settingsSuccess}
+                  </div>
+                )}
+
+                {/* Edit Platform Settings Modal */}
+                {showEditSettingsModal && (
+                  <div
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      background: 'rgba(0,0,0,0.65)',
+                      backdropFilter: 'blur(4px)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      zIndex: 1000,
+                    }}
+                  >
+                    <div
+                      className="card"
+                      style={{
+                        width: 540,
+                        maxWidth: '92vw',
+                        padding: 24,
+                        border: '1px solid var(--line)',
+                        boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+                      }}
+                    >
+                      <h3 style={{ margin: '0 0 6px', fontSize: 17, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Edit3 size={17} style={{ color: 'var(--primary, #3b82f6)' }} /> Edit Platform Settings
+                      </h3>
+                      <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--muted)' }}>
+                        Tune runtime limits, execution timeout boundaries, and concurrency constraints persisted in the platform database.
+                      </p>
+
+                      <form onSubmit={handleSaveSettings}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Run Timeout (Seconds)
+                            </label>
+                            <input
+                              type="number"
+                              min="10"
+                              max="600"
+                              value={settingsForm.run_timeout_seconds}
+                              onChange={e => setSettingsForm(s => ({ ...s, run_timeout_seconds: parseInt(e.target.value, 10) || 10 }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Max Concurrent Runs
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="32"
+                              value={settingsForm.max_concurrent_runs}
+                              onChange={e => setSettingsForm(s => ({ ...s, max_concurrent_runs: parseInt(e.target.value, 10) || 1 }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Max LLM Calls / Run
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="50"
+                              value={settingsForm.max_llm_calls}
+                              onChange={e => setSettingsForm(s => ({ ...s, max_llm_calls: parseInt(e.target.value, 10) || 1 }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Retention (Days)
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="180"
+                              value={settingsForm.retention_days}
+                              onChange={e => setSettingsForm(s => ({ ...s, retention_days: parseInt(e.target.value, 10) || 1 }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Max Input Chars
+                            </label>
+                            <input
+                              type="number"
+                              step="1000"
+                              min="1000"
+                              max="100000"
+                              value={settingsForm.max_input_chars}
+                              onChange={e => setSettingsForm(s => ({ ...s, max_input_chars: parseInt(e.target.value, 10) || 1000 }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            />
+                          </div>
+
+                          <div>
+                            <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                              Execution Mode
+                            </label>
+                            <select
+                              value={settingsForm.mode}
+                              onChange={e => setSettingsForm(s => ({ ...s, mode: e.target.value }))}
+                              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
+                            >
+                              <option value="demo">demo (Offline Simulation)</option>
+                              <option value="live">live (Live Provider Connectors)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline"
+                            onClick={() => setShowEditSettingsModal(false)}
+                            disabled={savingSettings}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="btn btn-primary"
+                            disabled={savingSettings}
+                            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                          >
+                            <Save size={14} /> {savingSettings ? 'Saving...' : 'Save Settings'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
 
                 {/* Platform Readiness Checklist */}
                 <div style={{ background: 'var(--surface, #0c1425)', border: '1px solid var(--line, #22314d)', borderRadius: '6px', padding: '16px', marginBottom: '24px' }}>

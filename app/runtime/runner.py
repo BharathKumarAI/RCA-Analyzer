@@ -92,7 +92,7 @@ class ExecutionRunner:
         )
 
     async def execute(
-        self, principal, request: RunRequest, capability_id: str, idempotency_key=None
+        self, principal, request: RunRequest, capability_id: str, idempotency_key=None, on_created=None
     ):
         if (principal.tenant_id, principal.project_id) != (
             self.settings.tenant_id,
@@ -215,6 +215,13 @@ class ExecutionRunner:
                     for a in approved
                 },
             }
+            workspace = getattr(self, "harness_workspace", None)
+            if workspace:
+                snapshot["harness_bundle"] = await workspace.effective(principal, capability_id)
+            from app.configuration.workflow import available_builtins, default_workflow, graph_view
+            names = available_builtins(capability, self.profiles.resolve(capability.model_profile), runtime["workflow"],
+                capability.allowed_actions, bool(request.attachment_ids), bool(approved))
+            snapshot["resolved_graph"] = graph_view(default_workflow(names, runtime["workflow"].parallel_evidence and effective_settings.parallel_evidence))
             clean_request = RunRequest(
                 text=redact(request.text),
                 chat_id=chat_id,
@@ -253,6 +260,8 @@ class ExecutionRunner:
                 ),
                 time.time() + effective_settings.run_timeout_seconds,
             )
+            if on_created:
+                await on_created(response)
             if not created:
                 await self._save_chat_output(response, principal)
                 return response
@@ -266,6 +275,7 @@ class ExecutionRunner:
                 effective_settings,
                 tool_limit,
             )
+            governance.run_events = getattr(self, "run_events", None)
             span = get_tracer().start_span("rca.investigation")
             from opentelemetry import trace
 
@@ -424,6 +434,19 @@ class ExecutionRunner:
             approved,
             self.model_factory,
         )
+        # Freeze the exact post-preflight topology before the first native event.
+        snapshot = json.loads(contract.model_config_json)
+        snapshot["resolved_graph"] = governance.resolved_graph
+        frozen = contract.model_copy(update={"model_config_json": json.dumps(snapshot, sort_keys=True)})
+        from sqlalchemy import update
+        from app.persistence.store import runs
+        async with self.store.engine.begin() as connection:
+            await connection.execute(update(runs).where(runs.c.run_id == contract.run_id,
+                runs.c.tenant_id == principal.tenant_id, runs.c.project_id == principal.project_id,
+                runs.c.status == "RUNNING").values(contract_json=frozen.model_dump_json(), snapshot_hash=frozen.snapshot_hash))
+        contract = frozen
+        governance.contract = frozen
+        attach_trace_callbacks(root, governance)
         session = await self.session_service.create_session(
             app_name="app",
             user_id=content_hash(
@@ -462,6 +485,13 @@ class ExecutionRunner:
                     stage=event.author,
                     evidence_count=len(governance.evidence),
                 )
+                event_store = getattr(self, "run_events", None)
+                if event_store:
+                    details = {"event_id": event.id, "final": event.is_final_response()}
+                    usage = getattr(event, "usage_metadata", None)
+                    if usage:
+                        details["usage"] = usage.model_dump(mode="json", exclude_none=True)
+                    await event_store.append(contract.run_id, principal, event.author, "agent_event", details)
                 if event.error_code:
                     raise RuntimeError("ADK returned an error event")
                 if (
@@ -532,3 +562,38 @@ class ExecutionRunner:
         if self.tasks:
             await asyncio.gather(*list(self.tasks.values()), return_exceptions=True)
         await self.session_service.close()
+
+
+def attach_trace_callbacks(root, governance):
+    """Observe native agent lifecycle without replacing governance callbacks."""
+    from google.adk.agents import LlmAgent
+    from google.adk.tools import AgentTool
+    from google.adk.workflow import Workflow
+    seen = set()
+    def visit(node):
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, LlmAgent):
+            started = {}
+            async def before(callback_context, name=node.name):
+                started[name] = time.perf_counter()
+                if governance.run_events:
+                    await governance.run_events.append(governance.contract.run_id, governance.contract.principal, name, "started", {})
+            async def after(callback_context, name=node.name):
+                if governance.run_events:
+                    elapsed = time.perf_counter() - started.pop(name, time.perf_counter())
+                    await governance.run_events.append(governance.contract.run_id, governance.contract.principal, name, "completed", {"duration_ms": elapsed * 1000})
+            previous_before = node.before_agent_callback
+            previous_after = node.after_agent_callback
+            node.before_agent_callback = [*(previous_before if isinstance(previous_before, list) else [previous_before] if previous_before else []), before]
+            node.after_agent_callback = [*(previous_after if isinstance(previous_after, list) else [previous_after] if previous_after else []), after]
+            for tool in node.tools:
+                if isinstance(tool, AgentTool):
+                    visit(tool.agent)
+        elif isinstance(node, Workflow):
+            for edge in node.edges:
+                for child in edge:
+                    if not isinstance(child, str):
+                        visit(child)
+    visit(root)

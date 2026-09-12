@@ -1,4 +1,4 @@
-export type SystemRole = 'PLATFORM_ADMIN' | 'TENANT_ADMIN' | 'PROJECT_OWNER' | 'PROJECT_MANAGER' | 'PROJECT_ANALYST' | 'OPERATOR' | 'AUDITOR' | 'SKILL_AUTHOR' | 'PROJECT_VIEWER' | 'GENERIC_VIEWER';
+export type SystemRole = 'PLATFORM_ADMIN' | 'PROJECT_OWNER' | 'PROJECT_MANAGER' | 'PROJECT_ANALYST' | 'PROJECT_VIEWER' | 'GENERIC_USER';
 
 export interface Principal {
   subject: string;
@@ -6,6 +6,7 @@ export interface Principal {
   tenant_id: string;
   project_id: string;
   expires_at?: string;
+  authn_method?: string;
 }
 
 export interface AgentConfiguration {
@@ -196,6 +197,7 @@ export type ScopeLevel = 'platform_default' | 'project_override' | 'project_only
 export type IntegrationKind = 'native' | 'mcp' | 'a2a' | 'parser';
 
 export interface ToolDefinition {
+  project_enabled?: boolean;
   registration?: IntegrationRegistration;
   probe_available?: boolean;
   id: string;
@@ -203,7 +205,7 @@ export interface ToolDefinition {
   system_name?: string;
   category: ConnectorCategory | string;
   description: string;
-  status: 'connected' | 'degraded' | 'disabled' | 'planned';
+  status: 'connected' | 'degraded' | 'disabled' | 'planned' | 'not_configured';
   enabled: boolean;
   type: 'connector' | 'parser' | 'synthesizer' | 'mcp' | 'a2a';
   integration_kind?: IntegrationKind;
@@ -253,6 +255,7 @@ export interface CapabilitySafetyProfile {
 }
 
 export interface CapabilityItem {
+  project_enabled?: boolean;
   id: string;
   name: string;
   version?: string;
@@ -659,7 +662,10 @@ export interface IntegrationDefinition {
   description: string;
   auth_method: 'none' | 'bearer';
   secret_reference: string;
-  transport: 'streamable_http' | 'sse' | 'a2a_jsonrpc' | 'a2a_rest';
+  transport: 'streamable_http' | 'sse' | 'stdio' | 'a2a_jsonrpc' | 'a2a_rest';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   timeout_seconds: number;
   allow_project_override: boolean;
 }
@@ -672,3 +678,221 @@ export interface IntegrationRegistration {
   project_revision: string;
   scope_level: ScopeLevel;
 }
+
+// ----------------------------------------------------------------------------
+// Platform Admin Management Types
+// ----------------------------------------------------------------------------
+export interface UserItem {
+  id: string;
+  name: string;
+  email?: string | null;
+  roles: string[];
+  status: 'active' | 'suspended';
+  tenant_id?: string;
+  project_id?: string;
+  groups?: string[];
+  authn_method?: string;
+  updated_at?: number;
+}
+
+export interface UserPayload {
+  id?: string;
+  name: string;
+  email?: string | null;
+  roles: string[];
+  status: 'active' | 'suspended';
+}
+
+export interface RoleItem {
+  id: string;
+  role_id?: string;
+  name: string;
+  tier?: string;
+  description: string;
+  permissions: string[];
+  is_system?: boolean;
+  status: 'active' | 'deprecated';
+  updated_at?: number;
+}
+
+export interface RolePayload {
+  id?: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  status: 'active' | 'deprecated';
+}
+
+export interface BillingUsageTelemetry {
+  total_runs: number;
+  active_runs: number;
+  completed_runs: number;
+  failed_runs: number;
+  total_evidence_collected: number;
+  estimated_tokens_processed: number;
+  month_to_date_spend_usd: number;
+  budget_consumed_percent: number;
+}
+
+export interface BillingConfig {
+  tenant_id: string;
+  project_id: string;
+  tier: string;
+  monthly_spend_budget: number;
+  monthly_token_budget: number;
+  max_concurrent_investigations: number;
+  rate_limit_rpm: number;
+  rate_limit_tpm: number;
+  alert_threshold_percent: number;
+  webhook_url?: string;
+  pricing_matrix: Record<string, { input_per_million: number; output_per_million: number }>;
+  usage?: BillingUsageTelemetry;
+  updated_at?: number;
+}
+
+export interface BillingPayload {
+  tier: string;
+  monthly_spend_budget: number;
+  monthly_token_budget: number;
+  max_concurrent_investigations: number;
+  rate_limit_rpm: number;
+  rate_limit_tpm: number;
+  alert_threshold_percent: number;
+  webhook_url?: string;
+  pricing_matrix: Record<string, { input_per_million: number; output_per_million: number }>;
+}
+
+export interface RedactionPattern {
+  id: string;
+  name: string;
+  pattern: string;
+  replacement: string;
+  enabled: boolean;
+  description: string;
+}
+
+export interface PolicyConfig {
+  redaction_patterns: RedactionPattern[];
+  guardrails: {
+    dual_custody_enforced?: boolean;
+    max_tool_call_depth?: number;
+    request_deadline_seconds?: number;
+    write_protection_active?: boolean;
+    blocked_keywords?: string[];
+    [key: string]: unknown;
+  };
+  skills?: Record<string, {
+    actions?: string[];
+    immutable?: boolean;
+    project_override?: boolean;
+    [key: string]: unknown;
+  }>;
+  updated_at?: number;
+}
+
+export interface FileLimitsConfig {
+  tenant_id: string;
+  project_id: string;
+  max_file_bytes: number;
+  max_files: number;
+  max_text_chars: number;
+  max_pdf_pages: number;
+  max_rows: number;
+  max_cells: number;
+  parser_timeout_seconds: number;
+  concurrency: number;
+  allowed_extensions: string[];
+  retention_days: number;
+  auto_prune_enabled: boolean;
+  updated_at?: number;
+}
+
+export interface CleanupResult {
+  status: string;
+  purged_attachments: number;
+  purged_runs: number;
+  freed_bytes: number;
+  retention_cutoff_utc: string;
+  timestamp: string;
+  message: string;
+}
+
+export interface KnowledgeItem {
+  id: string;
+  doc_id?: string;
+  title: string;
+  category: string;
+  tags: string[];
+  content: string;
+  media_type: string;
+  size_bytes: number;
+  status: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface KnowledgePayload {
+  title: string;
+  category: string;
+  tags: string[];
+  content: string;
+  media_type?: string;
+  status?: string;
+}
+
+export interface RuntimeStageItem {
+  stage_id: string;
+  name: string;
+  model: string;
+  thinking_level: string;
+  thinking_budget: number;
+  output_limit: number;
+  temperature: number;
+  tool_limit: number;
+  tools: string[];
+  instruction: string;
+  enabled: boolean;
+  updated_at?: number;
+}
+
+export interface RuntimeStagePayload {
+  name: string;
+  model: string;
+  thinking_level: string;
+  thinking_budget: number;
+  output_limit: number;
+  temperature: number;
+  tool_limit: number;
+  tools: string[];
+  instruction: string;
+  enabled: boolean;
+}
+
+export interface CustomAlertPayload {
+  severity: 'critical' | 'warning' | 'info';
+  source: string;
+  component: string;
+  title: string;
+  summary: string;
+  message: string;
+}
+
+export interface AlertConfig {
+  mttr_warning_minutes: number;
+  tool_failure_rate_percent: number;
+  probe_latency_warning_ms: number;
+  updated_at?: number;
+}
+
+export interface PlatformSettingsConfig {
+  run_timeout_seconds: number;
+  max_concurrent_runs: number;
+  max_llm_calls: number;
+  max_input_chars: number;
+  max_context_chars: number;
+  retention_days: number;
+  allowed_extensions: string[];
+  mode: string;
+  updated_at?: number;
+}
+

@@ -4,7 +4,6 @@ import {
   Search,
   Sun,
   Moon,
-  Plus,
   Bell
 } from 'lucide-react';
 import { Principal, SystemHealth } from '../types/api';
@@ -55,7 +54,6 @@ export const Topbar: React.FC<TopbarProps> = ({
   onOpenSearch,
   onOpenSession,
   onOpenAlerts,
-  onNewInvestigation,
 }) => {
   const currentCrumb = PAGE_TITLES[activePage] || 'Overview';
 
@@ -71,7 +69,7 @@ export const Topbar: React.FC<TopbarProps> = ({
             <span className="gradient-text">RCA Analyzer</span>
           </div>
           <span className="topbar-crumb-sep">/</span>
-          <span className="topbar-crumb">{currentCrumb}</span>
+          <span className="topbar-crumb">Admin / {currentCrumb}</span>
         </div>
       </div>
 
@@ -81,28 +79,16 @@ export const Topbar: React.FC<TopbarProps> = ({
           type="button"
           className="search-bar-btn"
           onClick={onOpenSearch}
-          title="Search workspace (⌘K)"
+          title="Search admin console (⌘K)"
         >
           <Search size={14} />
-          <span>Search investigations, agents, tools…</span>
+          <span>Search admin console…</span>
           <kbd>⌘K</kbd>
         </button>
       </div>
 
       {/* Right Cluster: Clean & Uncluttered */}
       <div className="topbar-right">
-        {onNewInvestigation && (
-          <button
-            type="button"
-            className="topbar-quick-btn"
-            onClick={onNewInvestigation}
-            title="Launch an incident investigation"
-          >
-            <Plus size={13} strokeWidth={2.5} />
-            <span>New Run</span>
-          </button>
-        )}
-
         <div className="telemetry-pill" title={`Platform ${health.mode} status`}>
           <span className="telemetry-dot" />
           <span>{health.mode === 'live' ? 'Live' : 'Demo'}</span>

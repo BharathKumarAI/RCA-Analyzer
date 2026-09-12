@@ -4,9 +4,9 @@ An agent reasons about evidence. A domain tool exposes an allowed operation. A c
 
 ## Connector catalog
 
-The [catalog templates](../blob_local/platform/config/connector_templates.yaml) cover all ten connector bindings in the [reference sample](../references/sample.yaml): Jira, Confluence, Splunk, SignalFx, qTest, GitLab, Oracle, Kafka, Unix/Tuxedo, and Kubernetes. Jira and Splunk retain their runtime IDs, `itsm` and `log_search`. Kafka and Unix/Tuxedo are listed as planned MCP integrations. Placeholder endpoints are reference metadata, not configured services.
+The [catalog templates](../blob_local/platform/config/connector_templates.yaml) cover all ten connector bindings in the [reference sample](../references/sample.yaml): Jira, Confluence, Splunk, SignalFx, qTest, GitLab, Oracle, Kafka, Unix/Tuxedo, and Kubernetes. Jira and Splunk retain their runtime IDs, `itsm` and `log_search`. Kafka and Unix/Tuxedo support native clients and optional MCP bindings. Placeholder endpoints are reference metadata, not configured services.
 
-The [catalog API](../app/api/routes/catalog.py) shows the eight unimplemented integrations as planned and not enabled. Only the [provider registry](../app/connectors/providers/registry.py) creates executable connectors; catalog entries do not register tools, permit database queries, or enable command execution. Database-backed deployments must update their active [configuration bundle](../app/configuration/database_bundle.py) and reload the API before catalog edits appear.
+All ten connectors now have executable native providers and optional deployment-approved MCP bindings. See [runtime setup and supported operations](connector-runtime.md) for exact configuration, agent binding, and current limitations. New providers ship disabled until deployment access is configured.
 
 ## Startup and shutdown
 
@@ -99,4 +99,4 @@ The blob provider writes canonical agent YAML by content hash and verifies it on
 4. Add the connector and permitted actions to the appropriate capability, with required/optional behavior chosen deliberately.
 5. Test scope enforcement, health failures, response bounds and the complete governed call. Update these diagrams to show the actual route.
 
-Database, Oracle, ServiceNow, MCP and A2A investigation connectors are not enabled. Investigation writes remain disabled.
+Oracle fixed session reads and deployment-approved MCP bindings are implemented; arbitrary SQL, ServiceNow, generic A2A execution, and investigation writes remain unavailable. See [supported operations](connector-runtime.md).

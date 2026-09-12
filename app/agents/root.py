@@ -3,7 +3,9 @@
 import json
 
 from google.adk.agents import LlmAgent
-from google.adk.workflow import Workflow, JoinNode, START
+from google.adk.workflow import Workflow, START
+from app.configuration.workflow import default_workflow, compile_native, prune_optional, enrich_runtime_graph
+from app.configuration.harness_bundles import Compilation, BUILTINS, enriched_graph
 from google.adk.models.registry import LLMRegistry
 from google.adk.tools import AgentTool
 
@@ -42,6 +44,8 @@ def build_root_agent(
     model_factory=None,
 ):
     stages = profiles.resolve(contract.model_profile)
+    bundle = json.loads(contract.model_config_json).get("harness_bundle")
+    compiled = Compilation.model_validate(bundle["compilation"]) if bundle else None
     budget = {"calls": 0, "limit": governance.settings.max_llm_calls}
 
     def model(stage, config=None):
@@ -170,8 +174,26 @@ def build_root_agent(
                 logs_instruction,
             )
         )
+    evidence_tools = [tool for name, tool in available_tools.items() if name.startswith("read_")]
+    if "evidence" in enabled_agent_stages and evidence_tools and stages["logs"].enabled:
+        branches.append(LlmAgent(
+            name="connector_evidence_investigator",
+            model=model("logs"),
+            description="Read bounded evidence from capability-scoped systems.",
+            instruction=UNTRUSTED_DATA_RULE + "Retrieve only evidence relevant to the request. "
+            "Each tool reads a fixed deployment-scoped resource. Cite evidence IDs, report truncation, "
+            "and distinguish configuration snapshots from historic observations.\nSkills:\n"
+            + instruction_skills + "\nRequest:\n" + request_text,
+            tools=evidence_tools,
+            output_key="connector_evidence_result",
+            generate_content_config=stages["logs"].generation_config(),
+            before_tool_callback=governance.before_tool,
+            after_tool_callback=governance.after_tool,
+            on_tool_error_callback=governance.on_tool_error,
+            after_model_callback=governance.after_model,
+        ))
     if incident_steps:
-        branches.append(sequential("incident_evidence", incident_steps))
+        branches.extend(incident_steps)
     if (
         "file" in enabled_agent_stages
         and workflow.attachments
@@ -239,23 +261,7 @@ def build_root_agent(
                 orchestration_instruction,
             )
         )
-    if branches:
-        if (
-            workflow.parallel_evidence
-            and governance.settings.parallel_evidence
-            and len(branches) > 1
-        ):
-            join = JoinNode(name="evidence_join")
-            steps.append(
-                Workflow(
-                    name="evidence_acquisition",
-                    edges=[(START, branch) for branch in branches]
-                    + [(branch, join) for branch in branches],
-                    max_concurrency=governance.settings.max_parallel_models,
-                )
-            )
-        else:
-            steps.append(sequential("evidence_acquisition", branches))
+    steps.extend(branches)
 
     # Approved configurations are project-scoped, prevalidated data. We never use
     # ADK's arbitrary Python-reference YAML loader on team-authored input.
@@ -381,7 +387,55 @@ def build_root_agent(
             model("synthesis"), stages["synthesis"], governance, synthesis_instruction
         )
     )
-    return sequential("root_rca_agent", steps)
+    agents = {agent.name: agent for agent in steps}
+    if compiled:
+        for name, override in compiled.overrides.items():
+            if name not in agents:
+                continue
+            native = agents[name]
+            stage = BUILTINS[name]
+            previous = native.instruction
+            def overridden_instruction(ctx, previous=previous, override=override, stage=stage):
+                text = previous(ctx) if callable(previous) else previous
+                original = prompts[stage]
+                return text.replace(original, override.instruction) if original in text else text + "\nApproved instructions:\n" + override.instruction
+            native.instruction = overridden_instruction
+            config = profiles.resolve(override.model_profile)[override.stage_model]
+            native.model = model(stage, config)
+            native.generate_content_config = config.generation_config()
+            if name != "specialist_router":
+                tools = [action_tools[action] for action in override.tools if action_tools.get(action)]
+                if len(tools) != len(override.tools):
+                    raise PermissionError("An approved builtin tool is unavailable")
+                native.tools = tools
+        for path, definition in compiled.agents.items():
+            config = profiles.resolve(definition.model_profile)[definition.stage_model]
+            tools = [action_tools[action] for action in definition.tools if action_tools.get(action)]
+            if len(tools) != len(definition.tools):
+                raise PermissionError("An approved workflow tool is unavailable")
+            def custom_instruction(ctx, definition=definition):
+                return (UNTRUSTED_DATA_RULE + definition.instruction + "\nSkills:\n" + instruction_skills
+                        + "\nRequest:\n" + request_text + "\nCaptured evidence:\n" + governance.context())
+            agents[path] = LlmAgent(name=definition.id, description=definition.description,
+                model=model("specialist", config), instruction=custom_instruction, tools=tools,
+                include_contents="none", output_key=definition.id + "_result",
+                generate_content_config=config.generation_config(), before_tool_callback=governance.before_tool,
+                after_tool_callback=governance.after_tool, on_tool_error_callback=governance.on_tool_error,
+                after_model_callback=governance.after_model)
+        definition = compiled.definition
+        # Attachment branches are conditional on request input, as in the default runtime.
+        definition = prune_optional(definition, {"file_investigator"} - agents.keys())
+        missing = {n.ref for n in definition.nodes if n.kind in {"builtin", "agent"}} - agents.keys()
+        if missing:
+            raise PermissionError("Approved workflow contains unavailable stages: " + ", ".join(sorted(missing)))
+        view = compiled.model_copy(update={"definition": definition})
+    else:
+        definition = default_workflow(agents, workflow.parallel_evidence and governance.settings.parallel_evidence)
+        view = Compilation(definition=definition)
+    governance.resolved_graph = enriched_graph(view, capability, profiles).model_dump(mode="json")
+    # Include actual callable tools, delegated agents, and model identifiers for default stages.
+    enrich_runtime_graph(governance.resolved_graph, agents)
+    return compile_native(definition, agents, governance.settings.max_parallel_models)
 
 
 # CLI inspection is intentionally inert: live connectors must only be assembled

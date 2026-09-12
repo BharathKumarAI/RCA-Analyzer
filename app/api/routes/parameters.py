@@ -48,6 +48,21 @@ async def define_parameter(
     )
 
 
+@router.delete("/{tool}/{name}/definition", status_code=204)
+async def delete_parameter_definition(
+    tool: str,
+    name: str,
+    request: Request,
+    principal: Principal,
+    expected_revision: int = Query(ge=1),
+):
+    await invoke(
+        request.app.state.parameters.delete_definition(
+            principal, tool, name, expected_revision
+        )
+    )
+
+
 @router.put("/{tool}/{name}/override")
 async def override_parameter(
     tool: str,

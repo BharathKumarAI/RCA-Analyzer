@@ -1,0 +1,27 @@
+id: gitlab_review
+version: 1.0.0
+enabled: true
+name: Deployment Review
+description: Read recent deployments in the configured GitLab project. Correlate deployment
+  status and timestamps with the incident. Correlation does not establish causality.
+category: investigation
+agent_stages:
+- evidence
+skills:
+- gitlab-review
+requires:
+  connectors:
+  - gitlab
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+  - PLATFORM_ADMIN
+  - PROJECT_OWNER
+  - PROJECT_ANALYST
+  allowed_actions:
+  - gitlab.read_evidence
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: restricted
+model_profile: balanced-investigation

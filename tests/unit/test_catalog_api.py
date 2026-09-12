@@ -44,11 +44,9 @@ def test_scoped_catalog_endpoints_use_runtime_data_and_redact_tracking_uri():
                 "itsm", "log_search",
             }
             for name in set(catalog) - {"itsm", "log_search"}:
-                assert catalog[name]["status"] == "planned"
-                assert "not implemented" in catalog[name]["description"]
-            assert {name for name, tool in catalog.items() if tool["type"] == "mcp"} == {
-                "kafka", "unix",
-            }
+                assert catalog[name]["status"] == "not_configured"
+                assert catalog[name]["supported_transports"] == ["native", "mcp"]
+            assert {name for name, tool in catalog.items() if tool["type"] == "mcp"} == set()
             assert set(app.state.runner.connectors) == {"itsm", "log_search"}
 
             users = client.get("/api/v1/users", headers=headers)

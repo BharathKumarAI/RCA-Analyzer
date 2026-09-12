@@ -1,6 +1,7 @@
 """Connection registration endpoints; authority and scope come from authentication."""
 
 from typing import Literal
+from app.configuration.mcp_import import MAX_IMPORT_BYTES, parse_mcp_json, parse_mcp_command
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from app.api.dependencies import Principal
@@ -14,6 +15,27 @@ router = APIRouter(prefix="/api/v1/integrations", tags=["integrations"])
 @router.get("")
 async def list_integrations(request: Request, principal: Principal):
     return await request.app.state.integrations.list(principal)
+
+
+@router.post("/mcp/preview")
+async def preview_mcp_import(request: Request, principal: Principal):
+    try:
+        request.app.state.integrations.authorize(principal, "project")
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_IMPORT_BYTES:
+            raise HTTPException(413, "MCP JSON must be smaller than 64 KiB")
+    try:
+        parser = parse_mcp_command if request.headers.get("content-type", "").split(";", 1)[0] == "text/plain" else parse_mcp_json
+        connections = parser(content.decode("utf-8"))
+    except (ValueError, UnicodeError) as error:
+        # Unicode errors can include pasted input; parser messages are already safe.
+        detail = "Use UTF-8 JSON" if isinstance(error, UnicodeError) else str(error)
+        raise HTTPException(422, detail) from None
+    return {"connections": connections}
 
 
 @router.post("/{integration_id}/test")

@@ -23,12 +23,12 @@ async def _read(response):
     return bytes(data)
 
 
-async def _events(response):
+async def _events(response, max_bytes=MAX_BYTES):
     buffer = b""
     size = 0
     async for chunk in response.aiter_bytes():
         size += len(chunk)
-        if size > MAX_BYTES:
+        if size > max_bytes:
             raise ValueError("Response exceeds the connection-test limit")
         buffer += chunk
         # SSE lines may use either CRLF or LF; do not decode partial UTF-8 chunks.
@@ -138,6 +138,9 @@ async def _a2a(client, definition, headers):
 
 
 async def probe_integration(definition, settings, *, client=None):
+    if definition.transport == "stdio":
+        from app.connectors.providers.stdio_probe import probe_stdio
+        return await probe_stdio(definition, settings)
     checked_at = datetime.now(timezone.utc).isoformat()
     allowed = {host.strip().lower() for host in settings.integration_allowed_hosts.split(",") if host.strip()}
     if urlsplit(definition.endpoint).hostname.lower() not in allowed:

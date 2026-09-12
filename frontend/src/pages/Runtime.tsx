@@ -19,10 +19,12 @@ import {
   Shield,
   Layers,
   Sparkles,
-  Info
+  Info,
+  Save,
+  Edit3
 } from 'lucide-react';
-import { SystemHealth } from '../types/api';
-import { ApiError, fetchConfig } from '../services/api';
+import { SystemHealth, RuntimeStageItem } from '../types/api';
+import { ApiError, fetchConfig, fetchRuntimeStages, updateRuntimeStage } from '../services/api';
 
 interface RuntimeProps {
   health: SystemHealth;
@@ -213,11 +215,98 @@ router = SpecialistRouter(tools=specialist_tools)`
 export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const [config, setConfig] = useState<any>(null);
   const [configError, setConfigError] = useState<string | null>(null);
-  useEffect(() => { fetchConfig().then(setConfig).catch((reason: unknown) => setConfigError(reason instanceof ApiError ? reason.message : 'Unable to load runtime configuration.')); }, []);
+  const [stages, setStages] = useState<Record<string, RuntimeStageItem>>({});
+  const [stageSaving, setStageSaving] = useState(false);
+  const [stageSaveSuccess, setStageSaveSuccess] = useState<string | null>(null);
+  const [stageSaveError, setStageSaveError] = useState<string | null>(null);
+
+  const loadStages = async () => {
+    try {
+      const list = await fetchRuntimeStages();
+      const map: Record<string, RuntimeStageItem> = {};
+      for (const st of list) {
+        map[st.stage_id] = st;
+      }
+      setStages(map);
+    } catch {
+      // stages fallback
+    }
+  };
+
+  useEffect(() => {
+    fetchConfig().then(setConfig).catch((reason: unknown) => setConfigError(reason instanceof ApiError ? reason.message : 'Unable to load runtime configuration.'));
+    void loadStages();
+  }, []);
+
   const [selectedNode, setSelectedNode] = useState<string>('synthesis');
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(1.0);
   const [showInspector, setShowInspector] = useState<boolean>(true);
+  const [isEditingStage, setIsEditingStage] = useState<boolean>(false);
+
+  // Form for stage tuning
+  const [editModel, setEditModel] = useState('gemini-2.5-flash');
+  const [editThinkingLevel, setEditThinkingLevel] = useState('high');
+  const [editThinkingBudget, setEditThinkingBudget] = useState(8192);
+  const [editOutputLimit, setEditOutputLimit] = useState(8192);
+  const [editTemperature, setEditTemperature] = useState(0.2);
+  const [editToolLimit, setEditToolLimit] = useState(10);
+  const [editInstruction, setEditInstruction] = useState('');
+
+  // Sync form when selectedNode or stages change
+  useEffect(() => {
+    const st = stages[selectedNode];
+    if (st) {
+      setEditModel(st.model || 'gemini-2.5-flash');
+      setEditThinkingLevel(st.thinking_level || 'high');
+      setEditThinkingBudget(st.thinking_budget || 8192);
+      setEditOutputLimit(st.output_limit || 8192);
+      setEditTemperature(st.temperature ?? 0.2);
+      setEditToolLimit(st.tool_limit || 10);
+      setEditInstruction(st.instruction || '');
+    } else {
+      const fallback = NODES_SPEC[selectedNode];
+      setEditModel(fallback?.model?.includes('flash-lite') ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash');
+      setEditThinkingLevel(fallback?.thinking?.toLowerCase().includes('low') ? 'low' : fallback?.thinking?.toLowerCase().includes('high') ? 'high' : 'medium');
+      setEditThinkingBudget(fallback?.thinking?.includes('8,192') ? 8192 : fallback?.thinking?.includes('2,048') ? 2048 : 1024);
+      setEditOutputLimit(fallback?.outputLimit?.includes('8,192') ? 8192 : fallback?.outputLimit?.includes('4,096') ? 4096 : 2048);
+      setEditTemperature(0.2);
+      setEditToolLimit(8);
+      setEditInstruction(fallback?.description || '');
+    }
+    setIsEditingStage(false);
+    setStageSaveSuccess(null);
+    setStageSaveError(null);
+  }, [selectedNode, stages]);
+
+  const handleSaveStage = async () => {
+    setStageSaving(true);
+    setStageSaveSuccess(null);
+    setStageSaveError(null);
+    try {
+      const current = stages[selectedNode];
+      const updated = await updateRuntimeStage(selectedNode, {
+        name: current?.name || NODES_SPEC[selectedNode]?.name || selectedNode,
+        model: editModel,
+        thinking_level: editThinkingLevel,
+        thinking_budget: editThinkingBudget,
+        output_limit: editOutputLimit,
+        temperature: editTemperature,
+        tool_limit: editToolLimit,
+        tools: current?.tools || NODES_SPEC[selectedNode]?.tools || [],
+        instruction: editInstruction,
+        enabled: true,
+      });
+      setStages(prev => ({ ...prev, [selectedNode]: updated }));
+      setStageSaveSuccess(`Stage "${updated.name}" updated successfully!`);
+      setIsEditingStage(false);
+      setTimeout(() => setStageSaveSuccess(null), 4000);
+    } catch (e) {
+      setStageSaveError(e instanceof Error ? e.message : 'Failed to update stage tuning');
+    } finally {
+      setStageSaving(false);
+    }
+  };
 
   // Close modal on Escape key
   useEffect(() => {
@@ -234,21 +323,26 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const handleZoomOut = () => setZoom((prev) => Math.max(prev - 0.15, 0.7));
   const handleZoomReset = () => setZoom(1.0);
 
-  const configuredStage = config?.model_profiles?.stages?.[selectedNode];
+  const liveStage = stages[selectedNode];
+  const configuredStage: any = liveStage || config?.model_profiles?.stages?.[selectedNode];
   const activeNodeData: NodeSpec = {
     ...(NODES_SPEC[selectedNode] || NODES_SPEC.synthesis),
     ...(!configuredStage && NODES_SPEC[selectedNode]?.type.includes('LlmAgent') ? { model: '—', thinking: '—', outputLimit: '—' } : {}),
     ...(configuredStage ? {
-      model: configuredStage.model || NODES_SPEC.synthesis.model,
-      thinking: configuredStage.thinking_level ? `${configuredStage.thinking_level} (configured)` : NODES_SPEC.synthesis.thinking,
-      outputLimit: configuredStage.max_output_tokens ? `${configuredStage.max_output_tokens} tokens` : NODES_SPEC.synthesis.outputLimit,
-      description: 'Configured stage from the server model profile.',
+      model: liveStage?.model || configuredStage.model || NODES_SPEC.synthesis.model,
+      thinking: liveStage ? `${liveStage.thinking_level} (${liveStage.thinking_budget} tokens)` : configuredStage.thinking_level ? `${configuredStage.thinking_level} (configured)` : NODES_SPEC.synthesis.thinking,
+      outputLimit: liveStage ? `${liveStage.output_limit} tokens` : configuredStage.max_output_tokens ? `${configuredStage.max_output_tokens} tokens` : NODES_SPEC.synthesis.outputLimit,
+      description: liveStage?.instruction || configuredStage.description || 'Configured stage from active database.',
     } : {}),
   };
   const execution = config?.execution || {};
-  const stageConfig = (node: string) => config?.model_profiles?.stages?.[node] || config?.model_profiles?.stages?.orchestrator;
+  const stageConfig = (node: string) => stages[node] || config?.model_profiles?.stages?.[node] || config?.model_profiles?.stages?.orchestrator;
   const modelLabel = (node: string, fallback: string) => stageConfig(node)?.model || fallback;
-  const thinkingLabel = (node: string, fallback: string) => stageConfig(node)?.thinking_level ? `${stageConfig(node).thinking_level} Think` : fallback;
+  const thinkingLabel = (node: string, fallback: string) => {
+    const st = stageConfig(node);
+    if (!st) return fallback;
+    return st.thinking_level ? `${st.thinking_level} Think` : fallback;
+  };
 
   // Render the core interactive workflow topology graph
   const renderWorkflowGraph = (isModal: boolean) => (
@@ -437,34 +531,179 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           </span>
           <h4 style={{ fontSize: '15px', fontWeight: 700, margin: '2px 0 0 0' }}>{activeNodeData.name}</h4>
         </div>
-        <span className="badge badge-active" style={{ fontSize: '11px' }}>
-          {activeNodeData.type.split('.').pop()}
-        </span>
-      </div>
-
-      <p style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
-        {activeNodeData.description}
-      </p>
-
-      {/* Specifications Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-        <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Model Profile</span>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.model}</span>
-        </div>
-        <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Thinking Budget</span>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.thinking}</span>
-        </div>
-        <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Max Output Cap</span>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.outputLimit}</span>
-        </div>
-        <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-          <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Stage Mapping</span>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.stageName}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="badge badge-active" style={{ fontSize: '11px' }}>
+            {activeNodeData.type.split('.').pop()}
+          </span>
+          {(activeNodeData.type.includes('LlmAgent') || stages[selectedNode]) && (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setIsEditingStage(!isEditingStage)}
+              style={{ fontSize: 11, padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 4 }}
+            >
+              <Edit3 size={12} /> {isEditingStage ? 'Close Tuning' : 'Tune Stage'}
+            </button>
+          )}
         </div>
       </div>
+
+      {stageSaveSuccess && (
+        <div className="notice-banner green" style={{ padding: '6px 10px', fontSize: 11, margin: 0 }}>
+          <CheckCircle2 size={13} /> {stageSaveSuccess}
+        </div>
+      )}
+      {stageSaveError && (
+        <div className="notice-banner red" style={{ padding: '6px 10px', fontSize: 11, margin: 0 }}>
+          {stageSaveError}
+        </div>
+      )}
+
+      {isEditingStage ? (
+        <div style={{ background: 'var(--card-subtle)', padding: 14, borderRadius: 8, border: '1px solid var(--acc)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--acc)', textTransform: 'uppercase' }}>
+              Dynamic LLM Stage Tuner
+            </span>
+            <span style={{ fontSize: 10, color: 'var(--muted)' }}>Persisted to PostgreSQL/SQLite</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Model Profile</label>
+              <select
+                value={editModel}
+                onChange={e => setEditModel(e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              >
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Thinking Level</label>
+              <select
+                value={editThinkingLevel}
+                onChange={e => setEditThinkingLevel(e.target.value)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              >
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Thinking Budget (tokens)</label>
+              <input
+                type="number"
+                step="512"
+                min="0"
+                max="32768"
+                value={editThinkingBudget}
+                onChange={e => setEditThinkingBudget(parseInt(e.target.value, 10) || 0)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Max Output Limit</label>
+              <input
+                type="number"
+                step="512"
+                min="512"
+                max="32768"
+                value={editOutputLimit}
+                onChange={e => setEditOutputLimit(parseInt(e.target.value, 10) || 512)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Sampling Temperature</label>
+              <input
+                type="number"
+                step="0.05"
+                min="0.0"
+                max="1.0"
+                value={editTemperature}
+                onChange={e => setEditTemperature(parseFloat(e.target.value) || 0.0)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Tool Call Limit</label>
+              <input
+                type="number"
+                min="1"
+                max="25"
+                value={editToolLimit}
+                onChange={e => setEditToolLimit(parseInt(e.target.value, 10) || 1)}
+                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>System Instruction Prompt</label>
+            <textarea
+              rows={3}
+              value={editInstruction}
+              onChange={e => setEditInstruction(e.target.value)}
+              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 11, fontFamily: 'monospace' }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setIsEditingStage(false)}
+              disabled={stageSaving}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void handleSaveStage()}
+              disabled={stageSaving}
+              style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            >
+              <Save size={12} /> {stageSaving ? 'Saving...' : 'Save Stage Tuning'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p style={{ fontSize: '12px', color: 'var(--muted)', lineHeight: 1.5, margin: 0 }}>
+            {activeNodeData.description}
+          </p>
+
+          {/* Specifications Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Model Profile</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.model}</span>
+            </div>
+            <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Thinking Budget</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.thinking}</span>
+            </div>
+            <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Max Output Cap</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.outputLimit}</span>
+            </div>
+            <div style={{ background: 'var(--bg)', padding: '10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+              <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block', fontWeight: 600 }}>Stage Mapping</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>{activeNodeData.stageName}</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Bound Tools & Security Scope */}
       <div style={{ background: 'var(--bg)', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>

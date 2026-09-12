@@ -93,7 +93,7 @@ def test_project_ceiling_model_selection_and_user_preferences(bundle):
         {"capabilities": {"unknown": {}}},
         {"capabilities": {"log_correlation": {"allowed_actions": ["itsm.get_ticket"]}}},
         {"capabilities": {"incident_triage": {"model_profile": "unapproved-model"}}},
-        {"capabilities": {"incident_triage": {"allowed_roles": ["GENERIC_VIEWER"]}}},
+        {"capabilities": {"incident_triage": {"allowed_roles": ["GENERIC_USER"]}}},
         {"auth_public_key": "cannot-override"},
         {"limits": {"max_parallel_models": 99}},
         {"disabled_connectors": ["personal-calendar"]},

@@ -5,6 +5,7 @@ import asyncio
 from app.configuration.parameters import ParameterStore
 from app.configuration.integrations import IntegrationStore
 from app.configuration.database_bundle import load_effective_settings
+from app.persistence.platform_admin import PlatformAdminStore
 from contextlib import AsyncExitStack, asynccontextmanager
 
 
@@ -58,10 +59,15 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             )
             cleanup.push_async_callback(api.state.store.aclose)
             await api.state.store.initialize()
+            from app.persistence.run_events import RunEventStore
+            api.state.run_events = RunEventStore(api.state.store.engine)
+            await api.state.run_events.initialize()
             api.state.parameters = ParameterStore(api.state.store.engine)
             await api.state.parameters.initialize()
             api.state.integrations = IntegrationStore(api.state.store.engine)
             await api.state.integrations.initialize()
+            api.state.platform_admin = PlatformAdminStore(api.state.store.engine)
+            await api.state.platform_admin.initialize()
             api.state.integration_probe_limiter = asyncio.Semaphore(4)
             configured, parameters = await load_effective_settings(
                 api.state.store.engine, configured, cleanup
@@ -102,6 +108,13 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 stage_store=FrameworkStageStore(configured),
             )
             await api.state.configurations.initialize()
+            from app.configuration.harness_workspace import HarnessWorkspaceService
+            api.state.harness_workspace = HarnessWorkspaceService(
+                api.state.store.engine,
+                ConfigurationBlobStore(configured.artifact_uri("agent-configurations") + "/harness", 1048576, suffix=".json"),
+                platform, configured, api.state.configurations,
+            )
+            await api.state.harness_workspace.initialize()
             api.state.optimizations = OptimizationService(
                 api.state.store.engine,
                 configured,
@@ -122,6 +135,8 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 chat_artifacts=api.state.chat_artifacts,
                 platform=platform,
             )
+            api.state.runner.harness_workspace = api.state.harness_workspace
+            api.state.runner.run_events = api.state.run_events
             cleanup.push_async_callback(api.state.runner.aclose)
             await api.state.runner.session_service.prepare_tables()
             telemetry = setup_telemetry() if configured.mode == "live" else None

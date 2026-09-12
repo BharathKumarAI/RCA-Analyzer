@@ -54,7 +54,7 @@ class PolicyEngine:
         # 3. Restricted data access check
         if (
             ctx.data_classification == "RESTRICTED"
-            and Role.AUDITOR not in ctx.principal.roles
+            and Role.PROJECT_OWNER not in ctx.principal.roles
             and Role.PLATFORM_ADMIN not in ctx.principal.roles
         ):
             return PolicyDecision(

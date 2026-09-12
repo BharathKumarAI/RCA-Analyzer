@@ -1,0 +1,28 @@
+id: kafka_review
+version: 1.0.0
+enabled: true
+name: Kafka Evidence Review
+description: Read the deployment-approved Kafka MCP evidence snapshot. Distinguish
+  offsets, lag and message evidence according to returned fields. Never publish messages,
+  commit offsets or modify consumer groups.
+category: investigation
+agent_stages:
+- evidence
+skills:
+- kafka-review
+requires:
+  connectors:
+  - kafka
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+  - PLATFORM_ADMIN
+  - PROJECT_OWNER
+  - PROJECT_ANALYST
+  allowed_actions:
+  - kafka.read_evidence
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: restricted
+model_profile: balanced-investigation

@@ -32,3 +32,43 @@ skills:
     project_override: true
     user_override: true
     actions: []
+  confluence-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [confluence.read_evidence]
+  signalfx-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [signalfx.read_evidence]
+  qtest-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [qtest.read_evidence]
+  gitlab-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [gitlab.read_evidence]
+  oracle-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [oracle.read_evidence]
+  kafka-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [kafka.read_evidence]
+  unix-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [unix.read_evidence]
+  kubernetes-review:
+    immutable: false
+    project_override: true
+    user_override: false
+    actions: [kubernetes.read_evidence]

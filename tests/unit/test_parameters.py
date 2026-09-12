@@ -228,6 +228,26 @@ async def test_parameter_governance_inheritance_and_revisions():
                     update={"default_value": 10000, "expected_revision": 2}
                 ),
             )
+        # Test custom definition creation and deletion with audit trail
+        custom_def = ParameterDefinition(
+            value_type="integer",
+            description="Max connections to payment gateway",
+            default_value=100,
+            allow_project_override=True,
+            icon="server",
+            expected_revision=0,
+        )
+        created = await store.define(admin, "payments", "max_connections", custom_def)
+        assert created["revision"] == 1
+        # Deletion with wrong revision fails
+        with pytest.raises(ParameterConflict):
+            await store.delete_definition(admin, "payments", "max_connections", 2)
+        # Deletion with correct revision succeeds
+        await store.delete_definition(admin, "payments", "max_connections", 1)
+        # Deleting non-existent raises ValueError
+        with pytest.raises(ValueError):
+            await store.delete_definition(admin, "payments", "max_connections", 1)
+
         async with store.engine.connect() as c:
             events = (await c.execute(select(audit))).all()
         assert [e.action for e in events] == [
@@ -237,6 +257,8 @@ async def test_parameter_governance_inheritance_and_revisions():
             "override",
             "reset",
             "define",
+            "define",
+            "delete_definition",
         ]
     finally:
         await database.aclose()

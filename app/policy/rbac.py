@@ -5,15 +5,11 @@ from app.identity.principals import Role
 
 ROLE_HIERARCHY: Dict[Role, int] = {
     Role.PLATFORM_ADMIN: 100,
-    Role.TENANT_ADMIN: 80,
-    Role.PROJECT_OWNER: 60,
-    Role.PROJECT_MANAGER: 50,
-    Role.OPERATOR: 45,
+    Role.PROJECT_OWNER: 80,
+    Role.PROJECT_MANAGER: 60,
     Role.PROJECT_ANALYST: 40,
-    Role.SKILL_AUTHOR: 30,
-    Role.AUDITOR: 20,
-    Role.PROJECT_VIEWER: 15,
-    Role.GENERIC_VIEWER: 10,
+    Role.PROJECT_VIEWER: 20,
+    Role.GENERIC_USER: 10,
 }
 
 

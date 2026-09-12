@@ -1,0 +1,28 @@
+id: signalfx_review
+version: 1.0.0
+enabled: true
+name: Detector Review
+description: Read the configured SignalFx detector definition. Explain alert rules
+  and thresholds. This is configuration evidence, not a metric time series or proof
+  an alert fired.
+category: investigation
+agent_stages:
+- evidence
+skills:
+- signalfx-review
+requires:
+  connectors:
+  - signalfx
+permissions:
+  minimum_role: PROJECT_ANALYST
+  allowed_roles:
+  - PLATFORM_ADMIN
+  - PROJECT_OWNER
+  - PROJECT_ANALYST
+  allowed_actions:
+  - signalfx.read_evidence
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: restricted
+model_profile: balanced-investigation

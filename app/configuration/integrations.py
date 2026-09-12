@@ -2,10 +2,10 @@
 
 import json
 import uuid
-from typing import Literal
+from typing import Literal, Annotated
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, StringConstraints
 from sqlalchemy import Column, MetaData, String, Table, delete, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 
@@ -27,11 +27,14 @@ class IntegrationDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["mcp", "a2a"]
-    endpoint: str = Field(min_length=1, max_length=2048)
+    endpoint: str = Field(default="", max_length=2048)
+    command: str = Field(default="", max_length=2048)
+    args: tuple[Annotated[str, Field(max_length=2048), StringConstraints(strip_whitespace=False)], ...] = Field(default=(), max_length=64)
+    env: dict[str, str] = Field(default_factory=dict, max_length=64)
     description: str = Field(default="", max_length=1000)
     auth_method: Literal["none", "bearer"] = "none"
     secret_reference: str = Field(default="", max_length=134)
-    transport: Literal["streamable_http", "sse", "a2a_jsonrpc", "a2a_rest"]
+    transport: Literal["streamable_http", "sse", "stdio", "a2a_jsonrpc", "a2a_rest"]
     timeout_seconds: int = Field(default=30, ge=1, le=120)
     allow_project_override: bool = True
 
@@ -39,6 +42,16 @@ class IntegrationDefinition(BaseModel):
     def validate_connection(self):
         import re
 
+        if self.transport == "stdio":
+            if self.kind != "mcp" or not self.command.strip() or "\x00" in self.command or any("\x00" in arg for arg in self.args):
+                raise ValueError("MCP stdio requires a valid executable and arguments")
+            if self.endpoint or self.auth_method != "none" or self.secret_reference:
+                raise ValueError("Command connections use environment references, not endpoint authentication")
+            if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", key) or not re.fullmatch(r"env://[A-Z][A-Z0-9_]{0,127}", value) for key, value in self.env.items()):
+                raise ValueError("Command environment values must be env:// references")
+            return self
+        if self.command or self.args or self.env:
+            raise ValueError("Command settings require stdio transport")
         url = urlsplit(self.endpoint)
         if (url.scheme != "https" or not url.hostname or url.username or url.password
                 or url.query or url.fragment or any(c.isspace() for c in self.endpoint)
@@ -78,7 +91,7 @@ class IntegrationStore:
     @staticmethod
     def authorize(principal, scope):
         roles = {Role.PLATFORM_ADMIN} if scope == "platform" else {
-            Role.PLATFORM_ADMIN, Role.TENANT_ADMIN, Role.PROJECT_OWNER, Role.PROJECT_MANAGER,
+            Role.PLATFORM_ADMIN, Role.PROJECT_OWNER, Role.PROJECT_MANAGER,
         }
         if not set(principal.roles) & roles:
             raise PermissionError("Your role cannot configure integrations at this scope")
