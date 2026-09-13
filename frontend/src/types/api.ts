@@ -93,6 +93,8 @@ export type ConnectorValueType =
   | 'secret_ref';
 
 export interface ParameterDefinitionRow {
+  active_value?: unknown;
+  restart_required?: boolean;
   tool: string;
   variable_name: string;
   value_type: ConnectorValueType;
@@ -104,6 +106,8 @@ export interface ParameterDefinitionRow {
   allow_project_override: boolean;
   project_visible: boolean;
   source: 'platform' | 'project';
+  scope?: 'platform' | 'project' | 'platform_only';
+  icon?: string;
 }
 
 export interface ConnectorParameterField {
@@ -177,6 +181,7 @@ export interface Run {
   stages?: RunStage[];
   evidence_count?: number;
   findings?: string;
+  raw?: Record<string, unknown>;
 }
 
 export type ConnectorCategory =
@@ -313,7 +318,7 @@ export interface UserAccount {
   email: string;
   role: SystemRole;
   last_active: string;
-  status: 'active' | 'suspended';
+  status: 'active' | 'inactive';
   investigations_count: number;
 }
 
@@ -425,7 +430,9 @@ export interface AlertItem {
   message: string;
   created_at: number;
   metadata?: Record<string, any>;
-  status: 'open' | 'suppressed' | 'dismissed';
+  status: 'open' | 'suppressed' | 'dismissed' | 'acknowledged' | 'resolved' | string;
+  resolution_note?: string;
+  resolved_at?: number;
 }
 
 export interface AlertsResponse {
@@ -443,6 +450,7 @@ export interface NotificationItem {
   created_at: number;
   created_at_iso?: string;
   metadata?: Record<string, any>;
+  read?: boolean;
 }
 
 export interface NotificationsResponse {
@@ -687,7 +695,7 @@ export interface UserItem {
   name: string;
   email?: string | null;
   roles: string[];
-  status: 'active' | 'suspended';
+  status: 'active' | 'inactive';
   tenant_id?: string;
   project_id?: string;
   groups?: string[];
@@ -700,7 +708,7 @@ export interface UserPayload {
   name: string;
   email?: string | null;
   roles: string[];
-  status: 'active' | 'suspended';
+  status: 'active' | 'inactive';
 }
 
 export interface RoleItem {
@@ -807,11 +815,22 @@ export interface FileLimitsConfig {
   updated_at?: number;
 }
 
+export interface PlatformFileProcessingConfig {
+  section: 'file-processing';
+  values: Record<string, unknown>;
+  active_values: Record<string, unknown>;
+  content_hash: string;
+  activation: string;
+  pending_restart?: boolean;
+}
+
 export interface CleanupResult {
   status: string;
   purged_attachments: number;
   purged_runs: number;
-  freed_bytes: number;
+  purged_artifacts?: number;
+  freed_bytes: number | null;
+  deleted_records?: number;
   retention_cutoff_utc: string;
   timestamp: string;
   message: string;
@@ -844,28 +863,25 @@ export interface RuntimeStageItem {
   stage_id: string;
   name: string;
   model: string;
-  thinking_level: string;
-  thinking_budget: number;
+  thinking_level: string | null;
+  thinking_budget: number | null;
   output_limit: number;
   temperature: number;
-  tool_limit: number;
-  tools: string[];
-  instruction: string;
   enabled: boolean;
+  content_hash: string;
+  editable_fields?: string[];
+  immutable_fields?: string[];
   updated_at?: number;
 }
 
 export interface RuntimeStagePayload {
-  name: string;
   model: string;
-  thinking_level: string;
-  thinking_budget: number;
+  thinking_level?: string | null;
+  thinking_budget?: number | null;
   output_limit: number;
   temperature: number;
-  tool_limit: number;
-  tools: string[];
-  instruction: string;
   enabled: boolean;
+  expected_hash: string;
 }
 
 export interface CustomAlertPayload {
@@ -896,3 +912,50 @@ export interface PlatformSettingsConfig {
   updated_at?: number;
 }
 
+export interface UiNavigationItem {
+  page: string;
+  label: string;
+  description: string;
+  group: string;
+  visible: boolean;
+}
+
+export interface UiSettingsConfig {
+  tenant_id?: string;
+  project_id?: string;
+  brand_name: string;
+  workspace_label: string;
+  default_theme: 'dark' | 'light' | 'system';
+  default_page: string;
+  welcome_title: string;
+  welcome_description: string;
+  navigation: UiNavigationItem[];
+  version: number;
+  updated_at?: number;
+}
+
+export interface FileProcessingValues {
+  max_file_bytes: number;
+  max_files: number;
+  max_expanded_bytes: number;
+  max_zip_members: number;
+  max_pdf_pages: number;
+  max_rows: number;
+  max_cells: number;
+  max_text_chars: number;
+  max_image_pixels: number;
+  parser_timeout_seconds: number;
+  concurrency: number;
+  allowed_extensions: string[];
+}
+
+export interface PlatformConfigurationSnapshot {
+  section: string;
+  source: string;
+  values: FileProcessingValues & Record<string, unknown>;
+  active_values: FileProcessingValues & Record<string, unknown>;
+  fields: Record<string, unknown>;
+  content_hash: string;
+  activation: string;
+  pending_restart: boolean;
+}

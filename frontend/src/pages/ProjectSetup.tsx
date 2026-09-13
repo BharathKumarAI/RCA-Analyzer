@@ -39,9 +39,12 @@ import {
 } from 'lucide-react';
 import {
   fetchProjectSetup,
+  fetchProjectEditor,
+  fetchPrincipal,
   fetchConnectorHealthCheck,
   validateProjectSetup,
   saveProjectSetup,
+  saveProjectEditor,
   setParameterOverride,
   resetParameterOverride,
 } from '../services/api';
@@ -62,9 +65,6 @@ import {
   TeamScope,
   JqlScheduleConfig,
   JiraCustomFieldMapping,
-  DEFAULT_TEAM_SCOPE,
-  DEFAULT_JQL_CONFIG,
-  DEFAULT_JIRA_CUSTOM_FIELDS,
   interpolateJql,
   toCfSyntax,
   PrismFullConfigurationData,
@@ -74,38 +74,8 @@ import {
   buildProjectConfiguration,
 } from '../utils/projectSetupConfig';
 import '../styles/project-setup.css';
+import { ParameterSettingsPanel } from '../components/ParameterSettingsPanel';
 
-const DEFAULT_EXAMPLE_ENVIRONMENTS: ProjectEnvironment[] = [
-  { id: 'QLAB01', displayName: 'QA Lab 01', description: 'QA Lab Environment 01 for integration testing', enabled: true, host: 'qlab01.internal', namespace: 'triage-qa', cluster: 'k8s-qa-01', splunk_index: 'app_qa_logs', jira_env_name: 'QLAB01' },
-  { id: 'QLAB02', displayName: 'QA Lab 02', description: 'QA Lab Environment 02 for regression testing', enabled: true, host: 'qlab02.internal', namespace: 'triage-qa', cluster: 'k8s-qa-02', splunk_index: 'app_qa_logs', jira_env_name: 'QLAB02' },
-  { id: 'QLAB03', displayName: 'QA Lab 03', description: 'QA Lab Environment 03 for partner integration', enabled: true, host: 'qlab03.internal', namespace: 'triage-qa', cluster: 'k8s-qa-03', splunk_index: 'app_qa_logs', jira_env_name: 'QLAB03' },
-  { id: 'QLAB06', displayName: 'QA Lab 06', description: 'QA Lab Environment 06 for batch workloads', enabled: true, host: 'qlab06.internal', namespace: 'triage-qa', cluster: 'k8s-qa-06', splunk_index: 'app_qa_logs', jira_env_name: 'QLAB06' },
-  { id: 'QLAB07', displayName: 'QA Lab 07', description: 'QA Lab Environment 07 for performance staging', enabled: true, host: 'qlab07.internal', namespace: 'triage-qa', cluster: 'k8s-qa-07', splunk_index: 'app_qa_logs', jira_env_name: 'QLAB07' },
-  { id: 'PLAB01', displayName: 'Pre-Prod Lab 01', description: 'Pre-Prod Lab Environment 01 mirroring production', enabled: true, host: 'plab01.internal', namespace: 'triage-preprod', cluster: 'k8s-preprod-01', splunk_index: 'app_preprod_logs', jira_env_name: 'PLAB01' },
-];
-
-const DEFAULT_EXAMPLE_CONNECTORS: ConnectorInstance[] = [
-  { id: 'jira-primary', name: 'Jira Cloud ITSM', type: 'jira', scope: 'project', enabled: true, endpoint: 'https://atlassian.company.net', secretRef: 'secret://jira/api_token', timeoutSeconds: 30, rateLimitRpm: 120, healthStatus: 'HEALTHY', latencyMs: 142 },
-  { id: 'splunk-qa', name: 'Splunk QA Logging', type: 'splunk', scope: 'environment', enabled: true, endpoint: 'https://splunk.company.net:8089', secretRef: 'secret://splunk/qa_token', timeoutSeconds: 45, rateLimitRpm: 60, healthStatus: 'HEALTHY', latencyMs: 98 },
-  { id: 'oracle-qlab01', name: 'Oracle QLAB01 DB', type: 'oracle', scope: 'environment', enabled: true, endpoint: 'jdbc:oracle:thin:@db-qlab01:1521/XEPDB1', secretRef: 'secret://oracle/qlab01', timeoutSeconds: 30, rateLimitRpm: 30, healthStatus: 'HEALTHY', latencyMs: 48 },
-  { id: 'oracle-qlab02', name: 'Oracle QLAB02 DB', type: 'oracle', scope: 'environment', enabled: true, endpoint: 'jdbc:oracle:thin:@db-qlab02:1521/XEPDB1', secretRef: 'secret://oracle/qlab02', timeoutSeconds: 30, rateLimitRpm: 30, healthStatus: 'HEALTHY', latencyMs: 52 },
-  { id: 'kafka-qat91', name: 'Kafka QAT91 Broker', type: 'kafka', scope: 'environment', enabled: true, endpoint: 'kafka-qat91.company.net:9092', secretRef: 'secret://kafka/qat91_cert', timeoutSeconds: 20, rateLimitRpm: 200, healthStatus: 'HEALTHY', latencyMs: 34 },
-  { id: 'k8s-qa', name: 'Kubernetes QA Cluster', type: 'kubernetes', scope: 'environment', enabled: true, endpoint: 'https://k8s-qa.company.net:6443', secretRef: 'secret://k8s/sa_token', timeoutSeconds: 15, rateLimitRpm: 180, healthStatus: 'HEALTHY', latencyMs: 61 },
-  { id: 'confluence-main', name: 'Confluence Runbooks', type: 'confluence', scope: 'project', enabled: true, endpoint: 'https://atlassian.company.net/wiki', secretRef: 'secret://confluence/api_token', timeoutSeconds: 30, rateLimitRpm: 90, healthStatus: 'HEALTHY', latencyMs: 110 },
-  { id: 'signalfx-traces', name: 'SignalFx APM Traces', type: 'signalfx', scope: 'project', enabled: true, endpoint: 'https://api.signalfx.com', secretRef: 'secret://signalfx/ingest_token', timeoutSeconds: 25, rateLimitRpm: 120, healthStatus: 'HEALTHY', latencyMs: 85 },
-];
-
-const DEFAULT_EXAMPLE_TOOLS: ToolItem[] = [
-  { id: 'itsm.get_ticket', name: 'Get Incident Ticket', connectorId: 'jira-primary', connectorType: 'jira', scope: 'project', enabled: true, description: 'Retrieve incident details, custom fields, and attachments' },
-  { id: 'itsm.search_related', name: 'Search Related Issues', connectorId: 'jira-primary', connectorType: 'jira', scope: 'project', enabled: true, description: 'Find similar historic tickets across past 365 days' },
-  { id: 'log_search.query_range', name: 'Query Logs Range', connectorId: 'splunk-qa', connectorType: 'splunk', scope: 'environment', enabled: true, description: 'Bounded search over application indices around incident anchor' },
-  { id: 'splunk.aggregate_events', name: 'Aggregate Error Events', connectorId: 'splunk-qa', connectorType: 'splunk', scope: 'environment', enabled: true, description: 'Compute error spikes and anomalous status code patterns' },
-  { id: 'oracle.execute_read_query', name: 'Execute Read-Only Query', connectorId: 'oracle-qlab01', connectorType: 'oracle', scope: 'environment', enabled: true, description: 'Bounded SELECT queries with 1000 row ceiling' },
-  { id: 'oracle.inspect_schema', name: 'Inspect Table Schema', connectorId: 'oracle-qlab01', connectorType: 'oracle', scope: 'environment', enabled: true, description: 'Read table definitions, columns, and foreign key relationships' },
-  { id: 'kafka.peek_messages', name: 'Peek Topic Messages', connectorId: 'kafka-qat91', connectorType: 'kafka', scope: 'environment', enabled: true, description: 'Bounded peek into transaction queue events' },
-  { id: 'k8s.get_pod_events', name: 'Get Pod Events & Logs', connectorId: 'k8s-qa', connectorType: 'kubernetes', scope: 'environment', enabled: true, description: 'Retrieve CrashLoopBackOff and OOMKilled events' },
-  { id: 'confluence.search', name: 'Search Knowledge Runbooks', connectorId: 'confluence-main', connectorType: 'confluence', scope: 'project', enabled: true, description: 'Semantic search across standard operating procedures' },
-];
 
 const STEPS = [
   { number: 1, id: 'basic', title: 'Basic Information', desc: 'Name, purpose, tags', icon: FolderGit2 },
@@ -187,6 +157,8 @@ export const ProjectSetup: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<ProjectSetupResponse | null>(null);
+  const [principal, setPrincipal] = useState<import('../types/api').Principal | null>(null);
+  const [editorVersion, setEditorVersion] = useState<number>(0);
   const [viewFullYaml, setViewFullYaml] = useState<boolean>(false);
   const [showQuickYaml, setShowQuickYaml] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
@@ -198,19 +170,17 @@ export const ProjectSetup: React.FC = () => {
   const [statusNotice, setStatusNotice] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Step 1: Basic Information
-  const [projectId, setProjectId] = useState<string>('sag');
-  const [projectName, setProjectName] = useState<string>('SAG');
-  const [responsibility, setResponsibility] = useState<string>('Triaging');
+  const [projectId, setProjectId] = useState<string>('');
+  const [projectName, setProjectName] = useState<string>('');
+  const [responsibility, setResponsibility] = useState<string>('');
   const [status, setStatus] = useState<'active' | 'inactive'>('active');
-  const [objective, setObjective] = useState<string>(
-    'The SAG acts as the triage and routing layer between end users and the application teams that own Samson and digital platform services. When an incident or issue surfaces through monitoring, user reports, or Jira, triage analysts assess the ticket, identify the responsible application group, and route it with supporting context so the owning team can resolve it immediately without spending time on triage. SAG automates the evidence gathering, root cause hypothesis, and application-group recommendation so triage analysts focus on decisions rather than data collection.'
-  );
-  const [timezone, setTimezone] = useState<string>('America/Chicago');
-  const [tags, setTags] = useState<string[]>(['triage', 'samson', 'incident-investigation', 'routing']);
+  const [objective, setObjective] = useState<string>('');
+  const [timezone, setTimezone] = useState<string>('');
+  const [tags, setTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState<string>('');
 
   // Step 2: Environments & Teams
-  const [environments, setEnvironments] = useState<ProjectEnvironment[]>(DEFAULT_EXAMPLE_ENVIRONMENTS);
+  const [environments, setEnvironments] = useState<ProjectEnvironment[]>([]);
   const [envSearch, setEnvSearch] = useState<string>('');
   const [isAddingEnv, setIsAddingEnv] = useState<boolean>(false);
   const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
@@ -221,31 +191,19 @@ export const ProjectSetup: React.FC = () => {
     enabled: true,
   });
 
-  const [teamDl, setTeamDl] = useState<string>('samson-triage-leads@company.internal');
-  const [teamsChannel, setTeamsChannel] = useState<string>('https://teams.microsoft.com/l/channel/samson-triage');
+  const [teamDl, setTeamDl] = useState<string>('');
+  const [teamsChannel, setTeamsChannel] = useState<string>('');
   const [activeTeamTab, setActiveTeamTab] = useState<'managers' | 'owners' | 'analysts'>('managers');
   const [members, setMembers] = useState<{
     managers: TeamMember[];
     owners: TeamMember[];
     analysts: TeamMember[];
-  }>({
-    managers: [
-      { id: 'm-1', name: 'Sarah Connor', email: 'sconnor@company.internal', role: 'Manager' },
-    ],
-    owners: [
-      { id: 'o-1', name: 'Alex Murphy', email: 'amurphy@company.internal', role: 'Owner' },
-      { id: 'o-2', name: 'Ellen Ripley', email: 'eripley@company.internal', role: 'Owner' },
-    ],
-    analysts: [
-      { id: 'a-1', name: 'David Bowman', email: 'dbowman@company.internal', role: 'Analyst' },
-      { id: 'a-2', name: 'Deckard Rick', email: 'rdeckard@company.internal', role: 'Analyst' },
-    ],
-  });
+  }>({ managers: [], owners: [], analysts: [] });
   const [isAddingMember, setIsAddingMember] = useState<boolean>(false);
   const [memberForm, setMemberForm] = useState<{ name: string; email: string }>({ name: '', email: '' });
 
   // Step 2 addition: Jira Team Scope (cf[10290] Fix Team & cf[10366] Assigned Team)
-  const [teamScope, setTeamScope] = useState<TeamScope>(DEFAULT_TEAM_SCOPE);
+  const [teamScope, setTeamScope] = useState<TeamScope>({ coreTeamValues: [], amdocsTeamValues: [], fixTeamField: '', assignedTeamField: '', environmentField: '' });
   const [newCoreTeamVal, setNewCoreTeamVal] = useState<string>('');
   const [newAmdocsTeamVal, setNewAmdocsTeamVal] = useState<string>('');
 
@@ -305,85 +263,12 @@ export const ProjectSetup: React.FC = () => {
   const [enableNotifications, setEnableNotifications] = useState<boolean>(true);
 
   // Step 4: Time & Scheduling
-  const [anchors, setAnchors] = useState([
-    { source: 'explicit_incident_timestamp', priority: 1, confidence: 1.0, label: 'Explicit Incident Timestamp' },
-    { source: 'transaction_timestamp', priority: 2, confidence: 0.95, label: 'Transaction Timestamp' },
-    { source: 'qtest_failure_timestamp', priority: 3, confidence: 0.90, label: 'qTest Failure Timestamp' },
-    { source: 'trace_error_timestamp', priority: 4, confidence: 0.90, label: 'Trace Error Timestamp' },
-    { source: 'jira_description_reported_time', priority: 5, confidence: 0.85, label: 'Jira Description Reported Time' },
-    { source: 'jira_created', priority: 6, confidence: 0.70, label: 'Jira Created (Fallback Anchor)' },
-  ]);
-  const [fallbackAnchor, setFallbackAnchor] = useState<string>('jira_created');
-  const [refinementEnabled, setRefinementEnabled] = useState<boolean>(true);
-  const [neverReplaceWithLower, setNeverReplaceWithLower] = useState<boolean>(true);
+  const [anchors, setAnchors] = useState<Array<{ source: string; priority: number; confidence: number; label: string }>>([]);
+  const [fallbackAnchor, setFallbackAnchor] = useState<string>('');
+  const [refinementEnabled, setRefinementEnabled] = useState<boolean>(false);
+  const [neverReplaceWithLower, setNeverReplaceWithLower] = useState<boolean>(false);
 
-  const [schedules, setSchedules] = useState<ScheduleItem[]>([
-    {
-      id: 'polling',
-      name: 'Jira Ticket Polling',
-      capability: 'triage.poll',
-      cron: '*/15 * * * *',
-      timezone: 'America/Chicago',
-      enabled: true,
-      description: 'Polls incoming triage tickets every 15 minutes',
-      executionType: 'jql',
-      targetJqlId: 'polling',
-      frequencyLabel: 'Every 15 minutes',
-    },
-    {
-      id: 'weekly-report',
-      name: 'Weekly SRE Incident Digest',
-      capability: 'reporting.weekly',
-      cron: '0 17 * * 5',
-      timezone: 'America/Chicago',
-      enabled: true,
-      description: 'Sends consolidated Friday triage digest at 5:00 PM CST',
-      executionType: 'jql',
-      targetJqlId: 'reporting',
-      scriptPath: 'scripts/sre_weekly_digest.py',
-      adminApproved: true,
-      frequencyLabel: 'Weekly (Fri 5:00 PM)',
-    },
-    {
-      id: 'daily-report',
-      name: 'Amdocs Daily Vendor Status',
-      capability: 'reporting.daily',
-      cron: '0 15 * * *',
-      timezone: 'America/Chicago',
-      enabled: true,
-      description: 'Daily 3:00 PM CST vendor incident status report',
-      executionType: 'jql',
-      targetJqlId: 'amdocs',
-      scriptPath: 'scripts/amdocs_vendor_sync.py',
-      adminApproved: true,
-      frequencyLabel: 'Daily (3:00 PM)',
-    },
-    {
-      id: 'knowledge-refresh',
-      name: 'Confluence Runbook Sync',
-      capability: 'knowledge.refresh',
-      cron: '0 21 * * *',
-      timezone: 'America/Chicago',
-      enabled: true,
-      description: 'Nightly knowledge cache and runbook refresh at 9:00 PM CST',
-      executionType: 'script',
-      scriptPath: 'scripts/confluence_knowledge_sync.py',
-      adminApproved: true,
-      frequencyLabel: 'Daily (9:00 PM)',
-    },
-    {
-      id: 'splunk-health',
-      name: 'Splunk Index Health Probe',
-      capability: 'diagnostics.splunk',
-      cron: '0 2 * * *',
-      timezone: 'America/Chicago',
-      enabled: true,
-      description: 'Daily 2:00 AM Central log indices and alert latency verification',
-      executionType: 'capability',
-      adminApproved: true,
-      frequencyLabel: 'Daily (2:00 AM)',
-    },
-  ]);
+  const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
   const [isAddingSchedule, setIsAddingSchedule] = useState<boolean>(false);
   const [scheduleForm, setScheduleForm] = useState<ScheduleItem>({
@@ -402,12 +287,12 @@ export const ProjectSetup: React.FC = () => {
   });
 
   // Step 4 addition: JQL Dynamic Query Builder & Clause Templates
-  const [jqlConfig, setJqlConfig] = useState<JqlScheduleConfig>(DEFAULT_JQL_CONFIG);
-  const [selectedEnvForJql, setSelectedEnvForJql] = useState<string>('QLAB02');
+  const [jqlConfig, setJqlConfig] = useState<JqlScheduleConfig>({ pollingTemplate: '', reportingTemplate: '', amdocsDailyTemplate: '', environmentFilterTemplate: '' });
+  const [selectedEnvForJql, setSelectedEnvForJql] = useState<string>('');
   const [showJqlBuildSteps, setShowJqlBuildSteps] = useState<boolean>(true);
 
   // Step 4 & 5: Jira Custom Field Mappings (18 fields directly from sample.yaml + user additions)
-  const [jiraCustomFields, setJiraCustomFields] = useState<JiraCustomFieldMapping[]>(DEFAULT_JIRA_CUSTOM_FIELDS);
+  const [jiraCustomFields, setJiraCustomFields] = useState<JiraCustomFieldMapping[]>([]);
   const [customFieldFilter, setCustomFieldFilter] = useState<'all' | 'mandatory'>('all');
   const [showCustomFieldMappings, setShowCustomFieldMappings] = useState<boolean>(true);
   const [isAddingCustomField, setIsAddingCustomField] = useState<boolean>(false);
@@ -486,54 +371,76 @@ export const ProjectSetup: React.FC = () => {
 
   // Step 5: Connectors & Tools (3 Subtabs)
   const [step5Tab, setStep5Tab] = useState<'connectors' | 'tools' | 'mapping'>('connectors');
-  const [connectorInstances, setConnectorInstances] = useState<ConnectorInstance[]>(DEFAULT_EXAMPLE_CONNECTORS);
-  const [tools, setTools] = useState<ToolItem[]>(DEFAULT_EXAMPLE_TOOLS);
+  const [connectorInstances, setConnectorInstances] = useState<ConnectorInstance[]>([]);
+  const [tools, setTools] = useState<ToolItem[]>([]);
   const [testingConnectorId, setTestingConnectorId] = useState<string | null>(null);
 
   // Initial Environment Bindings (Project Environment -> Tool Instances)
-  const [environmentBindings, setEnvironmentBindings] = useState<EnvironmentBinding[]>([
-    {
-      projectEnvironment: 'QLAB01',
-      bindings: {
-        oracle: { connectorId: 'oracle-qlab01', toolEnvironment: 'QLAB01' },
-        kafka: { connectorId: 'kafka-qat91', toolEnvironment: 'QAT91' },
-        splunk: { connectorId: 'splunk-qa', toolEnvironment: 'QA' },
-        kubernetes: { connectorId: 'k8s-qa', toolEnvironment: 'QA' },
-      },
-    },
-    {
-      projectEnvironment: 'QLAB02',
-      bindings: {
-        oracle: { connectorId: 'oracle-qlab02', toolEnvironment: 'QLAB02' },
-        kafka: { connectorId: 'kafka-qat91', toolEnvironment: 'QAT91' },
-        splunk: { connectorId: 'splunk-qa', toolEnvironment: 'QA' },
-        kubernetes: { connectorId: 'k8s-qa', toolEnvironment: 'QA' },
-      },
-    },
-    {
-      projectEnvironment: 'PLAB01',
-      bindings: {
-        oracle: { connectorId: 'oracle-qlab01', toolEnvironment: 'PLAB01' },
-        kafka: { connectorId: 'kafka-qat91', toolEnvironment: 'PROD91' },
-        splunk: { connectorId: 'splunk-qa', toolEnvironment: 'PROD' },
-        kubernetes: { connectorId: 'k8s-qa', toolEnvironment: 'PROD' },
-      },
-    },
-  ]);
+  const [environmentBindings, setEnvironmentBindings] = useState<EnvironmentBinding[]>([]);
 
   // Load initial backend setup
   const refresh = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchProjectSetup();
+      const [data, editor] = await Promise.all([fetchProjectSetup(), fetchProjectEditor()]);
       setPayload(data);
+      setEditorVersion(editor.version);
+      const document = editor.document as Partial<PrismFullConfigurationData>;
+      const metadata = document.metadata;
+      if (metadata) {
+        if (typeof metadata.name === 'string') setProjectName(metadata.name);
+        if (Array.isArray(metadata.responsibility)) setResponsibility(typeof metadata.responsibility[0] === 'string' ? metadata.responsibility[0] : '');
+        if (typeof metadata.status === 'string' && (metadata.status === 'active' || metadata.status === 'inactive')) setStatus(metadata.status);
+        if (typeof metadata.objective === 'string') setObjective(metadata.objective);
+        if (typeof metadata.timezone === 'string') setTimezone(metadata.timezone);
+        if (Array.isArray(metadata.tags)) setTags(metadata.tags.filter((tag): tag is string => typeof tag === 'string'));
+      }
+      const projectScope = document.projectScope;
+      const hasAuthoringEnvironments = Boolean(projectScope && Array.isArray(projectScope.environments));
+      if (projectScope && Array.isArray(projectScope.environments)) {
+        setEnvironments(projectScope.environments as ProjectEnvironment[]);
+      }
+      if (projectScope) {
+        if (typeof projectScope.teamDl === 'string') setTeamDl(projectScope.teamDl);
+        if (typeof projectScope.teamsChannel === 'string') setTeamsChannel(projectScope.teamsChannel);
+        if (projectScope.members) setMembers(projectScope.members as typeof members);
+        if (projectScope.teamScope) setTeamScope(projectScope.teamScope as TeamScope);
+      }
+      if (document.configurationResolution) {
+        if (Array.isArray(document.configurationResolution.precedence)) {
+          // Precedence is deployment-defined; the wizard displays the server order.
+        }
+        if (document.configurationResolution.rules) setOverrideRules(document.configurationResolution.rules as typeof overrideRules);
+      }
+      if (document.policies) {
+        if (typeof document.policies.dataRetention === 'string') setDataRetention(document.policies.dataRetention);
+        if (typeof document.policies.accessControl === 'string') setAccessControl(document.policies.accessControl);
+        if (typeof document.policies.auditLogging === 'string') setAuditLogging(document.policies.auditLogging);
+      }
+      if (document.additionalSettings) {
+        if (typeof document.additionalSettings.category === 'string') setProjectCategory(document.additionalSettings.category);
+        if (typeof document.additionalSettings.priority === 'string') setPriority(document.additionalSettings.priority);
+        if (typeof document.additionalSettings.enableAnalytics === 'boolean') setEnableAnalytics(document.additionalSettings.enableAnalytics);
+        if (typeof document.additionalSettings.enableNotifications === 'boolean') setEnableNotifications(document.additionalSettings.enableNotifications);
+      }
+      const timePolicy = document.investigationTimePolicy;
+      if (timePolicy) {
+        if (Array.isArray(timePolicy.anchors)) setAnchors(timePolicy.anchors);
+        if (typeof timePolicy.fallback === 'string') setFallbackAnchor(timePolicy.fallback);
+        if (typeof timePolicy.refinementEnabled === 'boolean') setRefinementEnabled(timePolicy.refinementEnabled);
+        if (typeof timePolicy.neverReplaceWithLowerConfidence === 'boolean') setNeverReplaceWithLower(timePolicy.neverReplaceWithLowerConfidence);
+      }
+      if (document.jqlConfiguration) setJqlConfig(document.jqlConfiguration);
+      if (Array.isArray(document.jiraCustomFields)) setJiraCustomFields(document.jiraCustomFields);
+      if (Array.isArray(document.schedules)) setSchedules(document.schedules);
+      if (Array.isArray(document.tools)) setTools(document.tools);
+      if (Array.isArray(document.environmentBindings)) setEnvironmentBindings(document.environmentBindings);
       if (data.scope.project_id) {
         setProjectId(data.scope.project_id);
-        setProjectName(data.scope.project_id.toUpperCase());
       }
       // Populate backend environments if present
-      if (Array.isArray(data.project_layer?.environments) && data.project_layer.environments.length > 0) {
+      if (!hasAuthoringEnvironments && Array.isArray(data.project_layer?.environments) && data.project_layer.environments.length > 0) {
         setEnvironments(
           data.project_layer.environments.map((e: any) => ({
             id: e.id,
@@ -557,6 +464,7 @@ export const ProjectSetup: React.FC = () => {
 
   useEffect(() => {
     void refresh();
+    void fetchPrincipal().then(setPrincipal).catch(() => setPrincipal(null));
   }, []);
 
   // Auto-dismiss success notices after 5 seconds to prevent permanent layout displacement
@@ -576,7 +484,7 @@ export const ProjectSetup: React.FC = () => {
         id: projectId,
         name: projectName,
         status,
-        responsibility: [responsibility.toLowerCase()],
+        responsibility: [responsibility],
         objective,
         timezone,
         tags,
@@ -674,8 +582,8 @@ export const ProjectSetup: React.FC = () => {
   const backendSaveYaml = useMemo(() => {
     return formatToYaml(
       buildProjectConfiguration(payload?.project_layer, {
-        tenantId: payload?.scope.tenant_id || 'YOUR_TENANT_ID',
-        projectId: payload?.scope.project_id || projectId || 'YOUR_PROJECT_ID',
+        tenantId: payload?.scope.tenant_id || '',
+        projectId: payload?.scope.project_id || projectId || '',
         allowUserPreferences: ['presentation', 'detail'],
         allowUserOverrides: ['incident-triage', 'log-correlation'],
         presentation: 'summary',
@@ -761,9 +669,9 @@ export const ProjectSetup: React.FC = () => {
   };
 
   const handleLoadExampleEnvs = () => {
-    setEnvironments(DEFAULT_EXAMPLE_ENVIRONMENTS);
+    void refresh();
     setStatusNotice({
-      text: 'Loaded 6 standard example environments (QLAB01–07, PLAB01).',
+      text: 'Reloaded environments from the saved project configuration.',
       type: 'info',
     });
   };
@@ -972,16 +880,21 @@ export const ProjectSetup: React.FC = () => {
   const handleSave = async () => {
     setSaving(true);
     setStatusNotice(null);
+    let operationalSaved = false;
     try {
       await saveProjectSetup(backendSaveYaml);
+      operationalSaved = true;
+      const { connectors: _connectors, ...authoringDocument } = prismFullConfig;
+      const editor = await saveProjectEditor(authoringDocument as unknown as Record<string, unknown>, editorVersion);
+      setEditorVersion(editor.version);
       setStatusNotice({
-        text: `PRISM Project configuration for '${projectId}' successfully verified and saved!`,
+        text: `Project '${projectId}' saved. Supported runtime settings are active; authoring drafts do not start schedules or grant access.`,
         type: 'success',
       });
       await refresh();
     } catch (cause) {
       setStatusNotice({
-        text: cause instanceof Error ? cause.message : 'Failed to persist project configuration',
+        text: `${operationalSaved ? 'Runtime settings saved, but the authoring draft was not saved. ' : ''}${cause instanceof Error ? cause.message : 'Failed to persist project configuration'}`,
         type: 'error',
       });
     } finally {
@@ -1013,7 +926,7 @@ export const ProjectSetup: React.FC = () => {
             Project Setup &amp; <span>Scoped Configuration</span>
           </h1>
           <p className="hero-lede">
-            Configure project metadata, dynamic environments, precedence resolution, temporal anchor policies, and multi-tenant connector tool bindings.
+            Manage project configuration and authoring drafts. Scheduling drafts do not run automatically; access and connector permissions use their dedicated editors.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -1057,18 +970,10 @@ export const ProjectSetup: React.FC = () => {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => {
-                setProjectId('sag');
-                setProjectName('SAG');
-                setResponsibility('Triaging');
-                setTimezone('America/Chicago');
-                setTags(['triage', 'samson', 'incident-investigation', 'routing']);
-                setEnvironments(DEFAULT_EXAMPLE_ENVIRONMENTS);
-                setStatusNotice({ text: 'Prefilled SAG reference metadata and environments from sample.yaml.', type: 'info' });
-              }}
-              title="Prefill sample.yaml reference configuration"
+              onClick={() => void refresh()}
+              title="Reload saved project configuration"
             >
-              <FileCode size={13} /> Prefill Reference
+              <RefreshCw size={13} /> Reload Saved Configuration
             </button>
             {currentStep < 6 ? (
               <button
@@ -1083,7 +988,7 @@ export const ProjectSetup: React.FC = () => {
                 type="button"
                 className="btn btn-primary"
                 onClick={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || !principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role))}
               >
                 <Save size={13} /> {saving ? 'Deploying…' : 'Save Project'}
               </button>
@@ -1177,17 +1082,10 @@ export const ProjectSetup: React.FC = () => {
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={() => {
-                    setProjectId('sag');
-                    setProjectName('SAG');
-                    setResponsibility('Triaging');
-                    setTimezone('America/Chicago');
-                    setTags(['triage', 'samson', 'incident-investigation', 'routing']);
-                    setStatusNotice({ text: 'Prefilled SAG reference metadata from sample.yaml.', type: 'info' });
-                  }}
+                  onClick={() => void refresh()}
                   style={{ fontSize: 11, padding: '4px 10px' }}
                 >
-                  Prefill Reference
+                  Reload Saved Configuration
                 </button>
               </div>
 
@@ -1199,11 +1097,12 @@ export const ProjectSetup: React.FC = () => {
                   <input
                     type="text"
                     value={projectId}
-                    onChange={e => setProjectId(e.target.value.toLowerCase())}
+                    readOnly
+                    aria-readonly="true"
                     className="ps-form-input mono"
-                    placeholder="sag"
+                    placeholder="Project ID"
                   />
-                  <span className="ps-form-hint">Unique identifier (lowercase, alphanumeric and hyphens)</span>
+                  <span className="ps-form-hint">Verified project identity from your signed-in scope</span>
                 </div>
 
                 <div className="ps-form-group">
@@ -1348,7 +1247,7 @@ export const ProjectSetup: React.FC = () => {
                       onClick={handleLoadExampleEnvs}
                       style={{ fontSize: 12 }}
                     >
-                      Load Example Environments
+                      Reload Saved Environments
                     </button>
                     {!isAddingEnv && (
                       <button
@@ -1462,7 +1361,7 @@ export const ProjectSetup: React.FC = () => {
                   <div className="ps-empty-state">
                     <Boxes size={28} style={{ opacity: 0.5 }} />
                     <div className="ps-empty-title">No environments found</div>
-                    <div className="ps-empty-desc">Add custom environments or click &apos;Load Example Environments&apos;.</div>
+                    <div className="ps-empty-desc">Add custom environments or click &apos;Reload Saved Environments&apos;.</div>
                   </div>
                 ) : (
                   <div className="ps-table-container">
@@ -1841,6 +1740,7 @@ export const ProjectSetup: React.FC = () => {
           {/* STEP 3: CONFIGURATION (RESOLUTION & POLICIES) */}
           {currentStep === 3 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              {principal && <ParameterSettingsPanel principal={principal} scope="project" />}
               <div className="ps-card">
                 <div className="ps-card-header">
                   <div>
@@ -2194,10 +2094,10 @@ export const ProjectSetup: React.FC = () => {
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      onClick={() => setJqlConfig(DEFAULT_JQL_CONFIG)}
+                      onClick={() => setJqlConfig({ pollingTemplate: '', reportingTemplate: '', amdocsDailyTemplate: '', environmentFilterTemplate: '' })}
                       style={{ fontSize: 12 }}
                     >
-                      Reset to Reference Templates
+                      Clear Templates
                     </button>
                   </div>
                 </div>
@@ -3587,7 +3487,7 @@ export const ProjectSetup: React.FC = () => {
                       type="button"
                       className="btn btn-primary"
                       onClick={() => void handleSave()}
-                      disabled={saving}
+                      disabled={saving || !principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role))}
                       style={{ fontSize: 12 }}
                     >
                       <Save size={13} /> {saving ? 'Saving…' : 'Save & Deploy Project'}

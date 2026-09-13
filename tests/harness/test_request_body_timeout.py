@@ -14,12 +14,13 @@ class RequestBodyTimeoutTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_bodies_time_out_and_release_upload_capacity(self):
         with tempfile.TemporaryDirectory() as directory:
             settings, token = settings_for(directory)
-            # Shorten only the test deadline; production settings require >= 1s.
-            settings = settings.model_copy(
-                update={"run_timeout_seconds": 0.02, "max_concurrent_uploads": 1}
-            )
+            settings = settings.model_copy(update={"max_concurrent_uploads": 1})
             app = create_app(settings)
             async with app.router.lifespan_context(app):
+                # Shorten the HTTP test deadline after startup validates production limits.
+                app.state.settings = app.state.settings.model_copy(
+                    update={"run_timeout_seconds": 0.02}
+                )
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app), base_url="http://test"
                 ) as client:

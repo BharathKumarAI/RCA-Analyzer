@@ -1,3 +1,5 @@
+import type { UiSettingsConfig } from '../types/api';
+import { PAGE_ICONS, isActivePage } from '../components/Sidebar';
 import React, { useEffect, useState } from 'react';
 import {
   Activity,
@@ -30,6 +32,7 @@ import type { ActivePage } from '../components/Sidebar';
 import '../styles/overview.css';
 
 interface OverviewProps {
+  settings: UiSettingsConfig;
   health: SystemHealth;
   agents: AgentConfiguration[];
   runs: Run[];
@@ -53,6 +56,7 @@ const formatDate = (value: string | number) => {
 };
 
 export const Overview: React.FC<OverviewProps> = ({
+  settings,
   health,
   agents,
   runs,
@@ -100,111 +104,11 @@ export const Overview: React.FC<OverviewProps> = ({
   const totalParameters = parameters?.length ?? 0;
   const overriddenParameters = parameters?.filter(p => p.override_revision && p.override_revision > 0).length ?? 0;
 
-  const adminControls: Array<{
-    title: string;
-    description: string;
-    page: ActivePage;
-    statusText: string;
-    statusTone?: 'normal' | 'highlight' | 'warning';
-    icon: React.ReactNode;
-  }> = [
-    {
-      title: 'Users & Operator Access',
-      description: 'Manage administrator accounts, assign scoped roles, and oversee RS256 principals.',
-      page: 'users',
-      statusText: 'Active Identity Directory',
-      statusTone: 'highlight',
-      icon: <Users size={16} />,
-    },
-    {
-      title: 'Roles & RBAC Matrix',
-      description: 'Define custom operational roles, fine-grained permission matrices, and custody gates.',
-      page: 'roles',
-      statusText: 'Declarative Security Roles',
-      statusTone: 'normal',
-      icon: <KeyRound size={16} />,
-    },
-    {
-      title: 'Policy & Redaction Rules',
-      description: 'Configure PII regex sanitization, dual-custody gates, and execution deadlines.',
-      page: 'policy',
-      statusText: 'Zero PII Leakage Enforced',
-      statusTone: 'normal',
-      icon: <ShieldCheck size={16} />,
-    },
-    {
-      title: 'Compute Quota & Token Budgets',
-      description: 'Manage monthly spend limits, token consumption thresholds, and model rate limits.',
-      page: 'billing',
-      statusText: 'Live Spend Aggregation',
-      statusTone: 'normal',
-      icon: <CreditCard size={16} />,
-    },
-    {
-      title: 'Diagnostic Tools & Connectors',
-      description: 'Splunk correlation, Jira triage, file extractors, and MCP tool broker.',
-      page: 'tools',
-      statusText: tools === null ? 'Checking...' : `${connectorCount} active conduits`,
-      statusTone: 'highlight',
-      icon: <Wrench size={16} />,
-    },
-    {
-      title: 'Specialist Agents & Approvals',
-      description: 'Declarative ADK multi-agent hierarchy, model routing, and YAML approvals.',
-      page: 'agents',
-      statusText: pending.length > 0 ? `${pending.length} pending review` : `${approved.length} approved`,
-      statusTone: pending.length > 0 ? 'warning' : 'normal',
-      icon: <Bot size={16} />,
-    },
-    {
-      title: 'Runtime Engine & Node Tuning',
-      description: 'Tune model profiles, thinking budgets, output caps, and instructions per agent stage.',
-      page: 'runtime',
-      statusText: 'Google ADK 2.9 Graph',
-      statusTone: 'highlight',
-      icon: <Zap size={16} />,
-    },
-    {
-      title: 'Parameter Studio & Tuning',
-      description: 'Create, validate, review, and publish versioned parameter sets directly to runtime.',
-      page: 'parameters',
-      statusText: parameters === null ? 'Loading…' : `${totalParameters} parameters · ${overriddenParameters} overrides`,
-      statusTone: overriddenParameters > 0 ? 'highlight' : 'normal',
-      icon: <Sliders size={16} />,
-    },
-    {
-      title: 'Knowledge & Runbook Corpus',
-      description: 'Publish incident response runbooks and troubleshooting guides for agent synthesis.',
-      page: 'knowledge',
-      statusText: 'Domain Context Library',
-      statusTone: 'normal',
-      icon: <BookOpen size={16} />,
-    },
-    {
-      title: 'Persistence & Retention Purge',
-      description: 'Set memory-safe upload limits, file parsing boundaries, and execute data lifecycle sweeps.',
-      page: 'persistence',
-      statusText: 'Bounded Local Storage & DB',
-      statusTone: 'normal',
-      icon: <HardDrive size={16} />,
-    },
-    {
-      title: 'Deployment Settings & Scope',
-      description: 'Scope boundaries, simulation mode, persistence & runtime constraints.',
-      page: 'project-setup',
-      statusText: health.mode === 'demo' ? 'Demo Mode (Simulated)' : 'Live Mode (Connected)',
-      statusTone: health.mode === 'demo' ? 'warning' : 'normal',
-      icon: <Settings size={16} />,
-    },
-    {
-      title: 'Operational Alerts & Broadcast',
-      description: 'Evaluate latency & failure tripwires, acknowledge alerts, or broadcast advisories.',
-      page: 'alerts',
-      statusText: alerts === null ? 'Checking...' : `${alerts.length} active alerts`,
-      statusTone: alerts && alerts.length > 0 ? 'warning' : 'normal',
-      icon: <CircleAlert size={16} />,
-    },
-  ];
+  const adminControls = settings.navigation.flatMap(item => {
+    if (!item.visible || !isActivePage(item.page) || item.page === 'overview') return [];
+    const Icon = PAGE_ICONS[item.page];
+    return [{ page: item.page, title: item.label, description: item.description, icon: <Icon size={16} />, group: item.group }];
+  });
 
   return (
     <div className="view-container overview-page">
@@ -212,10 +116,10 @@ export const Overview: React.FC<OverviewProps> = ({
       <section className="hero-banner">
         <div className="hero-main">
           <h1 className="hero-title">
-            Administration <span>Overview</span>
+            {settings.welcome_title}
           </h1>
           <p className="hero-lede">
-            Autonomous SRE control plane: manage deployment scope, govern specialist agents, and monitor operational telemetry.
+            {settings.welcome_description}
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -518,6 +422,7 @@ export const Overview: React.FC<OverviewProps> = ({
       </section>
 
       {/* Deployment & Architecture Controls (Full Width) */}
+      {/* Deployment & Architecture Controls (Full Width) */}
       <section className="admin-card-section">
         <div className="admin-card-header">
           <div>
@@ -527,29 +432,44 @@ export const Overview: React.FC<OverviewProps> = ({
           <span className="control-count-badge">{adminControls.length} Modules</span>
         </div>
 
-        <div className="admin-controls-grid">
-          {adminControls.map(item => (
-            <button
-              type="button"
-              className="admin-control-card"
-              key={item.title}
-              onClick={() => onNavigate(item.page)}
-            >
-              <div className="control-card-top">
-                <div className="control-icon-box">{item.icon}</div>
-                <div className="control-heading">
-                  <strong className="control-title">{item.title}</strong>
+        <div className="admin-controls-grouped">
+          {[...new Set(adminControls.map(item => item.group))].map(group => {
+            const groupItems = adminControls.filter(item => item.group === group);
+            if (groupItems.length === 0) return null;
+            return (
+              <div key={group} className="overview-group-block">
+                <div className="overview-group-heading">
+                  <span className="overview-group-dot" />
+                  <h3 className="overview-group-name">{group}</h3>
+                  <span className="overview-group-count">{groupItems.length}</span>
                 </div>
-                <ArrowRight size={14} className="control-arrow" />
+                <div className="admin-controls-grid">
+                  {groupItems.map(item => (
+                    <button
+                      type="button"
+                      className="admin-control-card"
+                      key={item.title}
+                      onClick={() => onNavigate(item.page)}
+                    >
+                      <div className="control-card-top">
+                        <div className="control-icon-box">{item.icon}</div>
+                        <div className="control-heading">
+                          <strong className="control-title">{item.title}</strong>
+                        </div>
+                        <ArrowRight size={14} className="control-arrow" />
+                      </div>
+                      <p className="control-desc">{item.description}</p>
+                      <div className="control-card-footer">
+                        <span className="control-status-badge tone-normal">
+                          {item.group}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <p className="control-desc">{item.description}</p>
-              <div className="control-card-footer">
-                <span className={`control-status-badge tone-${item.statusTone || 'normal'}`}>
-                  {item.statusText}
-                </span>
-              </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </section>
 

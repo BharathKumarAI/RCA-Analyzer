@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from importlib.metadata import version
+from importlib.resources import files
+import hashlib
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,6 +29,12 @@ class WorkflowDefinition(BaseModel):
         nodes = {n.id: n for n in self.nodes}
         if len(nodes) != len(self.nodes) or self.root not in nodes:
             raise ValueError("Workflow requires unique IDs and an existing root")
+        generated = [n.id + "_join" for n in self.nodes if n.kind == "parallel"]
+        if set(generated) & set(nodes) or len(generated) != len(set(generated)):
+            raise ValueError("Generated join IDs collide with explicit nodes")
+        refs = [n.ref for n in self.nodes if n.kind in {"builtin", "agent"}]
+        if len(refs) != len(set(refs)):
+            raise ValueError("A callable agent can appear only once in a workflow")
         seen, active = set(), set()
 
         def visit(key):
@@ -139,7 +147,10 @@ def graph_view(definition):
 
 
 def compatibility():
+    schema = files("google.adk").joinpath("agents/config_schemas/AgentConfig.json").read_bytes()
     return {"adk_version": version("google-adk"), "schema_version": 1,
+            "adk_schema_hash": "sha256:" + hashlib.sha256(schema).hexdigest(),
+            "adk_schema_source": "google.adk/agents/config_schemas/AgentConfig.json",
             "supported": ["LlmAgent", "SequentialAgent", "ParallelAgent", "Workflow", "JoinNode", "AgentTool", "FunctionTool"],
             "limitations": ["Uploaded code is never executed", "Models require an authorized profile", "Unresolved features block activation"]}
 
@@ -181,9 +192,10 @@ def prune_optional(definition, unavailable):
     return WorkflowDefinition(root=definition.root, nodes=[n for n in nodes.values() if n.id not in removed])
 
 
-def enrich_runtime_graph(graph, agents):
+def enrich_runtime_graph(graph, agents, default_profile=None):
     """Only inspect registered native components; no provider calls or code loading."""
     from google.adk.tools import AgentTool
+    from app.tools.catalog import TOOL_ACTIONS
     ids = {n["id"] for n in graph["nodes"]}
     def add(id, kind, label, parent=None, details=None):
         if id not in ids:
@@ -193,9 +205,13 @@ def enrich_runtime_graph(graph, agents):
     def inspect(agent, owner):
         model = getattr(agent, 'model', None)
         if model is not None:
-            key = 'model:' + str(getattr(model, 'model', model))
-            add(key, 'model', str(getattr(model, 'model', model)))
-            graph['edges'].append({"source": owner, "target": key, "kind": "dependency"})
+            key = next((e['target'] for e in graph['edges'] if e['source'] == owner and e['target'].startswith('model:')), 'model:' + (default_profile or str(getattr(model, 'model', model))))
+            add(key, 'model', key.removeprefix('model:'))
+            profile_node = next(n for n in graph['nodes'] if n['id'] == key)
+            profile_node.setdefault('details', {}).setdefault('recorded_models', {})[owner] = str(getattr(model, 'model', model))
+            edge = {"source": owner, "target": key, "kind": "dependency"}
+            if edge not in graph['edges']:
+                graph['edges'].append(edge)
         for tool in getattr(agent, 'tools', ()):
             if isinstance(tool, AgentTool):
                 child = tool.agent
@@ -205,9 +221,11 @@ def enrich_runtime_graph(graph, agents):
             else:
                 name = getattr(tool, 'name', None)
                 if name:
-                    key = 'tool:' + name
-                    add(key, 'tool', name)
-                    graph['edges'].append({"source": owner, "target": key, "kind": "dependency"})
+                    key = 'tool:' + TOOL_ACTIONS.get(name, name)
+                    add(key, 'tool', TOOL_ACTIONS.get(name, name))
+                    edge = {"source": owner, "target": key, "kind": "dependency"}
+                    if edge not in graph['edges']:
+                        graph['edges'].append(edge)
     for node in list(graph['nodes']):
         agent = agents.get(node.get('ref') or node['id'])
         if agent is not None:

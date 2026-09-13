@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus } from 'lucide-react';
+import { Eye } from 'lucide-react';
 
 interface ModuleCardProps {
   id: string;
@@ -8,7 +8,7 @@ interface ModuleCardProps {
   category: string;
   icon: React.ReactNode;
   isCompatibility?: boolean;
-  onAdd: (type: string) => void;
+  onSelect: (type: string) => void;
 }
 
 export const ModuleCard: React.FC<ModuleCardProps> = ({
@@ -17,19 +17,22 @@ export const ModuleCard: React.FC<ModuleCardProps> = ({
   description,
   icon,
   isCompatibility,
-  onAdd,
+  onSelect,
 }) => {
   return (
     <div
       className={`hs-module-card ${isCompatibility ? 'compatibility' : ''}`}
-      onClick={() => onAdd(id)}
-      title={`Click to add ${name} to canvas`}
+      onClick={() => onSelect(id)}
+      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(id); } }}
+      role="button"
+      tabIndex={0}
+      title={`Inspect ${name}`}
     >
       <div className="hs-module-icon">{icon}</div>
       <div className="hs-module-info">
         <div className="hs-module-name">
           {name}
-          {isCompatibility && <span className="hs-compat-tag">Legacy</span>}
+          {isCompatibility && <span className="hs-compat-tag">Read only</span>}
         </div>
         <div className="hs-module-desc">{description}</div>
       </div>
@@ -37,12 +40,13 @@ export const ModuleCard: React.FC<ModuleCardProps> = ({
         type="button"
         className="icon-btn"
         style={{ width: 22, height: 22 }}
+        aria-label={`Inspect ${name}`}
         onClick={e => {
           e.stopPropagation();
-          onAdd(id);
+          onSelect(id);
         }}
       >
-        <Plus size={13} />
+        <Eye size={13} />
       </button>
     </div>
   );

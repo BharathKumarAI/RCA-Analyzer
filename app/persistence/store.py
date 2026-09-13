@@ -627,6 +627,18 @@ class InvestigationStore:
                 )
                 .scalar_subquery()
             )
+            # Trace tables may be absent in an older SQLite database opened
+            # before the event store was initialized.
+            has_run_events = self.engine.dialect.name != "sqlite" or await c.scalar(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'harness_run_events'"
+                )
+            )
+            if has_run_events:
+                from app.persistence.run_events import run_events
+
+                await c.execute(delete(run_events).where(run_events.c.run_id.in_(old)))
             await c.execute(delete(chat_runs).where(chat_runs.c.run_id.in_(old)))
             await c.execute(delete(evidence).where(evidence.c.run_id.in_(old)))
             result2 = await c.execute(
@@ -696,3 +708,47 @@ class InvestigationStore:
             q.order_by(runs.c.created_at.desc()).limit(max(1, min(limit, 100))),
             principal,
         )
+
+    async def chat_context(self, contract, max_chars):
+        """Owner-only historical notes; never import previous citations as evidence."""
+        from app.policy.redaction import redact
+
+        if not contract.request.chat_id:
+            return []
+        principal = contract.principal
+        await self.require_chat(contract.request.chat_id, principal)
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(
+                select(runs).join(chat_runs, chat_runs.c.run_id == runs.c.run_id)
+                .where(chat_runs.c.chat_id == contract.request.chat_id,
+                       self._scope(runs, principal), runs.c.subject == principal.subject,
+                       runs.c.created_at < contract.created_at,
+                       runs.c.updated_at < contract.created_at,
+                       runs.c.status.in_(("SUCCEEDED", "PARTIAL")))
+                .order_by(runs.c.created_at.desc(), runs.c.run_id).limit(3)
+            )).all()
+        snapshot = json.loads(contract.model_config_json)
+        history = []
+        for row in rows:
+            previous = RunContract.model_validate_json(row.contract_json)
+            previous_snapshot = json.loads(previous.model_config_json)
+            # Old notes cannot restore a revoked capability or disabled source.
+            if (previous.capability, previous.capability_hash, previous.policy_hash) != (
+                contract.capability, contract.capability_hash, contract.policy_hash
+            ):
+                continue
+            if any(previous_snapshot.get(key) != snapshot.get(key)
+                   for key in ("allowed_actions", "disabled_connectors", "environments", "workflow")):
+                continue
+            if not row.result_json:
+                continue
+            result = json.loads(row.result_json)
+            note = {
+                "run_id": row.run_id, "created_at": row.created_at,
+                "status": row.status, "historical": True,
+                "request": redact(previous.request.text, max_text=max_chars // 8),
+                "summary": redact(result["summary"], max_text=max_chars // 8),
+            }
+            if len(json.dumps([*history, note], ensure_ascii=False)) <= max_chars:
+                history.append(note)
+        return history

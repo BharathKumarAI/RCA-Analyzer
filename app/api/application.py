@@ -14,8 +14,9 @@ from app.identity.auth import authenticated_principal
 from app.identity.principals import Role
 
 from app.runtime.bootstrap import application_lifespan
-from app.api.routes import catalog, files, runs, agents, optimization, chats, parameters, harness
-from app.api.routes import integrations, harness_workspace
+from app.api.routes import catalog, files, runs, agents, optimization, chats, parameters, harness, deployment_settings
+from app.api.routes import platform_configuration
+from app.api.routes import integrations, harness_workspace, ui_settings, project_editor
 
 
 def create_app(settings=None, *, connectors=None, model_factory=None):
@@ -116,8 +117,9 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             status_code=422,
         )
 
-    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace):
+    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace, ui_settings, project_editor, deployment_settings):
         api.include_router(module.router)
+    api.include_router(platform_configuration.router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     web_dir = Path(__file__).resolve().parents[2] / "web"

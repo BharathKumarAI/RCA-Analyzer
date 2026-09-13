@@ -1,7 +1,8 @@
 """Strict, data-only agent configuration models."""
 
 from typing import Any, Annotated, Literal, Tuple
-from pydantic import BaseModel, ConfigDict, Field, field_validator, AfterValidator
+import re
+from pydantic import BaseModel, ConfigDict, Field, field_validator, AfterValidator, model_validator
 from app.tools.catalog import ALLOWED_ACTIONS
 from app.capabilities.models import StrictModel
 from app.identity.principals import Role
@@ -81,6 +82,78 @@ ConnectorValueType = Literal["string", "integer", "number", "boolean", "json", "
 IntegrationKind = Literal["native", "mcp", "a2a", "parser"]
 
 
+ParameterValueType = Literal["string", "integer", "number", "boolean", "json", "secret_ref"]
+KNOWN_PARAMETER_CATEGORIES = {
+    "connectivity": (
+        "authentication",
+        "endpoint",
+        "protocol",
+        "rate_limit",
+        "retry",
+        "service_account",
+        "timeouts",
+    ),
+    "identity": ("service_account", "authentication"),
+    "performance": ("rate_limit", "retry", "timeouts"),
+    "query": ("index_selection", "pagination"),
+    "schedules": ("environment", "schedule", "window", "polling_frequency", "max_window_seconds"),
+    "security": ("auth", "oauth", "secret"),
+    "runtime": ("operation", "deployment"),
+    "operational": ("general",),
+}
+
+
+def _normalize_category_value(category: str, subcategory: str | None) -> tuple[str, str | None]:
+    category_key = category.strip().lower()
+    if category_key not in KNOWN_PARAMETER_CATEGORIES:
+        raise ValueError(f"Unknown parameter category '{category}'")
+    if subcategory is None:
+        return category_key, None
+    subcategory_value = subcategory.strip().lower()
+    if not subcategory_value:
+        raise ValueError("Subcategory cannot be empty when provided")
+    if (
+        subcategory_value not in KNOWN_PARAMETER_CATEGORIES[category_key]
+        and KNOWN_PARAMETER_CATEGORIES[category_key] != ("general",)
+    ):
+        raise ValueError(
+            f"Invalid subcategory '{subcategory}' for category '{category}'"
+        )
+    return category_key, subcategory_value
+
+
+def _validate_parameter_typed_value(value_type: ParameterValueType, value: Any) -> None:
+    if value_type == "string":
+        if not isinstance(value, str):
+            raise ValueError("Default value must be a string")
+    elif value_type == "integer":
+        if type(value) is not int:
+            raise ValueError("Default value must be an integer")
+    elif value_type == "number":
+        if type(value) is not int and not (
+            type(value) is float and value == value and value != float("inf") and value != float("-inf")
+        ):
+            raise ValueError("Default value must be a finite number")
+    elif value_type == "boolean":
+        if type(value) is not bool:
+            raise ValueError("Default value must be boolean")
+    elif value_type == "json":
+        if not isinstance(value, (dict, list)):
+            raise ValueError("JSON value type requires a dict or list")
+    elif value_type == "secret_ref":
+        if not isinstance(value, str) or not re.fullmatch(
+            r"env://[A-Z][A-Z0-9_]{0,127}", value
+        ):
+            raise ValueError("secret_ref must be env://TOKEN_REFERENCE")
+
+
+def _validate_field_allowed_values(value_type: ParameterValueType, values: tuple[Any, ...]) -> None:
+    if len(values) == 0:
+        raise ValueError("allowed_values cannot be empty when provided")
+    for item in values:
+        _validate_parameter_typed_value(value_type, item)
+
+
 class ConnectorTemplateField(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     variable_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
@@ -90,6 +163,19 @@ class ConnectorTemplateField(BaseModel):
     allow_project_override: bool = True
     visible_in_project: bool = True
     icon: str = Field(default="settings", pattern=r"^[a-z0-9_-]{1,64}$")
+    category: str = Field(default="operational", min_length=1, max_length=120)
+    subcategory: str | None = Field(default=None, max_length=120)
+    allowed_values: tuple[Any, ...] | None = None
+
+    @model_validator(mode="after")
+    def validate_field_contract(self):
+        _normalize_category_value(self.category, self.subcategory)
+        _validate_parameter_typed_value(self.value_type, self.default_value)
+        if self.allowed_values is not None:
+            _validate_field_allowed_values(self.value_type, self.allowed_values)
+            if self.default_value not in self.allowed_values:
+                raise ValueError("Default value must be one of allowed_values")
+        return self
 
 
 class ConnectorTemplate(BaseModel):

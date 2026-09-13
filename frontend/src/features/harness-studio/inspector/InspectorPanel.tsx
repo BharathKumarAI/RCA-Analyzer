@@ -1,41 +1,22 @@
-import React, { useState } from 'react';
-import {
-  Bot,
-  Cpu,
-  Workflow,
-  Sparkles,
-  Shield,
-  Layers,
-  ExternalLink,
-  Code,
-  Trash2,
-  Save,
-  CheckCircle2,
-  AlertTriangle,
-} from 'lucide-react';
+import React from 'react';
+import { Code } from 'lucide-react';
 import { AdkComponent, HarnessDefinition } from '../types/harness';
 import { EnvironmentBindings } from './EnvironmentBindings';
 import { COMPONENT_REGISTRY } from '../compiler/registry';
-import { WorkflowMigratorModal } from '../canvas/WorkflowMigratorModal';
 
 interface InspectorPanelProps {
   component: AdkComponent;
   harness: HarnessDefinition;
   onUpdateComponent: (updated: AdkComponent) => void;
-  onDeleteComponent: (id: string) => void;
-  onMigrateToWorkflow?: (workflow: any) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   component,
   harness,
   onUpdateComponent,
-  onDeleteComponent,
-  onMigrateToWorkflow,
 }) => {
-  const [showMigrator, setShowMigrator] = useState(false);
   const isAgent = component.kind === 'agent';
-  const isSequential = isAgent && component.agentClass === 'SequentialAgent';
+  const editable = component.origin.editable;
   const isCustomPython = isAgent && component.origin.source === 'python';
   const registryEntry = isCustomPython ? COMPONENT_REGISTRY[component.id] : null;
 
@@ -47,62 +28,39 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
             {isAgent ? component.agentClass : 'ADK 2.x Workflow'}
           </div>
-        </div>
-
-        {component.id !== 'root_orchestrator' && (
-          <button
-            type="button"
-            className="icon-btn"
-            style={{ color: '#ef4444' }}
-            onClick={() => onDeleteComponent(component.id)}
-            title="Remove from harness"
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
-      </div>
-
-      {/* Migration callout for SequentialAgent */}
-      {isSequential && (
-        <div style={{ padding: '10px 12px', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: 8, marginBottom: 16, fontSize: 11 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ color: '#fef08a', fontWeight: 600 }}>SequentialAgent Deprecated</span>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ fontSize: 10, padding: '3px 8px' }}
-              onClick={() => setShowMigrator(true)}
-            >
-              <Workflow size={11} /> Convert to Workflow
-            </button>
+          <div className="hs-inspector-provenance">
+            <span>{component.origin.filePath || component.origin.source}</span>
+            {!editable && <span className="hs-inspector-readonly">Read only</span>}
           </div>
         </div>
-      )}
+
+      </div>
 
       {/* Basic Properties */}
-      <div className="hs-form-group">
+      {isAgent ? <div className="hs-form-group">
         <label className="hs-form-label">Component Name</label>
-        <input
-          type="text"
-          className="hs-input"
-          value={component.name}
-          onChange={e => onUpdateComponent({ ...component, name: e.target.value })}
-        />
-      </div>
+        <input type="text" className="hs-input" value={component.name} disabled={!editable} onChange={e => onUpdateComponent({ ...component, name: e.target.value })} />
+      </div> : <div className="hs-inspector-resolved-details">
+        <div className="hs-form-label">Resolved workflow component</div>
+        <p>This node is compiled by the backend from the validated YAML graph.</p>
+        {component.description && <div className="hs-form-hint">{component.description}</div>}
+        <div className="hs-form-hint">Source: {component.origin.filePath || component.origin.source}</div>
+        {'nodes' in component && <div className="hs-form-hint">Internal components: {component.nodes.length} · execution edges: {component.edges.length}</div>}
+      </div>}
 
       {isAgent && (
         <>
           <div className="hs-form-group">
             <label className="hs-form-label">Model Profile</label>
-            <select
-              className="hs-select"
-              value={component.model || 'gemini-2.5-flash'}
-              onChange={e => onUpdateComponent({ ...component, model: e.target.value })}
-            >
-              <option value="gemini-2.5-flash">gemini-2.5-flash (Fast Triage)</option>
-              <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Investigation)</option>
-              <option value="balanced-investigation">balanced-investigation (Platform Profile)</option>
-            </select>
+            <input
+              type="text"
+              className="hs-input"
+              value={component.modelProfile || ''}
+              disabled={!editable}
+              onChange={e => onUpdateComponent({ ...component, modelProfile: e.target.value, model: undefined })}
+            />
+            <div className="hs-form-hint">Resolved from the authorized backend model profile.</div>
+            {component.stageModel && <div className="hs-form-hint">Effective stage: <code>{component.stageModel}</code></div>}
           </div>
 
           <div className="hs-form-group">
@@ -110,6 +68,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             <textarea
               className="hs-textarea"
               value={component.instruction || ''}
+              disabled={!editable}
               onChange={e => onUpdateComponent({ ...component, instruction: e.target.value })}
               placeholder="Enter agent instruction prompt..."
             />
@@ -180,19 +139,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </>
       )}
 
-      {/* Migration Modal */}
-      {showMigrator && isSequential && (
-        <WorkflowMigratorModal
-          agent={component}
-          onClose={() => setShowMigrator(false)}
-          onConfirm={workflow => {
-            setShowMigrator(false);
-            if (onMigrateToWorkflow) {
-              onMigrateToWorkflow(workflow);
-            }
-          }}
-        />
-      )}
     </div>
   );
 };

@@ -62,6 +62,13 @@ class RunTraceIntegrationTests(unittest.TestCase):
                     if event["kind"] == "tool_completed"
                 ]
                 self.assertTrue(completed_tools)
+                self.assertTrue(all(event["node_id"] in node_ids for event in completed_tools))
+                self.assertIn("tool:itsm.get_ticket", node_ids)
+                self.assertIn("model:balanced-investigation", node_ids)
+                self.assertNotIn("tool:get_ticket", node_ids)
+                completed_agents = [event for event in payload["events"] if event["kind"] == "completed"]
+                self.assertTrue(completed_agents, payload["events"])
+                self.assertTrue(all(event["details"]["duration_ms"] >= 0 for event in completed_agents))
                 self.assertTrue(
                     all(event["details"]["duration_ms"] >= 0 for event in completed_tools)
                 )

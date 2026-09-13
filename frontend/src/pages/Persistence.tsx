@@ -10,16 +10,19 @@ import {
   Clock,
   FileCode,
   Sliders,
-  ShieldCheck,
 } from 'lucide-react';
 import {
   ApiError,
+  fetchPrincipal,
   fetchSystemDiagnostics,
-  fetchFileLimits,
-  updateFileLimits,
+  fetchConfig,
+  fetchPlatformSettings,
+  updatePlatformSettings,
+  fetchPlatformFileProcessing,
+  updatePlatformFileProcessing,
   triggerRetentionCleanup,
 } from '../services/api';
-import type { FileLimitsConfig, CleanupResult } from '../types/api';
+import type { CleanupResult, FileLimitsConfig, PlatformSettingsConfig, Principal } from '../types/api';
 
 interface Diagnostics {
   database?: { status?: string; dialect?: string; latency_ms?: number };
@@ -35,6 +38,9 @@ interface Diagnostics {
 export const Persistence: React.FC = () => {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [limits, setLimits] = useState<FileLimitsConfig | null>(null);
+  const [principal, setPrincipal] = useState<Principal | null>(null);
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettingsConfig | null>(null);
+  const [fileProcessingHash, setFileProcessingHash] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cleaning, setCleaning] = useState(false);
@@ -67,11 +73,17 @@ export const Persistence: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [diagData, limData] = await Promise.all([
-        fetchSystemDiagnostics(),
-        fetchFileLimits(),
+      const [diagData, currentPrincipal, settings] = await Promise.all([
+        fetchSystemDiagnostics(), fetchPrincipal(), fetchPlatformSettings(),
       ]);
+      const fileConfig = currentPrincipal.roles.includes('PLATFORM_ADMIN')
+        ? await fetchPlatformFileProcessing()
+        : await fetchConfig();
       setDiagnostics(diagData);
+      setPrincipal(currentPrincipal);
+      setPlatformSettings(settings);
+      setFileProcessingHash('content_hash' in fileConfig ? fileConfig.content_hash : null);
+      const limData = ('values' in fileConfig ? fileConfig.values : fileConfig.file_limits) as unknown as FileLimitsConfig;
       setLimits(limData);
       setMaxFileMb(Math.round((limData.max_file_bytes || 10485760) / 1024 / 1024));
       setMaxFiles(limData.max_files || 5);
@@ -79,8 +91,8 @@ export const Persistence: React.FC = () => {
       setMaxPdfPages(limData.max_pdf_pages || 15);
       setParserTimeout(limData.parser_timeout_seconds || 20);
       setConcurrency(limData.concurrency || 4);
-      setRetentionDays(limData.retention_days || 30);
-      setAutoPrune(limData.auto_prune_enabled ?? true);
+      setRetentionDays(settings.retention_days);
+      setAutoPrune(false);
       setAllowedExts(limData.allowed_extensions || ['.log', '.txt', '.json', '.csv', '.pdf']);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Unable to load persistence configuration.');
@@ -93,23 +105,43 @@ export const Persistence: React.FC = () => {
     void load();
   }, []);
 
+  const isPlatformAdmin = principal?.roles.includes('PLATFORM_ADMIN') ?? false;
+
   const handleSaveLimits = async () => {
     setSaving(true);
     setError(null);
     setSuccessMsg(null);
     try {
-      const updated = await updateFileLimits({
+      if (!fileProcessingHash) return;
+      const fileValues = {
+        ...limits,
         max_file_bytes: maxFileMb * 1024 * 1024,
         max_files: maxFiles,
         max_text_chars: maxTextChars,
         max_pdf_pages: maxPdfPages,
         parser_timeout_seconds: parserTimeout,
         concurrency: concurrency,
-        retention_days: retentionDays,
-        auto_prune_enabled: autoPrune,
         allowed_extensions: allowedExts,
-      });
-      setLimits(updated);
+      };
+      delete (fileValues as Record<string, unknown>).tenant_id;
+      delete (fileValues as Record<string, unknown>).project_id;
+      delete (fileValues as Record<string, unknown>).updated_at;
+      const updated = await updatePlatformFileProcessing(fileValues, fileProcessingHash);
+      if (platformSettings) {
+        const updatedSettings = await updatePlatformSettings({
+          run_timeout_seconds: platformSettings.run_timeout_seconds,
+          max_concurrent_runs: platformSettings.max_concurrent_runs,
+          max_llm_calls: platformSettings.max_llm_calls,
+          max_input_chars: platformSettings.max_input_chars,
+          max_context_chars: platformSettings.max_context_chars,
+          retention_days: retentionDays,
+          mode: platformSettings.mode,
+        });
+        setPlatformSettings(updatedSettings);
+      }
+      setFileProcessingHash(updated.content_hash);
+      const updatedValues = ('values' in updated ? updated.values : updated) as unknown as FileLimitsConfig;
+      setLimits(updatedValues);
       setSuccessMsg('Storage bounds & retention limits successfully saved and applied!');
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (e) {
@@ -135,6 +167,7 @@ export const Persistence: React.FC = () => {
   };
 
   const addExt = (e: React.KeyboardEvent) => {
+    if (!isPlatformAdmin) return;
     if (e.key === 'Enter' && newExtInput.trim()) {
       e.preventDefault();
       let ext = newExtInput.trim().toLowerCase();
@@ -185,15 +218,15 @@ export const Persistence: React.FC = () => {
           >
             <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
           </button>
-          <button
+          {isPlatformAdmin && <button
             type="button"
             className="btn btn-primary"
             onClick={() => void handleSaveLimits()}
-            disabled={loading || saving || cleaning}
+            disabled={loading || saving || cleaning || !isPlatformAdmin}
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <Save size={13} /> {saving ? 'Saving...' : 'Save Configuration'}
-          </button>
+          </button>}
         </div>
       </section>
 
@@ -283,6 +316,7 @@ export const Persistence: React.FC = () => {
                 max="100"
                 value={maxFileMb}
                 onChange={e => setMaxFileMb(parseInt(e.target.value, 10) || 1)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -297,6 +331,7 @@ export const Persistence: React.FC = () => {
                 max="50"
                 value={maxFiles}
                 onChange={e => setMaxFiles(parseInt(e.target.value, 10) || 1)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -312,6 +347,7 @@ export const Persistence: React.FC = () => {
                 max="1000000"
                 value={maxTextChars}
                 onChange={e => setMaxTextChars(parseInt(e.target.value, 10) || 10000)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -326,6 +362,7 @@ export const Persistence: React.FC = () => {
                 max="100"
                 value={maxPdfPages}
                 onChange={e => setMaxPdfPages(parseInt(e.target.value, 10) || 1)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -340,6 +377,7 @@ export const Persistence: React.FC = () => {
                 max="120"
                 value={parserTimeout}
                 onChange={e => setParserTimeout(parseInt(e.target.value, 10) || 5)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -354,6 +392,7 @@ export const Persistence: React.FC = () => {
                 max="16"
                 value={concurrency}
                 onChange={e => setConcurrency(parseInt(e.target.value, 10) || 1)}
+                disabled={!isPlatformAdmin || saving}
                 style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 13 }}
               />
             </div>
@@ -380,13 +419,14 @@ export const Persistence: React.FC = () => {
                   }}
                 >
                   <code>{ext}</code>
-                  <button
-                    type="button"
-                    onClick={() => removeExt(ext)}
+              {isPlatformAdmin && <button
+                type="button"
+                onClick={() => removeExt(ext)}
+                disabled={!isPlatformAdmin || saving}
                     style={{ background: 'transparent', border: 'none', color: '#60a5fa', cursor: 'pointer', padding: 0, fontSize: 12 }}
                   >
                     ×
-                  </button>
+                  </button>}
                 </span>
               ))}
             </div>
@@ -396,6 +436,7 @@ export const Persistence: React.FC = () => {
               value={newExtInput}
               onChange={e => setNewExtInput(e.target.value)}
               onKeyDown={addExt}
+              disabled={!isPlatformAdmin || saving}
               style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 6, fontSize: 12 }}
             />
           </div>
@@ -421,6 +462,7 @@ export const Persistence: React.FC = () => {
               max="180"
               value={retentionDays}
               onChange={e => setRetentionDays(parseInt(e.target.value, 10))}
+              disabled={!isPlatformAdmin || saving}
               style={{ width: '100%', cursor: 'pointer' }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>
@@ -434,14 +476,16 @@ export const Persistence: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--surface-sunken)', borderRadius: 8, border: '1px solid var(--line)', marginBottom: 20 }}>
             <div>
               <div style={{ fontWeight: 500, fontSize: 13 }}>Automated Daemon Pruning</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>Purge expired artifacts nightly via scheduler</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>Automatic pruning is unavailable because no durable background worker is configured.</div>
             </div>
             <input
               type="checkbox"
               checked={autoPrune}
-              onChange={e => setAutoPrune(e.target.checked)}
-              style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
+              disabled
+              aria-describedby="auto-prune-status"
+              style={{ transform: 'scale(1.2)', cursor: 'not-allowed' }}
             />
+            <div id="auto-prune-status" style={{ fontSize: 11, color: 'var(--muted)' }}>Automatic pruning is unavailable because no durable background worker is configured.</div>
           </div>
 
           {/* On-Demand Cleanup Trigger */}
@@ -451,16 +495,7 @@ export const Persistence: React.FC = () => {
               Manually sweep the database and local blobstore for records older than {retentionDays} days.
             </p>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button
-                type="button"
-                className="btn btn-outline"
-                onClick={() => void handleRunCleanup(true)}
-                disabled={cleaning}
-                style={{ fontSize: 12 }}
-              >
-                Dry Run (Preview)
-              </button>
-              <button
+              {isPlatformAdmin && <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => {
@@ -468,11 +503,11 @@ export const Persistence: React.FC = () => {
                     void handleRunCleanup(false);
                   }
                 }}
-                disabled={cleaning}
+                disabled={cleaning || !isPlatformAdmin}
                 style={{ fontSize: 12, background: '#ef4444', borderColor: '#ef4444' }}
               >
                 <Trash2 size={13} /> {cleaning ? 'Purging...' : 'Purge Expired Data'}
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -494,7 +529,7 @@ export const Persistence: React.FC = () => {
               <div style={{ color: 'var(--text)', lineHeight: 1.6 }}>
                 <div><b>Purged Runs:</b> {cleanupResult.purged_runs}</div>
                 <div><b>Purged Attachments:</b> {cleanupResult.purged_attachments}</div>
-                <div><b>Freed Storage:</b> {(cleanupResult.freed_bytes / 1024).toFixed(1)} KB</div>
+                <div><b>Freed Storage:</b> {((cleanupResult.freed_bytes ?? 0) / 1024).toFixed(1)} KB</div>
                 <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
                   Cutoff: {cleanupResult.retention_cutoff_utc}
                 </div>

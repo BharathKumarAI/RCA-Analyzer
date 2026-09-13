@@ -4,6 +4,8 @@ RCA Analyzer is a Google ADK service for bounded, evidence-grounded incident ana
 
 Start with the [harness guide](docs/harness.md) for the complete component map and lifecycle diagrams. Use the [architecture reference](docs/architecture.md) for implementation details and the [operations guide](docs/operations.md) for deployment behavior.
 
+See [runtime context and tool lifecycle](docs/runtime-context.md) for evidence limits, complete request budgeting, and authorized follow-up context.
+
 ## Data and templates
 
 PostgreSQL manages configuration snapshots, platform/project parameters, run records and file metadata. Uploaded bytes, extracted content and generated artifacts use local/GCS blobs. [`blob_local/platform`](blob_local/platform/) and project YAML provide validated deployment templates. See the [database guide](docs/database.md) for schema ownership, minimal ETL tracking, parameter inheritance and local deployment; implementation lives in the [snapshot loader](app/configuration/database_bundle.py), [store](app/persistence/store.py) and [blob provider](app/connectors/providers/blob.py).

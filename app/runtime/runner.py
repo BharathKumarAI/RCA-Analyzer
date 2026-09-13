@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from contextlib import aclosing, asynccontextmanager
 
 from google.adk.apps import App
 from google.adk.agents.run_config import RunConfig
@@ -24,6 +25,7 @@ from app.policy.engine import PolicyEngine
 from app.policy.sources import enforcement_sources
 from app.policy.redaction import redact
 from app.runtime.governance import RunGovernance
+from app.runtime.context import ContextLimitExceeded
 from app.runtime.run_contract import (
     InvestigationResult,
     RunContract,
@@ -63,10 +65,34 @@ class ExecutionRunner:
         self.prompts = self.platform.prompts
         self.policy = PolicyEngine()
         self.run_limiter = asyncio.Semaphore(settings.max_concurrent_runs)
+        self._run_limit = settings.max_concurrent_runs
+        self.runtime_settings_lock = asyncio.Lock()
         self.model_limiter = asyncio.Semaphore(settings.max_parallel_models)
         self.tasks: dict[str, asyncio.Task] = {}
         self.session_service = session_service(settings.session_database_url.get_secret_value())
         self.policy_hash = content_hash(enforcement_sources())
+
+    @asynccontextmanager
+    async def _run_slot(self):
+        async with self.runtime_settings_lock:
+            if self.run_limiter.locked():
+                raise OverflowError("Investigation capacity reached; retry later")
+            await self.run_limiter.acquire()
+        try:
+            yield
+        finally:
+            self.run_limiter.release()
+
+    def update_runtime_settings(self, settings):
+        """Apply operational settings without interrupting active investigations."""
+        old_limit = self._run_limit
+        new_limit = settings.max_concurrent_runs
+        if new_limit != old_limit:
+            if self.run_limiter._value != old_limit:
+                raise ValueError("Concurrency can only change while investigations are idle")
+            self.run_limiter = asyncio.Semaphore(new_limit)
+            self._run_limit = new_limit
+        self.settings = settings
 
     async def health(self, connector_names=None):
         async def probe(name, connector):
@@ -114,9 +140,7 @@ class ExecutionRunner:
             )
         if len(request.text) > self.settings.max_input_chars:
             raise ValueError("Prompt exceeds configured input limit")
-        if self.run_limiter.locked():
-            raise OverflowError("Investigation capacity reached; retry later")
-        async with self.run_limiter:
+        async with self._run_slot():
             capability = preliminary.capability
             files = (
                 await self.store.get_attachments(
@@ -222,6 +246,10 @@ class ExecutionRunner:
             names = available_builtins(capability, self.profiles.resolve(capability.model_profile), runtime["workflow"],
                 capability.allowed_actions, bool(request.attachment_ids), bool(approved))
             snapshot["resolved_graph"] = graph_view(default_workflow(names, runtime["workflow"].parallel_evidence and effective_settings.parallel_evidence))
+            if snapshot.get("harness_bundle"):
+                from app.configuration.harness_bundles import Compilation, enriched_graph
+                planned = Compilation.model_validate(snapshot["harness_bundle"]["compilation"])
+                snapshot["resolved_graph"] = enriched_graph(planned, capability, self.profiles).model_dump(mode="json")
             clean_request = RunRequest(
                 text=redact(request.text),
                 chat_id=chat_id,
@@ -324,6 +352,11 @@ class ExecutionRunner:
                         stage="timeout",
                         reason="Investigation exceeded its time budget",
                     )
+                except ContextLimitExceeded:
+                    response = await self.store.update_run(
+                        contract.run_id, principal, status="FAILED", stage="context_limit",
+                        reason="Required model input exceeds the configured context limit",
+                    )
                 except PermissionError:
                     response = await self.store.update_run(
                         contract.run_id,
@@ -342,11 +375,18 @@ class ExecutionRunner:
                         contract.run_id,
                         principal,
                         status="FAILED",
-                        stage="failed",
-                        reason="Investigation could not produce a valid evidence-grounded result",
+                        stage="context_limit" if governance.context_limit_exceeded else "failed",
+                        reason="Required model input exceeds the configured context limit"
+                        if governance.context_limit_exceeded
+                        else "Investigation could not produce a valid evidence-grounded result",
                     )
                 finally:
-                    self.tasks.pop(contract.run_id, None)
+                    try:
+                        await asyncio.shield(governance.finish_pending_tools(
+                            cancelled=response.status == "CANCELLED"
+                        ))
+                    finally:
+                        self.tasks.pop(contract.run_id, None)
                 record_run_metrics(
                     span,
                     status=response.status,
@@ -371,6 +411,9 @@ class ExecutionRunner:
         self, contract, capability, governance, files, approved, prompts, skill_contents
     ):
         principal = contract.principal
+        current = await self.store.get_run(contract.run_id, principal)
+        if current and current.status != "RUNNING":
+            return current
         if contract.mode == "demo":
             return await self.store.update_run(
                 contract.run_id,
@@ -422,6 +465,12 @@ class ExecutionRunner:
                 {"text": file["text"], "warnings": file.get("warnings", [])},
             )
             governance.failures.extend(file.get("warnings", []))
+        snapshot = json.loads(contract.model_config_json)
+        snapshot["chat_history"] = await self.store.chat_context(
+            contract, governance.settings.max_context_chars // 4
+        )
+        contract = contract.model_copy(update={"model_config_json": json.dumps(snapshot, sort_keys=True)})
+        governance.contract = contract
         root = build_root_agent(
             contract,
             capability,
@@ -467,7 +516,7 @@ class ExecutionRunner:
         )
         final = None
         try:
-            async for event in runner.run_async(
+            async with aclosing(runner.run_async(
                 user_id=session.user_id,
                 session_id=session.id,
                 new_message=types.Content(
@@ -475,39 +524,42 @@ class ExecutionRunner:
                     parts=[types.Part.from_text(text=contract.request.text)],
                 ),
                 run_config=RunConfig(max_llm_calls=governance.settings.max_llm_calls),
-            ):
-                current = await self.store.get_run(contract.run_id, principal)
-                if current.status != "RUNNING":
-                    return current
-                await self.store.update_run(
-                    contract.run_id,
-                    principal,
-                    stage=event.author,
-                    evidence_count=len(governance.evidence),
-                )
-                event_store = getattr(self, "run_events", None)
-                if event_store:
-                    details = {"event_id": event.id, "final": event.is_final_response()}
-                    usage = getattr(event, "usage_metadata", None)
-                    if usage:
-                        details["usage"] = usage.model_dump(mode="json", exclude_none=True)
-                    await event_store.append(contract.run_id, principal, event.author, "agent_event", details)
-                if event.error_code:
-                    raise RuntimeError("ADK returned an error event")
-                if (
-                    event.author == "rca_synthesizer"
-                    and event.is_final_response()
-                    and event.content
-                ):
-                    text = "".join(
-                        part.text
-                        for part in event.content.parts or []
-                        if part.text and not part.thought
+            )) as events:
+                async for event in events:
+                    current = await self.store.get_run(contract.run_id, principal)
+                    if current.status != "RUNNING":
+                        return current
+                    await self.store.update_run(
+                        contract.run_id,
+                        principal,
+                        stage=event.author,
+                        evidence_count=len(governance.evidence),
                     )
-                    if text:
-                        final = InvestigationResult.model_validate_json(text)
+                    event_store = getattr(self, "run_events", None)
+                    if event_store:
+                        details = {"event_id": event.id, "final": event.is_final_response()}
+                        usage = getattr(event, "usage_metadata", None)
+                        if usage:
+                            details["usage"] = usage.model_dump(mode="json", exclude_none=True)
+                        await event_store.append(contract.run_id, principal, event.author, "agent_event", details)
+                    if event.error_code:
+                        raise RuntimeError("ADK returned an error event")
+                    if (
+                        event.author == "rca_synthesizer"
+                        and event.is_final_response()
+                        and event.content
+                    ):
+                        text = "".join(
+                            part.text
+                            for part in event.content.parts or []
+                            if part.text and not part.thought
+                        )
+                        if text:
+                            final = InvestigationResult.model_validate_json(text)
         finally:
             await runner.close()
+        if governance.context_limit_exceeded:
+            raise ContextLimitExceeded("A model stage exceeded the configured context limit")
         if final is None:
             raise ValueError("ADK did not produce a structured final response")
         evidence = await self.store.list_by_run(contract.run_id, principal)
@@ -592,8 +644,8 @@ def attach_trace_callbacks(root, governance):
                 if isinstance(tool, AgentTool):
                     visit(tool.agent)
         elif isinstance(node, Workflow):
-            for edge in node.edges:
-                for child in edge:
-                    if not isinstance(child, str):
-                        visit(child)
+            # ADK clones LlmAgent instances while compiling edges; observe the
+            # compiled graph nodes that actually execute, not the input objects.
+            for child in node.graph.nodes if node.graph else ():
+                visit(child)
     visit(root)

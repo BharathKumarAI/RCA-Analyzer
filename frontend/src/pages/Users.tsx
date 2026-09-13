@@ -149,6 +149,8 @@ export const ROLE_RESPONSIBILITIES: Record<
   },
 };
 
+const ASSIGNABLE_ROLE_IDS = new Set(Object.keys(ROLE_RESPONSIBILITIES));
+
 export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [roles, setRoles] = useState<RoleItem[]>([]);
@@ -179,7 +181,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   const [userFormId, setUserFormId] = useState('');
   const [userFormName, setUserFormName] = useState('');
   const [userFormEmail, setUserFormEmail] = useState('');
-  const [userFormStatus, setUserFormStatus] = useState<'active' | 'suspended'>('active');
+  const [userFormStatus, setUserFormStatus] = useState<'active' | 'inactive'>('active');
   const [userFormRoles, setUserFormRoles] = useState<string[]>([]);
   const [userSubmitting, setUserSubmitting] = useState(false);
 
@@ -193,6 +195,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   const [roleSubmitting, setRoleSubmitting] = useState(false);
 
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const assignableRoles = useMemo(() => roles.filter(role => ASSIGNABLE_ROLE_IDS.has(role.id)), [roles]);
 
   // Synchronize initialTab if prop changes
   useEffect(() => {
@@ -356,7 +359,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
     setUserFormName(user.name);
     setUserFormEmail(user.email || '');
     setUserFormStatus(user.status);
-    setUserFormRoles([...user.roles]);
+    setUserFormRoles(user.roles.filter(role => ASSIGNABLE_ROLE_IDS.has(role)));
     setUserModalOpen(true);
   };
 
@@ -481,7 +484,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   };
 
   const handleToggleUserStatus = async (user: UserItem) => {
-    const nextStatus = user.status === 'active' ? 'suspended' : 'active';
+    const nextStatus = user.status === 'active' ? 'inactive' : 'active';
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, status: nextStatus } : u)));
     if (inspectedUser?.id === user.id) {
       setInspectedUser(prev => (prev ? { ...prev, status: nextStatus } : null));
@@ -884,7 +887,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
               <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>
                 Status:
               </span>
-              {['ALL', 'active', 'suspended'].map(st => (
+              {['ALL', 'active', 'inactive'].map(st => (
                 <button
                   type="button"
                   key={st}
@@ -1086,7 +1089,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                         className="btn btn-outline"
                         style={{ fontSize: 11, padding: '3px 8px', height: 'auto' }}
                         onClick={() => void handleToggleUserStatus(inspectedUser)}
-                        title="Toggle active / suspended membership state"
+                        title="Toggle active / inactive membership state"
                       >
                         {inspectedUser.status === 'active' ? 'Suspend User' : 'Activate User'}
                       </button>
@@ -1136,7 +1139,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                       style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                     >
                       <span>Assigned Roles ({inspectedUser.roles.length})</span>
-                      {roles.some(r => !inspectedUser.roles.includes(r.id)) && (
+                      {assignableRoles.some(r => !inspectedUser.roles.includes(r.id)) && (
                         <select
                           className="iam-quick-add-select"
                           value=""
@@ -1146,7 +1149,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                           <option value="" disabled>
                             + Assign Role…
                           </option>
-                          {roles
+                          {assignableRoles
                             .filter(r => !inspectedUser.roles.includes(r.id))
                             .map(r => (
                               <option key={r.id} value={r.id}>
@@ -1798,17 +1801,17 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                   id="user-status"
                   className="iam-form-select"
                   value={userFormStatus}
-                  onChange={e => setUserFormStatus(e.target.value as 'active' | 'suspended')}
+                  onChange={e => setUserFormStatus(e.target.value as 'active' | 'inactive')}
                 >
                   <option value="active">Active</option>
-                  <option value="suspended">Suspended</option>
+                  <option value="inactive">Inactive</option>
                 </select>
               </div>
 
               <div className="iam-form-group">
                 <label>Assigned Roles * ({userFormRoles.length} selected)</label>
                 <div className="iam-checkbox-group">
-                  {roles.map(r => (
+                  {assignableRoles.map(r => (
                     <label key={r.id} className="iam-checkbox-label">
                       <input
                         type="checkbox"

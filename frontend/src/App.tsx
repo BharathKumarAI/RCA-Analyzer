@@ -1,6 +1,6 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Topbar } from './components/Topbar';
-import { Sidebar, ActivePage } from './components/Sidebar';
+import { Sidebar, ActivePage, isActivePage } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { SessionModal } from './components/SessionModal';
 import { NewInvestigationModal } from './components/NewInvestigationModal';
@@ -29,17 +29,19 @@ const ProjectSetup = lazy(() => import('./pages/ProjectSetup').then(module => ({
 const HarnessLibrary = lazy(() => import('./pages/HarnessLibrary').then(module => ({ default: module.HarnessLibrary })));
 
 import {
+  fetchUiSettings,
   fetchHealth,
   fetchPrincipal,
   fetchAgents,
   fetchRuns,
   fetchTools,
   fetchAuditLogs,
+  fetchNotifications,
   getSessionToken,
   setSessionToken,
   ApiError,
 } from './services/api';
-import { SystemHealth, Principal, AgentConfiguration, Run } from './types/api';
+import { SystemHealth, Principal, AgentConfiguration, Run, UiSettingsConfig } from './types/api';
 
 class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -57,6 +59,9 @@ export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<ActivePage>('overview');
   const [initialRunId, setInitialRunId] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [uiSettings, setUiSettings] = useState<UiSettingsConfig | null>(null);
+  const [uiError, setUiError] = useState<string | null>(null);
+  const [uiReload, setUiReload] = useState(0);
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
   useEffect(() => {
@@ -69,6 +74,14 @@ export const App: React.FC = () => {
   const [isNewRunOpen, setIsNewRunOpen] = useState(false);
   const [initialCapability, setInitialCapability] = useState<string | undefined>();
   const openInvestigation = (capability?: string) => { setInitialCapability(capability); setIsNewRunOpen(true); };
+
+  const applyUiSettings = (next: UiSettingsConfig) => {
+    setUiSettings(next);
+    setTheme(next.default_theme === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : next.default_theme);
+    document.title = next.brand_name;
+  };
 
   // Core Data
   const [health, setHealth] = useState<SystemHealth>({ status: 'error', latency_ms: 0, tenant_id: '', project_id: '', mode: 'demo', active_runs: 0, total_runs: 0, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 });
@@ -83,6 +96,7 @@ export const App: React.FC = () => {
   const [runs, setRuns] = useState<Run[]>([]);
   const [tools, setTools] = useState<import('./types/api').ToolDefinition[]>([]);
   const [auditLogs, setAuditLogs] = useState<import('./types/api').AuditLog[]>([]);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
 
   useEffect(() => {
     const openSearch = (event: KeyboardEvent) => {
@@ -105,33 +119,11 @@ export const App: React.FC = () => {
         .split('/')[0]
         .toLowerCase() as ActivePage;
 
-      const validPages: ActivePage[] = [
-        'overview',
-        'runs',
-        'capabilities',
-        'skills',
-        'runtime',
-        'parameters',
-        'optimization',
-        'agents',
-        'tools',
-        'alerts',
-        'health-checks',
-        'project-setup',
-        'persistence',
-        'policy',
-        'roles',
-        'governance',
-        'knowledge',
-        'users',
-        'billing',
-        'settings',
-        'harness-library',
-      ];
+
 
       const hashStr = (window.location.hash + ' ' + window.location.pathname).toLowerCase();
 
-      if (validPages.includes(rawHash)) {
+      if (isActivePage(rawHash)) {
         setActivePage(rawHash);
       } else if (hashStr.includes('persistence') || hashStr.includes('storage')) {
         setActivePage('persistence');
@@ -180,12 +172,13 @@ export const App: React.FC = () => {
     setLoadingData(true);
     setLoadError(null);
     try {
-      const [p, h, ag, rn, tl, logs] = await Promise.allSettled([
-        fetchPrincipal(), fetchHealth(), fetchAgents(), fetchRuns(), fetchTools(), fetchAuditLogs(),
+      const [p, h, ag, rn, tl, logs, notices] = await Promise.allSettled([
+        fetchPrincipal(), fetchHealth(), fetchAgents(), fetchRuns(), fetchTools(), fetchAuditLogs(), fetchNotifications(),
       ]);
       if (token !== getSessionToken()) return;
       if (p.status === 'rejected') throw p.reason;
       if (p.value.subject !== principal.subject || p.value.tenant_id !== principal.tenant_id || p.value.project_id !== principal.project_id) return clearScopedData();
+      if (JSON.stringify(p.value.roles) !== JSON.stringify(principal.roles)) return handleAuthenticated(p.value);
       const failures = [h, ag, rn, tl, logs].filter(result => result.status === 'rejected');
       const expired = failures.find(result => result.reason instanceof ApiError && result.reason.status === 401);
       if (expired) return clearScopedData(expired.reason.message);
@@ -194,6 +187,7 @@ export const App: React.FC = () => {
       if (rn.status === 'fulfilled') setRuns(rn.value);
       if (tl.status === 'fulfilled') setTools(tl.value);
       if (logs.status === 'fulfilled') setAuditLogs(logs.value);
+      if (notices.status === 'fulfilled') setUnreadNotificationsCount(notices.value.unread_count);
       if (failures.length) setLoadError(failures.map(result => result.reason instanceof Error ? result.reason.message : 'Some workspace data is unavailable.').join(' '));
     } catch (error) {
       if (token !== getSessionToken()) return;
@@ -203,8 +197,8 @@ export const App: React.FC = () => {
       if (token === getSessionToken()) setLoadingData(false);
     }
   };
-  const clearScopedData = (message?: string) => { setSessionError(message || null); setSessionToken(null); setLoadingData(false); setIsNewRunOpen(false); setIsSearchOpen(false); setPrincipal(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadError(null); setIsSessionOpen(true); setSessionVersion(v => v + 1); };
-  const handleAuthenticated = (next: Principal) => { setSessionError(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadingData(true); setPrincipal(next); setSessionVersion(v => v + 1); setIsSessionOpen(false); };
+  const clearScopedData = (message?: string) => { setSessionError(message || null); setSessionToken(null); setLoadingData(false); setIsNewRunOpen(false); setIsSearchOpen(false); setPrincipal(null); setUiSettings(null); setUiError(null); document.title = 'RCA Analyzer'; setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setUnreadNotificationsCount(0); setLoadError(null); setIsSessionOpen(true); setSessionVersion(v => v + 1); };
+  const handleAuthenticated = (next: Principal) => { setUiSettings(null); setUiError(null); setSessionError(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadingData(true); setPrincipal(next); setSessionVersion(v => v + 1); setIsSessionOpen(false); };
   useEffect(() => { if (principal) void loadData(); }, [principal]);
   useEffect(() => {
     void fetchPrincipal().then(p => {
@@ -216,9 +210,33 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (!principal) return;
+    let cancelled = false;
+    const token = getSessionToken();
+    setUiError(null);
+    void fetchUiSettings().then(next => {
+      if (cancelled || token !== getSessionToken()) return;
+      applyUiSettings(next);
+      if (!window.location.hash && isActivePage(next.default_page)) setActivePage(next.default_page);
+    }).catch(error => {
+      if (cancelled || token !== getSessionToken()) return;
+      if (error instanceof ApiError && error.status === 401) clearScopedData(error.message);
+      else setUiError(error instanceof Error ? error.message : 'Workspace settings could not load.');
+    });
+    return () => { cancelled = true; };
+  }, [principal, uiReload]);
+
   const handleSelectPage = (page: ActivePage) => {
     setActivePage(page);
     window.location.hash = page;
+  };
+
+  const handleNavigateFromAlert = (page: ActivePage, options?: { runId?: string; filter?: string; targetId?: string }) => {
+    if (options?.runId) {
+      setInitialRunId(options.runId);
+    }
+    handleSelectPage(page);
   };
 
   const toggleTheme = () => {
@@ -237,14 +255,22 @@ export const App: React.FC = () => {
 
   if (!principal) return <div className="app-layout"><div style={{ padding: 24, fontWeight: 650 }}>RCA Analyzer</div><SessionModal isOpen sessionError={sessionError} principal={{ subject: '', roles: [], tenant_id: '', project_id: '' }} onClose={() => undefined} onAuthenticated={handleAuthenticated} onSignedOut={clearScopedData} /></div>;
 
+  if (!uiSettings) return <div className="app-layout"><main style={{ padding: 24 }}>
+    {uiError ? <div role="alert"><p>{uiError}</p><button className="btn btn-primary" onClick={() => setUiReload(value => value + 1)}>Retry workspace settings</button></div>
+      : <p role="status">Loading workspace settings…</p>}
+    <button className="btn btn-secondary" onClick={() => clearScopedData()}>Sign out</button>
+  </main></div>;
+
   return (
     <div className="app-layout">
       {/* Topbar */}
       <Topbar
+        settings={uiSettings}
         health={health}
         principal={principal}
         theme={theme}
         activePage={activePage}
+        unreadNotificationsCount={unreadNotificationsCount}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenSession={() => setIsSessionOpen(true)}
@@ -255,6 +281,7 @@ export const App: React.FC = () => {
       {/* Main Body */}
       <div className="app-body">
         <Sidebar
+          settings={uiSettings}
           activePage={activePage}
           onSelectPage={handleSelectPage}
           collapsed={sidebarCollapsed}
@@ -269,6 +296,7 @@ export const App: React.FC = () => {
           <Suspense fallback={<div role="status" style={{ padding: 24 }}>Loading page…</div>}>
           {activePage === 'overview' && (
             <Overview
+              settings={uiSettings}
               health={health}
               agents={agents}
               runs={runs}
@@ -303,7 +331,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'optimization' && (
-            <Optimization />
+            <Optimization onNavigate={setActivePage} />
           )}
 
           {activePage === 'agents' && (
@@ -315,7 +343,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'alerts' && (
-            <Alerts />
+            <Alerts onNavigate={handleNavigateFromAlert} onNotificationsUpdated={loadData} />
           )}
 
           {activePage === 'health-checks' && (
@@ -355,7 +383,7 @@ export const App: React.FC = () => {
           )}
 
           {activePage === 'settings' && (
-            <Settings principal={principal} health={health} />
+            <Settings principal={principal} health={health} onUiSettingsChanged={applyUiSettings} />
           )}
           </Suspense>
           </PageErrorBoundary>
@@ -364,6 +392,7 @@ export const App: React.FC = () => {
 
       {/* Modals & Command Palette */}
       <CommandPalette
+        settings={uiSettings}
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
         onNavigate={handleSelectPage}

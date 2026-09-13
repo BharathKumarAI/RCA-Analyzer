@@ -12,9 +12,15 @@ from sqlalchemy import select
 
 from app.configuration.platform import PlatformConfiguration
 from app.configuration.service import AgentConfigurationService, drafts
+from app.configuration.harness_bundles import export_archive
+from app.configuration.harness_workspace import (
+    HarnessWorkspaceService,
+    activations as harness_activations,
+    bundles as harness_bundles,
+)
 from app.connectors.providers.blob import ConfigurationBlobStore
 from app.connectors.providers.framework_stages import FrameworkStageStore
-from app.identity.principals import UserPrincipal
+from app.identity.principals import Role, UserPrincipal
 from app.persistence.chat_artifacts import ChatArtifactStore
 from app.persistence.store import InvestigationStore, runs
 from app.runtime.run_contract import RunContract, TERMINAL_STATUSES
@@ -67,6 +73,20 @@ async def sync_artifacts(apply=False):
                     )
                 )
             ).all()
+            approved_harness = (
+                await c.execute(
+                    select(harness_bundles)
+                    .join(
+                        harness_activations,
+                        harness_bundles.c.draft_id == harness_activations.c.draft_id,
+                    )
+                    .where(
+                        harness_bundles.c.tenant_id == settings.tenant_id,
+                        harness_bundles.c.project_id == settings.project_id,
+                        harness_bundles.c.status == "APPROVED",
+                    )
+                )
+            ).all()
         chat_runs = [
             r
             for r in completed
@@ -87,11 +107,39 @@ async def sync_artifacts(apply=False):
                     store._response(row),
                     RunContract.model_validate_json(row.contract_json).principal,
                 )
+            # Harness Studio exports are derived on demand by the API. Rebuild
+            # each active approved archive here for integrity checking without
+            # introducing a second, undocumented export storage namespace.
+            harness_workspace = HarnessWorkspaceService(
+                store.engine,
+                ConfigurationBlobStore(
+                    settings.artifact_uri("agent-configurations") + "/harness",
+                    1048576,
+                    suffix=".json",
+                ),
+                platform,
+                settings,
+                service,
+            )
+            await harness_workspace.initialize()
+            maintenance_principal = UserPrincipal(
+                subject="service:sync-artifacts",
+                username="service:sync-artifacts",
+                tenant_id=settings.tenant_id,
+                project_id=settings.project_id,
+                roles=(Role.PLATFORM_ADMIN,),
+            )
+            for row in approved_harness:
+                bundle = await harness_workspace.load(row)
+                compilation = harness_workspace.validate(maintenance_principal, bundle)
+                export_archive(bundle.files, compilation.diagnostics)
         print(
             json.dumps(
                 {
                     "framework_stage_views": len(definitions),
                     "chat_created_outputs": len(chat_runs),
+                    "harness_approved_bundles": len(approved_harness),
+                    "harness_exports_rebuilt": len(approved_harness) if apply else 0,
                     "applied": apply,
                 }
             )

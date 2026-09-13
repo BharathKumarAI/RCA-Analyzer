@@ -801,3 +801,51 @@
 .run-time {
   font-size: 10px;
 }
+
+.admin-controls-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.overview-group-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.overview-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.overview-group-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--acc);
+  opacity: 0.85;
+}
+
+.overview-group-name {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  color: var(--tx);
+  text-transform: uppercase;
+}
+
+.overview-group-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--card);
+  padding: 1px 6px;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--line);
+}

@@ -1681,3 +1681,18 @@
   color: #ffffff;
 }
 
+
+.project-settings-page { overflow-y: auto; }
+.project-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-settings-section { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.project-settings-section h2 { margin: 0 0 8px; font-size: 18px; }
+.project-settings-section p { color: var(--muted); max-width: 72ch; }
+.project-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 16px; border: 0; padding: 0; min-width: 0; }
+.project-settings-grid label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.project-settings-grid label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+.project-settings-grid input:not([type="checkbox"]), .project-settings-grid select, .project-settings-yaml { width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; padding: 9px; }
+.project-settings-environment { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.project-settings-environment > button { margin-top: 12px; }
+.project-settings-yaml { min-height: 520px; font-family: var(--font-mono, monospace); line-height: 1.5; resize: vertical; }
+.brand-title, .brand-badge, .sidebar-heading, .nav-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-header .brand-badge { min-width: 0; }

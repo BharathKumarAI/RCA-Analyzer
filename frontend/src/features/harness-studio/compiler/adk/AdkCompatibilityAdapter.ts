@@ -14,16 +14,15 @@ export class AdkCompatibilityAdapter {
   }
 
   public resolveCompatibility(version: string): AdkCompatibility {
-    const isV2OrHigher = !version.startsWith('1.');
     return {
       adkVersion: version,
       agentConfigSchemaVersion: 'https://raw.githubusercontent.com/google/adk-python/refs/heads/main/src/google/adk/agents/config_schemas/AgentConfig.json',
       features: {
         agentConfig: true,
-        workflowRuntime: isV2OrHigher,
-        taskApi: isV2OrHigher,
-        plugins: isV2OrHigher,
-        a2a: isV2OrHigher,
+        workflowRuntime: true,
+        taskApi: false,
+        plugins: false,
+        a2a: false,
       },
     };
   }

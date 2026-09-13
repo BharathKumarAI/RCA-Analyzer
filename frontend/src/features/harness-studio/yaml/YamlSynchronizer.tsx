@@ -3,7 +3,6 @@ import { Save, Check, AlertCircle, Download, FileCode } from 'lucide-react';
 import YAML from 'yaml';
 import { ConfigFileDefinition } from '../types/harness';
 import { YamlDiff } from './YamlDiff';
-import { downloadTextFile } from '../compiler/packageExporter';
 
 interface YamlSynchronizerProps {
   activeFile: ConfigFileDefinition;
@@ -14,6 +13,15 @@ export const YamlSynchronizer: React.FC<YamlSynchronizerProps> = ({
   activeFile,
   onApplyChanges,
 }) => {
+  const downloadFile = () => {
+    const blob = new Blob([buffer], { type: 'text/yaml' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = activeFile.path.split('/').pop() || 'config.yaml';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   const [buffer, setBuffer] = useState(activeFile.content);
   const [syntaxError, setSyntaxError] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
@@ -38,7 +46,7 @@ export const YamlSynchronizer: React.FC<YamlSynchronizerProps> = ({
   const isDirty = buffer !== activeFile.content;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="hs-yaml-editor" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <FileCode size={15} style={{ color: 'var(--acc)' }} />
@@ -53,7 +61,7 @@ export const YamlSynchronizer: React.FC<YamlSynchronizerProps> = ({
             type="button"
             className="btn btn-secondary"
             style={{ fontSize: '11px', padding: '4px 8px' }}
-            onClick={() => downloadTextFile(activeFile.path.split('/').pop() || 'config.yaml', buffer)}
+            onClick={downloadFile}
             title="Download this file"
           >
             <Download size={12} />

@@ -1,28 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import {
-  Search,
-  X,
-  Bot,
-  Wrench,
-  ShieldCheck,
-  PlayCircle,
-  BookOpen,
-  Layers,
-  Sparkles,
-  Sliders,
-  FlaskConical,
-  HardDrive,
-  ShieldAlert,
-  KeyRound,
-  Zap,
-  BellRing,
-  HeartPulse,
-  FileCog,
-  Settings
-} from 'lucide-react';
-import { ActivePage } from './Sidebar';
+import { Search, X } from 'lucide-react';
+import { ActivePage, PAGE_ICONS, isActivePage } from './Sidebar';
+import type { UiSettingsConfig } from '../types/api';
 
 interface CommandPaletteProps {
+  settings: UiSettingsConfig;
   isOpen: boolean;
   onClose: () => void;
   onNavigate: (page: ActivePage) => void;
@@ -37,6 +19,7 @@ interface CommandItem {
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
+  settings,
   isOpen,
   onClose,
   onNavigate,
@@ -57,28 +40,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   if (!isOpen) return null;
 
-  const items: CommandItem[] = [
-    { id: '1', title: 'Agent Fleet & Custom Specialists', category: 'Agents', page: 'agents', icon: <Bot size={15} /> },
-    { id: '2', title: 'Jira & Splunk Connectors Health', category: 'Tools', page: 'tools', icon: <Wrench size={15} /> },
-    { id: '3', title: 'Skills Catalog & YAML Frontmatter Specs', category: 'Skills', page: 'skills', icon: <Sparkles size={15} /> },
-    { id: '4', title: 'Parameter Studio & Gemini Thinking Budgets', category: 'Studio', page: 'parameters', icon: <Sliders size={15} /> },
-    { id: '5', title: 'Optimization & MLflow Offline Evaluation Contracts', category: 'Optimization', page: 'optimization', icon: <FlaskConical size={15} /> },
-    { id: '6', title: 'Persistence, CAS Upload Storage & Artifacts', category: 'Storage', page: 'persistence', icon: <HardDrive size={15} /> },
-    { id: '7', title: 'Policy, Guardrails & Deterministic PII Redaction', category: 'Security', page: 'policy', icon: <ShieldAlert size={15} /> },
-    { id: '8', title: 'Roles, RBAC Hierarchy & Dual-Custody Approval', category: 'Access', page: 'roles', icon: <KeyRound size={15} /> },
-    { id: '9', title: 'Runtime Engine, Google ADK Graph & Semaphores', category: 'Runtime', page: 'runtime', icon: <Zap size={15} /> },
-    { id: '10', title: 'Dual-Custody Approvals & Audit Trail', category: 'Governance', page: 'governance', icon: <ShieldCheck size={15} /> },
-    { id: '11', title: 'Run Active Incident RCA Investigation', category: 'Runs', page: 'runs', icon: <PlayCircle size={15} /> },
-    { id: '12', title: 'System Settings, Diagnostics & Connection Tests', category: 'Settings', page: 'settings', icon: <Settings size={15} /> },
-    { id: '13', title: 'Runbook & Postmortem Knowledge Stores', category: 'Knowledge', page: 'knowledge', icon: <BookOpen size={15} /> },
-    { id: '14', title: 'Platform Health Overview & MTTR KPIs', category: 'Overview', page: 'overview', icon: <Layers size={15} /> },
-    { id: '15', title: 'Project Setup Snapshot', category: 'Configuration', page: 'project-setup', icon: <FileCog size={15} /> },
-    { id: '16', title: 'Connector Health Checks', category: 'Operations', page: 'health-checks', icon: <HeartPulse size={15} /> },
-    { id: '18', title: 'Harness Library & Project Selection', category: 'Configuration', page: 'harness-library', icon: <Layers size={15} /> },
-    { id: '19', title: 'Users & Access', category: 'Access', page: 'users', icon: <KeyRound size={15} /> },
-    { id: '20', title: 'Token Usage & Cost', category: 'Usage', page: 'billing', icon: <Sliders size={15} /> },
-    { id: '17', title: 'Operational Alerts & Notices', category: 'Operations', page: 'alerts', icon: <BellRing size={15} /> },
-  ];
+  const items: CommandItem[] = settings.navigation.flatMap(item => {
+    if (!item.visible || !isActivePage(item.page)) return [];
+    const Icon = PAGE_ICONS[item.page];
+    return [{ id: item.page, title: item.label, category: item.group, page: item.page, icon: <Icon size={15} /> }];
+  });
 
   const filtered = items.filter(i =>
     i.title.toLowerCase().includes(query.toLowerCase()) ||

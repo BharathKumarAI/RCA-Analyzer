@@ -21,6 +21,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.exc import IntegrityError
 from app.persistence.database import scoped_engine, initialize_tables
 
 metadata = MetaData(schema="platform")
@@ -145,6 +146,16 @@ platform_alert_config = Table(
     Column("updated_at", Float, nullable=False),
 )
 
+platform_notification_reads = Table(
+    "platform_notification_reads",
+    metadata,
+    Column("notification_id", String(128), primary_key=True),
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("subject", String(256), primary_key=True),
+    Column("read_at", Float, nullable=False),
+)
+
 platform_runtime_stages = Table(
     "platform_runtime_stages",
     metadata,
@@ -180,6 +191,29 @@ platform_settings = Table(
     Column("updated_at", Float, nullable=False),
 )
 
+platform_ui_settings = Table(
+    "platform_ui_settings",
+    metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("brand_name", String(120), nullable=False, default="RCA Analyzer"),
+    Column("workspace_label", String(120), nullable=False, default="Investigation workspace"),
+    Column("default_theme", String(16), nullable=False, default="light"),
+    Column("default_page", String(64), nullable=False, default="overview"),
+    Column("welcome_title", String(200), nullable=False, default="Investigate with confidence"),
+    Column("welcome_description", String(1000), nullable=False, default="Trace incidents from evidence to action."),
+    Column("navigation", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("version", Integer, nullable=False, default=1),
+    Column("updated_at", Float, nullable=False),
+)
+
+project_editor_drafts = Table(
+    "project_editor_drafts", metadata,
+    Column("tenant_id", String(256), primary_key=True), Column("project_id", String(256), primary_key=True),
+    Column("document", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("version", Integer, nullable=False, default=1), Column("updated_at", Float, nullable=False),
+)
+
 
 DEFAULT_PERMISSIONS = [
     "view_runs",
@@ -194,6 +228,33 @@ DEFAULT_PERMISSIONS = [
     "view_docs",
     "view_status",
     "view_audit",
+]
+
+DEFAULT_UI_NAVIGATION = [
+    {"page": page, "label": label, "description": description, "group": group, "visible": True}
+    for page, label, description, group in (
+        ("overview", "Overview", "Health and recent investigations", "Admin console"),
+        ("runs", "Investigations", "Review grounded incident reports", "Monitoring"),
+        ("capabilities", "Capabilities", "Manage investigation capabilities", "Configuration"),
+        ("skills", "Skills", "Manage reusable agent guidance", "Configuration"),
+        ("runtime", "Runtime", "Tune execution stages", "Monitoring"),
+        ("parameters", "Parameters", "Manage tool parameters", "Configuration"),
+        ("optimization", "Optimization", "Review evaluation workflows", "Monitoring"),
+        ("agents", "Agents", "Review specialist agents", "Configuration"),
+        ("tools", "Tools & connectors", "Manage data access", "Configuration"),
+        ("alerts", "Alerts", "Track operational alerts", "Monitoring"),
+        ("health-checks", "Health checks", "Inspect connector health", "Monitoring"),
+        ("project-setup", "Project setup", "Configure project behavior", "Admin console"),
+        ("persistence", "Persistence", "Manage storage and retention", "Monitoring"),
+        ("policy", "Policy", "Manage security guardrails", "Configuration"),
+        ("roles", "Roles", "Manage access roles", "Admin console"),
+        ("governance", "Audit", "Review configuration history", "Monitoring"),
+        ("knowledge", "Knowledge", "Manage runbooks and evidence", "Workspace"),
+        ("users", "Users", "Manage project membership", "Admin console"),
+        ("billing", "Billing", "Manage budgets and quotas", "Monitoring"),
+        ("settings", "Platform settings", "Configure the workspace", "Admin console"),
+        ("harness-library", "Harness library", "Manage workflow templates", "Configuration"),
+    )
 ]
 
 DEFAULT_SYSTEM_ROLES = [
@@ -401,6 +462,34 @@ class PlatformAdminStore:
     async def initialize(self):
         await initialize_tables(self.engine, metadata)
 
+    async def get_project_editor_draft(self, tenant_id: str, project_id: str):
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(project_editor_drafts).where(
+                project_editor_drafts.c.tenant_id == tenant_id,
+                project_editor_drafts.c.project_id == project_id,
+            ))).mappings().first()
+        return dict(row) if row else {"tenant_id": tenant_id, "project_id": project_id, "document": {}, "version": 0}
+
+    async def update_project_editor_draft(self, tenant_id, project_id, document, expected_version):
+        now = time.time()
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(project_editor_drafts.c.version).where(
+                project_editor_drafts.c.tenant_id == tenant_id, project_editor_drafts.c.project_id == project_id,
+            ).with_for_update())).scalar_one_or_none()
+            if (row or 0) != expected_version:
+                raise ValueError("Project editor draft changed; reload before saving")
+            if row is None:
+                await conn.execute(insert(project_editor_drafts).values(
+                    tenant_id=tenant_id, project_id=project_id, document=document, version=1, updated_at=now))
+                version = 1
+            else:
+                version = row + 1
+                await conn.execute(update(project_editor_drafts).where(
+                    project_editor_drafts.c.tenant_id == tenant_id, project_editor_drafts.c.project_id == project_id,
+                    project_editor_drafts.c.version == row,
+                ).values(document=document, version=version, updated_at=now))
+            return {"tenant_id": tenant_id, "project_id": project_id, "document": document, "version": version, "updated_at": now}
+
     # -------------------------------------------------------------------------
     # USERS
     # -------------------------------------------------------------------------
@@ -444,6 +533,15 @@ class PlatformAdminStore:
                     )
                 results.append(user_dict)
             return results
+
+    async def get_user(self, tenant_id: str, project_id: str, subject: str) -> Dict[str, Any] | None:
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(platform_users).where(
+                platform_users.c.tenant_id == tenant_id,
+                platform_users.c.project_id == project_id,
+                platform_users.c.subject == subject,
+            ))).mappings().first()
+            return dict(row) if row else None
 
     async def upsert_user(
         self,
@@ -509,11 +607,11 @@ class PlatformAdminStore:
     async def delete_user(self, tenant_id: str, project_id: str, subject: str) -> bool:
         async with self.engine.begin() as conn:
             res = await conn.execute(
-                delete(platform_users).where(
+                update(platform_users).where(
                     platform_users.c.tenant_id == tenant_id,
                     platform_users.c.project_id == project_id,
                     platform_users.c.subject == subject,
-                )
+                ).values(status="inactive", updated_at=time.time())
             )
             return bool(res.rowcount > 0)
 
@@ -1152,6 +1250,47 @@ class PlatformAdminStore:
             values["project_id"] = project_id
             return values
 
+    async def get_read_notification_ids(
+        self, tenant_id: str, project_id: str, subject: str
+    ) -> set[str]:
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(platform_notification_reads.c.notification_id).where(
+                        platform_notification_reads.c.tenant_id == tenant_id,
+                        platform_notification_reads.c.project_id == project_id,
+                        platform_notification_reads.c.subject == subject,
+                    )
+                )
+            ).scalars().all()
+            return set(rows)
+
+    async def mark_notifications_read(
+        self,
+        tenant_id: str,
+        project_id: str,
+        subject: str,
+        notification_ids: List[str],
+    ) -> int:
+        now = time.time()
+        count = 0
+        async with self.engine.begin() as conn:
+            for nid in notification_ids:
+                try:
+                    await conn.execute(
+                        insert(platform_notification_reads).values(
+                            notification_id=nid,
+                            tenant_id=tenant_id,
+                            project_id=project_id,
+                            subject=subject,
+                            read_at=now,
+                        )
+                    )
+                    count += 1
+                except Exception:
+                    pass
+        return count
+
     # -------------------------------------------------------------------------
     # RUNTIME STAGE TUNING
     # -------------------------------------------------------------------------
@@ -1246,7 +1385,7 @@ class PlatformAdminStore:
     # -------------------------------------------------------------------------
     # PLATFORM SETTINGS
     # -------------------------------------------------------------------------
-    async def get_platform_settings(self, tenant_id: str, project_id: str) -> Dict[str, Any]:
+    async def get_platform_settings(self, tenant_id: str, project_id: str, *, create: bool = True) -> Dict[str, Any]:
         async with self.engine.begin() as conn:
             row = (
                 await conn.execute(
@@ -1272,7 +1411,8 @@ class PlatformAdminStore:
                     "mode": "demo",
                     "updated_at": now,
                 }
-                await conn.execute(insert(platform_settings).values(**initial))
+                if create:
+                    await conn.execute(insert(platform_settings).values(**initial))
                 return initial
             return dict(row)
 
@@ -1322,3 +1462,78 @@ class PlatformAdminStore:
             values["tenant_id"] = tenant_id
             values["project_id"] = project_id
             return values
+
+    # -------------------------------------------------------------------------
+    # ADMINISTRABLE UI SETTINGS
+    # -------------------------------------------------------------------------
+    async def get_ui_settings(self, tenant_id: str, project_id: str) -> Dict[str, Any]:
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(platform_ui_settings).where(
+                platform_ui_settings.c.tenant_id == tenant_id,
+                platform_ui_settings.c.project_id == project_id,
+            ))).mappings().first()
+            if row:
+                return dict(row)
+            now = time.time()
+            initial = {
+                "tenant_id": tenant_id,
+                "project_id": project_id,
+                "brand_name": "RCA Analyzer",
+                "workspace_label": "Investigation workspace",
+                "default_theme": "light",
+                "default_page": "overview",
+                "welcome_title": "Investigate with confidence",
+                "welcome_description": "Trace incidents from evidence to action.",
+                "navigation": DEFAULT_UI_NAVIGATION,
+                "version": 1,
+                "updated_at": now,
+            }
+            # Reads must remain safe under concurrent first loads; the first
+            # successful write materializes the defaults.
+            return initial
+
+    async def update_ui_settings(
+        self, tenant_id: str, project_id: str, payload: Dict[str, Any], expected_version: int
+    ) -> Dict[str, Any]:
+        now = time.time()
+        values = {
+            "brand_name": payload["brand_name"],
+            "workspace_label": payload["workspace_label"],
+            "default_theme": payload["default_theme"],
+            "default_page": payload["default_page"],
+            "welcome_title": payload["welcome_title"],
+            "welcome_description": payload["welcome_description"],
+            "navigation": payload["navigation"],
+            "updated_at": now,
+        }
+        async with self.engine.begin() as conn:
+            current = (await conn.execute(select(platform_ui_settings.c.version).where(
+                platform_ui_settings.c.tenant_id == tenant_id,
+                platform_ui_settings.c.project_id == project_id,
+            ))).scalar_one_or_none()
+            if current is None:
+                try:
+                    await conn.execute(insert(platform_ui_settings).values(
+                        tenant_id=tenant_id, project_id=project_id,
+                        brand_name="RCA Analyzer", workspace_label="Investigation workspace",
+                        default_theme="light", default_page="overview",
+                        welcome_title="Investigate with confidence",
+                        welcome_description="Trace incidents from evidence to action.",
+                        navigation=DEFAULT_UI_NAVIGATION, version=1, updated_at=now,
+                    ))
+                except IntegrityError:
+                    raise ValueError("UI settings have changed; reload before saving") from None
+                current = 1
+            if current != expected_version:
+                raise ValueError("UI settings have changed; reload before saving")
+            result = await conn.execute(update(platform_ui_settings).where(
+                platform_ui_settings.c.tenant_id == tenant_id,
+                platform_ui_settings.c.project_id == project_id,
+                platform_ui_settings.c.version == expected_version,
+            ).values(**values, version=expected_version + 1))
+            if result.rowcount != 1:
+                raise ValueError("UI settings have changed; reload before saving")
+            return {
+                "tenant_id": tenant_id, "project_id": project_id,
+                **values, "version": expected_version + 1,
+            }

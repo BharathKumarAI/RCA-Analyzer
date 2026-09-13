@@ -18,9 +18,10 @@ const context = {
   fetchRuns: async () => [{ id: 'run-1' }],
   fetchTools: async () => [],
   fetchAuditLogs: async () => [],
+  fetchNotifications: async () => ({ items: [], unread_count: 0 }),
   clearScopedData: reason => { state.signedOut = reason; },
 };
-for (const name of ['Health', 'Agents', 'Runs', 'Tools', 'AuditLogs', 'LoadingData', 'LoadError']) context[`set${name}`] = value => { state[name] = value; };
+for (const name of ['Health', 'Agents', 'Runs', 'Tools', 'AuditLogs', 'UnreadNotificationsCount', 'LoadingData', 'LoadError']) context[`set${name}`] = value => { state[name] = value; };
 vm.createContext(context);
 vm.runInContext(output, context);
 await context.loadData();

@@ -1,4 +1,5 @@
 import React from 'react';
+import type { UiSettingsConfig } from '../types/api';
 import {
   Activity, AlertTriangle, BookOpen, Bot, Cpu, CreditCard, FileCog, FlaskConical,
   HardDrive, HeartPulse, KeyRound, LayoutDashboard, PanelLeft, PanelLeftClose,
@@ -13,6 +14,7 @@ export type ActivePage =
   | 'settings' | 'harness-library';
 
 interface SidebarProps {
+  settings: UiSettingsConfig;
   activePage: ActivePage;
   onSelectPage: (page: ActivePage) => void;
   collapsed: boolean;
@@ -20,54 +22,43 @@ interface SidebarProps {
   onNewInvestigation: () => void;
 }
 
-type NavItem = { page: ActivePage; label: string; icon: LucideIcon; title?: string };
-const GROUPS: Array<{ label: string; items: NavItem[] }> = [
-  { label: 'Admin console', items: [
-    { page: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { page: 'project-setup', label: 'Project settings', icon: FileCog },
-    { page: 'settings', label: 'Platform settings', icon: Settings },
-    { page: 'users', label: 'Users & Roles', icon: Users },
-  ] },
-  { label: 'Configuration', items: [
-    { page: 'tools', label: 'Tools & connectors', icon: Wrench },
-    { page: 'capabilities', label: 'Capabilities', icon: Cpu },
-    { page: 'agents', label: 'Agents', icon: Bot },
-    { page: 'harness-library', label: 'Harness library', icon: BookOpen },
-    { page: 'skills', label: 'Skills', icon: Sparkles },
-    { page: 'parameters', label: 'Parameters', icon: Sliders },
-    { page: 'policy', label: 'Policy', icon: ShieldAlert },
-  ] },
-  { label: 'Monitoring', items: [
-    { page: 'health-checks', label: 'Health checks', icon: HeartPulse },
-    { page: 'alerts', label: 'Alerts', icon: AlertTriangle },
-    { page: 'runtime', label: 'Runtime', icon: Zap },
-    { page: 'runs', label: 'Investigations', icon: PlayCircle },
-    { page: 'optimization', label: 'Optimization', icon: FlaskConical },
-    { page: 'governance', label: 'Audit', icon: ShieldCheck },
-    { page: 'persistence', label: 'Persistence', icon: HardDrive },
-    { page: 'knowledge', label: 'Knowledge', icon: Activity },
-    { page: 'billing', label: 'Billing', icon: CreditCard },
-  ] },
-];
+export const PAGE_ICONS: Record<ActivePage, LucideIcon> = {
+  overview: LayoutDashboard, 'project-setup': FileCog, settings: Settings,
+  users: Users, roles: KeyRound, tools: Wrench, capabilities: Cpu, agents: Bot,
+  'harness-library': BookOpen, skills: Sparkles, parameters: Sliders, policy: ShieldAlert,
+  'health-checks': HeartPulse, alerts: AlertTriangle, runtime: Zap, runs: PlayCircle,
+  optimization: FlaskConical, governance: ShieldCheck, persistence: HardDrive,
+  knowledge: Activity, billing: CreditCard,
+};
+export const isActivePage = (page: string): page is ActivePage => Object.hasOwn(PAGE_ICONS, page);
 
-export const Sidebar: React.FC<SidebarProps> = ({ activePage, onSelectPage, collapsed, onToggleCollapse }) => (
-  <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Admin navigation">
+export const Sidebar: React.FC<SidebarProps> = ({ settings, activePage, onSelectPage, collapsed, onToggleCollapse }) => {
+  const groups = [...new Set(settings.navigation.filter(item => item.visible).map(item => item.group))];
+  return <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Workspace navigation">
     <div className="sidebar-header">
-      {!collapsed && <span className="brand-badge">Workspace</span>}
-      <button type="button" className="icon-btn" onClick={onToggleCollapse} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+      {!collapsed && <span className="brand-badge" title={settings.workspace_label}>{settings.workspace_label}</span>}
+      <button type="button" className="icon-btn" onClick={onToggleCollapse} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
         {collapsed ? <PanelLeft size={16} /> : <PanelLeftClose size={16} />}
       </button>
     </div>
-    <button type="button" className="sidebar-action-btn" onClick={() => onSelectPage('project-setup')} title="Open project settings">
-      <FileCog size={16} /><span>Project setup</span>
-    </button>
-    {GROUPS.map(group => <React.Fragment key={group.label}>
-      <div className="sidebar-heading">{group.label}</div>
-      {group.items.map(({ page, label, icon: Icon, title }) => <button
-        type="button" key={page} className={`nav-item ${activePage === page ? 'active' : ''}`}
-        onClick={() => onSelectPage(page)} aria-label={label} title={title || label}
-        aria-current={activePage === page ? 'page' : undefined}
-      ><Icon size={16} /><span>{label}</span></button>)}
-    </React.Fragment>)}
-  </nav>
-);
+    {groups.map(group => (
+      <div key={group} className="sidebar-group">
+        <div className="sidebar-heading" title={group}>
+          <span className="sidebar-heading-indicator" aria-hidden="true" />
+          <span className="sidebar-heading-text">{group}</span>
+        </div>
+        <div className="sidebar-group-items">
+          {settings.navigation.filter(item => item.visible && item.group === group).map(item => {
+            if (!isActivePage(item.page)) return null;
+            const page = item.page;
+            const Icon = PAGE_ICONS[page];
+            return <button type="button" key={page} className={`nav-item ${activePage === page ? 'active' : ''}`}
+              onClick={() => onSelectPage(page)} aria-label={item.label} title={item.description || item.label}
+              aria-current={activePage === page ? 'page' : undefined}
+            ><Icon size={16} /><span>{item.label}</span></button>;
+          })}
+        </div>
+      </div>
+    ))}
+  </nav>;
+};

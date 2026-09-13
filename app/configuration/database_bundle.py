@@ -19,12 +19,13 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
-from app.configuration.parameters import ParameterStore
+from app.configuration.parameters import ParameterStore, RUNTIME_FIELDS
 from app.configuration.platform import PlatformConfiguration
 from app.connectors.providers.registry import ConnectorOptions, CONNECTOR_IDS
 from app.optimization.content import read_platform
 from app.persistence.database import initialize_tables
 from app.runtime.run_contract import content_hash
+from app.settings import Settings
 
 metadata = MetaData(schema="platform")
 bundles = Table(
@@ -252,12 +253,14 @@ async def load_effective_settings(engine, settings, cleanup):
         platform.connector_options,
     )
     if not settings.database_configuration:
-        return settings, []
-    import os
-    from app.configuration.parameters import RUNTIME_FIELDS
-    from app.settings import Settings
-
+        await store.seed_runtime_definitions(settings.tenant_id, settings)
+        rows = await store.resolve(settings.tenant_id, settings.project_id)
+        runtime = {row["variable_name"]: row["effective_value"] for row in rows if row["tool"] == "runtime"}
+        configured = Settings.model_validate(settings.model_dump() | runtime)
+        configured.validate_runtime()
+        return configured, rows
     configured = await load_bundle(engine, settings, cleanup)
+    await store.seed_runtime_definitions(configured.tenant_id, configured)
     rows = await store.resolve(
         configured.tenant_id,
         configured.project_id,
@@ -273,13 +276,6 @@ async def load_effective_settings(engine, settings, cleanup):
         raise ValueError(
             "Database runtime parameters are incomplete; run the template import"
         )
-    runtime.update(
-        {
-            name: os.environ["RCA_" + name.upper()]
-            for name in runtime
-            if "RCA_" + name.upper() in os.environ
-        }
-    )
     configured = Settings.model_validate(configured.model_dump() | runtime)
     configured.validate_runtime()
     return configured, rows

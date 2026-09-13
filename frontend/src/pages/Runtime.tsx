@@ -24,7 +24,7 @@ import {
   Edit3
 } from 'lucide-react';
 import { SystemHealth, RuntimeStageItem } from '../types/api';
-import { ApiError, fetchConfig, fetchRuntimeStages, updateRuntimeStage } from '../services/api';
+import { ApiError, fetchConfig, fetchPrincipal, fetchRuntimeStages, updateRuntimeStage } from '../services/api';
 
 interface RuntimeProps {
   health: SystemHealth;
@@ -219,8 +219,12 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const [stageSaving, setStageSaving] = useState(false);
   const [stageSaveSuccess, setStageSaveSuccess] = useState<string | null>(null);
   const [stageSaveError, setStageSaveError] = useState<string | null>(null);
+  const [stageLoadError, setStageLoadError] = useState<string | null>(null);
+  const [runtimePrincipal, setRuntimePrincipal] = useState<{ roles: string[] } | null>(null);
+  const canManageStages = Boolean(runtimePrincipal?.roles.some(role => role === 'PLATFORM_ADMIN' || role === 'PROJECT_OWNER'));
 
   const loadStages = async () => {
+    setStageLoadError(null);
     try {
       const list = await fetchRuntimeStages();
       const map: Record<string, RuntimeStageItem> = {};
@@ -228,13 +232,15 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
         map[st.stage_id] = st;
       }
       setStages(map);
-    } catch {
-      // stages fallback
+      if (list.length > 0) setSelectedNode(current => map[current] ? current : list[0].stage_id);
+    } catch (cause) {
+      setStageLoadError(cause instanceof Error ? cause.message : 'Unable to load runtime stages.');
     }
   };
 
   useEffect(() => {
     fetchConfig().then(setConfig).catch((reason: unknown) => setConfigError(reason instanceof ApiError ? reason.message : 'Unable to load runtime configuration.'));
+    fetchPrincipal().then(setRuntimePrincipal).catch(() => setRuntimePrincipal(null));
     void loadStages();
   }, []);
 
@@ -248,31 +254,28 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const [editModel, setEditModel] = useState('gemini-2.5-flash');
   const [editThinkingLevel, setEditThinkingLevel] = useState('high');
   const [editThinkingBudget, setEditThinkingBudget] = useState(8192);
+  const [thinkingMode, setThinkingMode] = useState<'level' | 'budget'>('level');
   const [editOutputLimit, setEditOutputLimit] = useState(8192);
   const [editTemperature, setEditTemperature] = useState(0.2);
-  const [editToolLimit, setEditToolLimit] = useState(10);
-  const [editInstruction, setEditInstruction] = useState('');
+  const [editEnabled, setEditEnabled] = useState(true);
 
   // Sync form when selectedNode or stages change
   useEffect(() => {
     const st = stages[selectedNode];
     if (st) {
       setEditModel(st.model || 'gemini-2.5-flash');
-      setEditThinkingLevel(st.thinking_level || 'high');
-      setEditThinkingBudget(st.thinking_budget || 8192);
-      setEditOutputLimit(st.output_limit || 8192);
-      setEditTemperature(st.temperature ?? 0.2);
-      setEditToolLimit(st.tool_limit || 10);
-      setEditInstruction(st.instruction || '');
+      setEditThinkingLevel(st.thinking_level || 'medium');
+      setEditThinkingBudget(st.thinking_budget || 2048);
+      setThinkingMode(st.thinking_level ? 'level' : 'budget');
+      setEditOutputLimit(st.output_limit);
+      setEditTemperature(st.temperature);
+      setEditEnabled(st.enabled);
     } else {
-      const fallback = NODES_SPEC[selectedNode];
-      setEditModel(fallback?.model?.includes('flash-lite') ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash');
-      setEditThinkingLevel(fallback?.thinking?.toLowerCase().includes('low') ? 'low' : fallback?.thinking?.toLowerCase().includes('high') ? 'high' : 'medium');
-      setEditThinkingBudget(fallback?.thinking?.includes('8,192') ? 8192 : fallback?.thinking?.includes('2,048') ? 2048 : 1024);
-      setEditOutputLimit(fallback?.outputLimit?.includes('8,192') ? 8192 : fallback?.outputLimit?.includes('4,096') ? 4096 : 2048);
-      setEditTemperature(0.2);
-      setEditToolLimit(8);
-      setEditInstruction(fallback?.description || '');
+      setEditModel('');
+      setEditThinkingLevel('medium');
+      setEditThinkingBudget(0);
+      setEditOutputLimit(0);
+      setEditTemperature(0);
     }
     setIsEditingStage(false);
     setStageSaveSuccess(null);
@@ -285,17 +288,14 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
     setStageSaveError(null);
     try {
       const current = stages[selectedNode];
+      if (!current) throw new Error('Select a persisted runtime stage before editing.');
       const updated = await updateRuntimeStage(selectedNode, {
-        name: current?.name || NODES_SPEC[selectedNode]?.name || selectedNode,
         model: editModel,
-        thinking_level: editThinkingLevel,
-        thinking_budget: editThinkingBudget,
+        ...(thinkingMode === 'level' ? { thinking_level: editThinkingLevel, thinking_budget: null } : { thinking_level: null, thinking_budget: editThinkingBudget }),
         output_limit: editOutputLimit,
         temperature: editTemperature,
-        tool_limit: editToolLimit,
-        tools: current?.tools || NODES_SPEC[selectedNode]?.tools || [],
-        instruction: editInstruction,
-        enabled: true,
+        enabled: editEnabled,
+        expected_hash: current.content_hash,
       });
       setStages(prev => ({ ...prev, [selectedNode]: updated }));
       setStageSaveSuccess(`Stage "${updated.name}" updated successfully!`);
@@ -324,23 +324,23 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
   const handleZoomReset = () => setZoom(1.0);
 
   const liveStage = stages[selectedNode];
-  const configuredStage: any = liveStage || config?.model_profiles?.stages?.[selectedNode];
+  const configuredStage: RuntimeStageItem | undefined = liveStage;
   const activeNodeData: NodeSpec = {
     ...(NODES_SPEC[selectedNode] || NODES_SPEC.synthesis),
     ...(!configuredStage && NODES_SPEC[selectedNode]?.type.includes('LlmAgent') ? { model: '—', thinking: '—', outputLimit: '—' } : {}),
     ...(configuredStage ? {
-      model: liveStage?.model || configuredStage.model || NODES_SPEC.synthesis.model,
-      thinking: liveStage ? `${liveStage.thinking_level} (${liveStage.thinking_budget} tokens)` : configuredStage.thinking_level ? `${configuredStage.thinking_level} (configured)` : NODES_SPEC.synthesis.thinking,
-      outputLimit: liveStage ? `${liveStage.output_limit} tokens` : configuredStage.max_output_tokens ? `${configuredStage.max_output_tokens} tokens` : NODES_SPEC.synthesis.outputLimit,
-      description: liveStage?.instruction || configuredStage.description || 'Configured stage from active database.',
+      model: configuredStage.model || 'Unconfigured',
+      thinking: configuredStage.thinking_level ? `${configuredStage.thinking_level} thinking` : configuredStage.thinking_budget != null ? `${configuredStage.thinking_budget} token budget` : 'Unconfigured',
+      outputLimit: `${configuredStage.output_limit} tokens`,
+      description: 'Configured stage from the runtime settings store.',
     } : {}),
   };
   const execution = config?.execution || {};
-  const stageConfig = (node: string) => stages[node] || config?.model_profiles?.stages?.[node] || config?.model_profiles?.stages?.orchestrator;
-  const modelLabel = (node: string, fallback: string) => stageConfig(node)?.model || fallback;
+  const stageConfig = (node: string) => stages[node];
+  const modelLabel = (node: string, fallback: string) => stageConfig(node)?.model || 'Unconfigured';
   const thinkingLabel = (node: string, fallback: string) => {
     const st = stageConfig(node);
-    if (!st) return fallback;
+    if (!st) return 'Unconfigured';
     return st.thinking_level ? `${st.thinking_level} Think` : fallback;
   };
 
@@ -535,7 +535,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           <span className="badge badge-active" style={{ fontSize: '11px' }}>
             {activeNodeData.type.split('.').pop()}
           </span>
-          {(activeNodeData.type.includes('LlmAgent') || stages[selectedNode]) && (
+          {stages[selectedNode] && (
             <button
               type="button"
               className="btn btn-outline btn-sm"
@@ -547,6 +547,13 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           )}
         </div>
       </div>
+
+      <label style={{ display: 'grid', gap: 5, fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>
+        Persisted runtime stage
+        <select value={selectedNode} onChange={event => setSelectedNode(event.target.value)} style={{ padding: '7px 9px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}>
+          {Object.values(stages).map(stage => <option key={stage.stage_id} value={stage.stage_id}>{stage.name} ({stage.stage_id})</option>)}
+        </select>
+      </label>
 
       {stageSaveSuccess && (
         <div className="notice-banner green" style={{ padding: '6px 10px', fontSize: 11, margin: 0 }}>
@@ -571,18 +578,22 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
             <div>
               <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Model Profile</label>
-              <select
+              <input
                 value={editModel}
                 onChange={e => setEditModel(e.target.value)}
+                required
                 style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
-              >
-                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-                <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-              </select>
+              />
             </div>
 
             <div>
+              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Thinking input</label>
+              <select value={thinkingMode} onChange={e => setThinkingMode(e.target.value as 'level' | 'budget')} style={{ width: '100%', padding: '6px 8px', marginBottom: 6, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}>
+                <option value="level">Thinking level</option>
+                <option value="budget">Thinking budget</option>
+              </select>
+            {thinkingMode === 'level' && (
+              <>
               <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Thinking Level</label>
               <select
                 value={editThinkingLevel}
@@ -593,19 +604,11 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
                 <option value="medium">medium</option>
                 <option value="high">high</option>
               </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Thinking Budget (tokens)</label>
-              <input
-                type="number"
-                step="512"
-                min="0"
-                max="32768"
-                value={editThinkingBudget}
-                onChange={e => setEditThinkingBudget(parseInt(e.target.value, 10) || 0)}
-                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
-              />
+              </>
+            )}
+            {thinkingMode === 'budget' && (
+              <input type="number" min="0" max="32768" step="1" value={editThinkingBudget} onChange={e => setEditThinkingBudget(parseInt(e.target.value, 10) || 0)} aria-label="Thinking budget" style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }} />
+            )}
             </div>
 
             <div>
@@ -634,35 +637,16 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
               />
             </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>Tool Call Limit</label>
-              <input
-                type="number"
-                min="1"
-                max="25"
-                value={editToolLimit}
-                onChange={e => setEditToolLimit(parseInt(e.target.value, 10) || 1)}
-                style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12 }}
-              />
-            </div>
           </div>
 
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--muted)', marginBottom: 2 }}>System Instruction Prompt</label>
-            <textarea
-              rows={3}
-              value={editInstruction}
-              onChange={e => setEditInstruction(e.target.value)}
-              style={{ width: '100%', padding: '6px 8px', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--line)', borderRadius: 4, fontSize: 11, fontFamily: 'monospace' }}
-            />
-          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 11 }}><input type="checkbox" checked={editEnabled} onChange={e => setEditEnabled(e.target.checked)} /> Stage enabled for new runs</label>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <button
               type="button"
               className="btn btn-outline btn-sm"
               onClick={() => setIsEditingStage(false)}
-              disabled={stageSaving}
+              disabled={stageSaving || !canManageStages}
             >
               Cancel
             </button>
@@ -670,7 +654,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
               type="button"
               className="btn btn-primary btn-sm"
               onClick={() => void handleSaveStage()}
-              disabled={stageSaving}
+              disabled={stageSaving || !canManageStages}
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             >
               <Save size={12} /> {stageSaving ? 'Saving...' : 'Save Stage Tuning'}
@@ -751,6 +735,7 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
     <div className="view-container">
       {/* Header Banner */}
       {configError && <div className="card" style={{ color: 'var(--danger)' }}>{configError}<button className="btn btn-secondary" onClick={() => window.location.reload()}>Retry</button></div>}
+      {stageLoadError && <div className="card" role="alert" style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 10 }}>{stageLoadError}<button className="btn btn-secondary" onClick={() => void loadStages()}>Retry stages</button></div>}
       <section className="hero-banner">
         <div className="hero-main">
           <h1 className="hero-title">

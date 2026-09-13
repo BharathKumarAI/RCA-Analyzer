@@ -30,7 +30,10 @@ from sqlalchemy.exc import IntegrityError
 from app.identity.principals import Role
 from app.persistence.database import initialize_tables, scoped_engine
 from app.settings import Settings
-from app.configuration.models import ConnectorTemplate
+from app.configuration.models import (
+    KNOWN_PARAMETER_CATEGORIES,
+    ConnectorTemplate,
+)
 
 metadata = MetaData()
 projects = Table(
@@ -50,7 +53,12 @@ definitions = Table(
     Column("value_type", String(16), nullable=False),
     Column("description", String(2000), nullable=False),
     Column("default_value", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("enabled", Boolean, nullable=False, default=True),
     Column("allow_project_override", Boolean, nullable=False),
+    Column("category", String(120), nullable=False, default="operational"),
+    Column("subcategory", String(120), nullable=True),
+    Column("allowed_values", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("scope", String(16), nullable=False, default="platform"),
     Column("icon", String(64), nullable=False),
     Column("revision", Integer, nullable=False),
     Column("updated_at", Float, nullable=False),
@@ -157,6 +165,32 @@ def _resolve_secret_variable(template: ConnectorTemplate, connector_options) -> 
     return None
 
 
+def _parameter_category(tool: str, variable_name: str) -> tuple[str, str | None]:
+    if variable_name in {"endpoint", "ui_base_url"}:
+        return "connectivity", "endpoint"
+    if variable_name in {"protocol", "auth_method"}:
+        return "connectivity", variable_name
+    if variable_name == "service_user":
+        return "identity", "service_account"
+    if variable_name in {"timeout_seconds", "max_response_bytes"}:
+        return "performance", "timeouts"
+    if variable_name in {"retry_attempts", "retry_backoff_seconds"}:
+        return "performance", "retry"
+    if variable_name == "rate_limit":
+        return "performance", "rate_limit"
+    if variable_name in {"project_key", "timezone"}:
+        return "schedules", "environment"
+    if variable_name in {"polling_frequency", "max_window_seconds"}:
+        return "schedules", "schedule" if variable_name == "polling_frequency" else "window"
+    if variable_name == "allowed_indexes":
+        return "query", "index_selection"
+    if variable_name == "max_results":
+        return "query", "pagination"
+    if tool == "runtime":
+        return "runtime", "operation"
+    return "operational", None
+
+
 def _infer_value_type(value):
     if isinstance(value, bool):
         return "boolean"
@@ -171,6 +205,24 @@ def _infer_value_type(value):
     raise ValueError("Unsupported connector template parameter value type")
 
 
+def _normalize_category_metadata(category: str, subcategory: str | None) -> tuple[str, str | None]:
+    value = category.strip().lower()
+    if value not in KNOWN_PARAMETER_CATEGORIES:
+        raise ValueError(f"Unknown parameter category '{category}'")
+    if subcategory is None:
+        return value, None
+    normalized_subcategory = subcategory.strip().lower()
+    if (
+        normalized_subcategory
+        and normalized_subcategory not in KNOWN_PARAMETER_CATEGORIES[value]
+        and KNOWN_PARAMETER_CATEGORIES[value] != ("general",)
+    ):
+        raise ValueError(
+            f"Invalid subcategory '{subcategory}' for category '{category}'"
+        )
+    return value, normalized_subcategory
+
+
 def _connector_parameter_rows(template: ConnectorTemplate, connector_options) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     base = [
@@ -183,6 +235,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "link",
+            "category": "connectivity",
+            "subcategory": "endpoint",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -193,6 +248,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "globe",
+            "category": "connectivity",
+            "subcategory": "endpoint",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -203,6 +261,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": False,
             "icon": "radio",
+            "category": "connectivity",
+            "subcategory": "protocol",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -213,6 +274,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": False,
             "icon": "shield",
+            "category": "identity",
+            "subcategory": "authentication",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -223,6 +287,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": False,
             "icon": "user",
+            "category": "identity",
+            "subcategory": "service_account",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -233,6 +300,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "clock",
+            "category": "performance",
+            "subcategory": "timeouts",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -243,6 +313,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "rotate-cw",
+            "category": "performance",
+            "subcategory": "retry",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -253,6 +326,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "timer",
+            "category": "performance",
+            "subcategory": "retry",
+            "allowed_values": None,
         },
         {
             "tool": template.system_name,
@@ -263,6 +339,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
             "allow_project_override": template.can_override,
             "visible_in_project": True,
             "icon": "tachometer",
+            "category": "performance",
+            "subcategory": "rate_limit",
+            "allowed_values": None,
         },
     ]
     secret_variable = _resolve_secret_variable(template, connector_options)
@@ -277,6 +356,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
                 "allow_project_override": False,
                 "visible_in_project": False,
                 "icon": "key",
+                "category": "security",
+                "subcategory": "auth",
+                "allowed_values": None,
             }
         )
     for field in template.parameter_fields:
@@ -290,11 +372,17 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
                 "allow_project_override": field.allow_project_override,
                 "visible_in_project": field.visible_in_project,
                 "icon": field.icon,
+                "category": field.category,
+                "subcategory": field.subcategory,
+                "allowed_values": list(field.allowed_values)
+                if field.allowed_values
+                else None,
             }
         )
     for key, value in template.default_config.items():
         if not isinstance(key, str):
             continue
+        category, subcategory = _parameter_category(template.system_name, key)
         rows.append(
             {
                 "tool": template.system_name,
@@ -305,6 +393,9 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
                 "allow_project_override": template.can_override,
                 "visible_in_project": True,
                 "icon": "settings",
+                "category": category,
+                "subcategory": subcategory,
+                "allowed_values": None,
             }
         )
     for item in base:
@@ -329,6 +420,9 @@ def _build_template_parameter_rows(
     rows: list[dict[str, Any]] = []
     for template in connector_templates:
         for row in _connector_parameter_rows(template, connector_options):
+            category, subcategory = _normalize_category_metadata(
+                row["category"], row["subcategory"]
+            )
             rows.append(
                 {
                     "tenant_id": tenant,
@@ -338,6 +432,11 @@ def _build_template_parameter_rows(
                     "description": row["description"],
                     "default_value": row["default_value"],
                     "allow_project_override": row["allow_project_override"],
+                    "enabled": True,
+                    "category": category,
+                    "subcategory": subcategory,
+                    "allowed_values": row["allowed_values"],
+                    "scope": "project" if row["allow_project_override"] else "platform",
                     "icon": row["icon"],
                     "project_visible": row["visible_in_project"],
                     "revision": 1,
@@ -389,13 +488,42 @@ class ParameterDefinition(BaseModel):
     value_type: Literal["string", "integer", "number", "boolean", "json", "secret_ref"]
     description: str = Field(min_length=1, max_length=2000)
     default_value: Any
+    enabled: bool = True
     allow_project_override: bool = False
+    category: str = Field(default="operational", min_length=1, max_length=120)
+    subcategory: str | None = Field(default=None, max_length=120)
+    allowed_values: list[Any] | None = Field(default=None)
+    scope: Literal["platform", "project", "platform_only"] | None = None
     icon: str = Field(default="settings", pattern=r"^[a-z0-9_-]{1,64}$")
     expected_revision: int = Field(default=0, ge=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_scope(cls, values):
+        values = dict(values)
+        scope = values.get("scope")
+        allow = values.get("allow_project_override", False)
+        if scope is None:
+            values["scope"] = "project" if allow else "platform"
+        elif scope == "project":
+            values["allow_project_override"] = True
+        elif scope in {"platform", "platform_only"} and allow:
+            raise ValueError("Only project-scoped parameters may be overridden")
+        elif scope == "platform_only" and not allow:
+            values["allow_project_override"] = False
+        return values
+
     @model_validator(mode="after")
     def typed_value(self):
+        _normalize_category_metadata(self.category, self.subcategory)
         validate_value(self.value_type, self.default_value)
+        if self.allowed_values is not None:
+            if len(self.allowed_values) == 0:
+                raise ValueError("allowed_values cannot be empty when provided")
+            for item in self.allowed_values:
+                validate_value(self.value_type, item)
+            if self.default_value not in self.allowed_values:
+                raise ValueError("Default value must be one of allowed values")
         return self
 
 
@@ -444,6 +572,13 @@ class ParameterStore:
                 raise ValueError("Splunk window limit cannot exceed one day")
         if re.search(r"(^|_)(password|token|secret|api_key|credential)(_|$)", name):
             validate_value("secret_ref", value)
+
+    @staticmethod
+    def validate_definition_values(definition, value):
+        validate_value(definition.value_type, value)
+        allowed_values = definition.allowed_values
+        if allowed_values is not None and value not in allowed_values:
+            raise ValueError("Value is not in allowed_values")
 
     @staticmethod
     def native_connection_edit(p, tool, name, value):
@@ -508,13 +643,20 @@ class ParameterStore:
                         )
                     )
                 ).all()
-                if existing and not definition.allow_project_override:
-                    raise ParameterConflict(
-                        "Remove project overrides before fixing the value"
+                if existing and definition.scope != "project":
+                    await c.execute(
+                        delete(overrides).where(
+                            *self.key(overrides, p.tenant_id, tool, name)
+                        )
+                    )
+                    await self.record(
+                        c, p, tool, name, "scope_reset", revision, p.project_id
                     )
                 for override in existing:
-                    validate_value(definition.value_type, override.value)
+                    self.validate_definition_values(definition, override.value)
                     self.runtime_value(tool, name, override.value)
+                values = definition.model_dump(exclude={"expected_revision"})
+                values.update(revision=revision, updated_at=time.time())
                 if row:
                     result = await c.execute(
                         update(definitions)
@@ -542,6 +684,8 @@ class ParameterStore:
     async def delete_definition(self, p, tool, name, expected_revision):
         if Role.PLATFORM_ADMIN not in p.roles:
             raise PermissionError("Platform administrator required")
+        if tool == "runtime":
+            raise ParameterConflict("Runtime definitions are required and cannot be deleted")
         key = self.key(definitions, p.tenant_id, tool, name)
         async with self.engine.begin() as c:
             row = (
@@ -583,6 +727,13 @@ class ParameterStore:
                 if existing:
                     continue
                 validate_value(row["value_type"], row["default_value"])
+                if row["allowed_values"] is not None:
+                    if len(row["allowed_values"]) == 0:
+                        raise ValueError("allowed_values cannot be empty when provided")
+                    for item in row["allowed_values"]:
+                        validate_value(row["value_type"], item)
+                    if row["default_value"] not in row["allowed_values"]:
+                        raise ValueError("Default value must be one of allowed values")
                 self.runtime_value(row["tool"], row["variable_name"], row["default_value"])
                 await c.execute(
                     insert(definitions).values(
@@ -593,6 +744,11 @@ class ParameterStore:
                         description=row["description"],
                         default_value=row["default_value"],
                         allow_project_override=row["allow_project_override"],
+                        enabled=row["enabled"],
+                        category=row["category"],
+                        subcategory=row["subcategory"],
+                        allowed_values=row["allowed_values"],
+                        scope=("project" if row["allow_project_override"] else "platform"),
                         icon=row["icon"],
                         revision=1,
                         updated_at=time.time(),
@@ -600,6 +756,63 @@ class ParameterStore:
                 )
                 inserted += 1
         return {"inserted": inserted}
+
+    async def seed_runtime_definitions(self, tenant: str, settings: Settings) -> int:
+        """Materialize deployment defaults once; later edits remain authoritative."""
+        inserted = 0
+        async with self.engine.begin() as c:
+            for name in sorted(RUNTIME_FIELDS):
+                if await c.scalar(select(definitions.c.variable_name).where(
+                    definitions.c.tenant_id == tenant,
+                    definitions.c.tool == "runtime",
+                    definitions.c.variable_name == name,
+                )):
+                    continue
+                value = getattr(settings, name)
+                kind = _infer_value_type(value)
+                await c.execute(insert(definitions).values(
+                    tenant_id=tenant, tool="runtime", variable_name=name,
+                    value_type=kind, description=f"Runtime setting: {name}",
+                    default_value=value, allow_project_override=False, enabled=True,
+                    category="runtime", subcategory="operation",
+                    allowed_values=None, scope="platform", icon="settings", revision=1,
+                    updated_at=time.time(),
+                ))
+                inserted += 1
+        return inserted
+
+    async def set_runtime_values(self, p, values: dict[str, Any]) -> None:
+        if Role.PLATFORM_ADMIN not in p.roles:
+            raise PermissionError("Platform administrator required")
+        async with self.engine.begin() as c:
+            for name, value in values.items():
+                if name not in RUNTIME_FIELDS:
+                    raise ValueError("This setting is deployment-managed")
+                self.runtime_value("runtime", name, value)
+                row = (await c.execute(select(definitions).where(
+                    definitions.c.tenant_id == p.tenant_id,
+                    definitions.c.tool == "runtime",
+                    definitions.c.variable_name == name,
+                ).with_for_update())).first()
+                if not row:
+                    await c.execute(insert(definitions).values(
+                        tenant_id=p.tenant_id, tool="runtime", variable_name=name,
+                        value_type=_infer_value_type(value), description=f"Runtime setting: {name}",
+                        default_value=value, allow_project_override=False, enabled=True,
+                        category="runtime", subcategory="operation",
+                        allowed_values=None, scope="platform",
+                        icon="settings", revision=1, updated_at=time.time(),
+                    ))
+                    revision = 1
+                else:
+                    revision = row.revision + 1
+                    await c.execute(update(definitions).where(
+                        definitions.c.tenant_id == p.tenant_id,
+                        definitions.c.tool == "runtime",
+                        definitions.c.variable_name == name,
+                        definitions.c.revision == row.revision,
+                    ).values(default_value=value, revision=revision, updated_at=time.time()))
+                await self.record(c, p, "runtime", name, "define", revision)
 
     async def set_override(self, p, tool, name, body):
         if not set(p.roles) & {
@@ -621,9 +834,11 @@ class ParameterStore:
                 ).first()
                 if definition is None:
                     raise ValueError("Unknown parameter")
+                if not definition.enabled:
+                    raise PermissionError("Disabled parameter is immutable")
                 if definition.revision != body.expected_definition_revision:
                     raise ParameterConflict("Definition revision changed")
-                if not definition.allow_project_override:
+                if definition.scope != "project":
                     raise PermissionError("Platform value is fixed")
                 if (
                     definition.value_type == "secret_ref"
@@ -632,7 +847,7 @@ class ParameterStore:
                     raise PermissionError(
                         "Secret reference changes require a platform administrator"
                     )
-                validate_value(definition.value_type, body.value)
+                self.validate_definition_values(definition, body.value)
                 self.runtime_value(tool, name, body.value)
                 key = (
                     *self.key(overrides, p.tenant_id, tool, name),
@@ -707,6 +922,8 @@ class ParameterStore:
                 raise PermissionError(
                     "Secret reference changes require a platform administrator"
                 )
+            if definition is not None and not definition.enabled:
+                raise PermissionError("Disabled parameter is immutable")
             result = await c.execute(
                 delete(overrides).where(
                     *self.key(overrides, p.tenant_id, tool, name),
@@ -728,11 +945,6 @@ class ParameterStore:
         connector_options=None,
     ):
         template_rows: list[dict[str, Any]] = []
-        project_visible = _template_visibility_map(
-            tenant,
-            tuple(connector_templates),
-            connector_options,
-        )
         if connector_templates:
             template_rows = _build_template_parameter_rows(
                 tenant,
@@ -770,25 +982,36 @@ class ParameterStore:
         resolved = []
         resolved_keys = set()
         for row in rows:
-            value = (
-                row["override_value"]
-                if row["override_revision"]
-                else row["default_value"]
-            )
-            if row["override_revision"] and not row["allow_project_override"]:
+            has_override = bool(row["override_revision"])
+            if has_override and row["scope"] != "project":
                 raise ValueError("Fixed parameter has an invalid override")
-            validate_value(row["value_type"], value)
-            self.runtime_value(row["tool"], row["variable_name"], value)
+            if not row["enabled"]:
+                effective_value = None
+                effective_state = "DISABLED"
+            else:
+                effective_value = (
+                    row["override_value"] if has_override else row["default_value"]
+                )
+                validate_value(row["value_type"], effective_value)
+                if (
+                    row["allowed_values"] is not None
+                    and effective_value not in row["allowed_values"]
+                ):
+                    raise ValueError("Stored value is not in allowed_values")
+                self.runtime_value(row["tool"], row["variable_name"], effective_value)
+                effective_state = "SET" if has_override else (
+                    "INHERIT" if row["scope"] == "project" else "SET"
+                )
             key = (row["tool"], row["variable_name"])
             resolved_keys.add(key)
             resolved.append(
                 dict(row)
                 | {
-                    "effective_value": value,
-                    "source": "project" if row["override_revision"] else "platform",
-                    "project_visible": project_visible.get(
-                        (row["tool"], row["variable_name"]), True
-                    ),
+                    "effective_value": effective_value,
+                    "effective_state": effective_state,
+                    "source": "project" if has_override else "platform",
+                    "project_visible": row["scope"] != "platform_only",
+                    "scope": row["scope"],
                 }
             )
         for row in template_rows:
@@ -796,6 +1019,8 @@ class ParameterStore:
             if key in resolved_keys:
                 continue
             validate_value(row["value_type"], row["default_value"])
+            if row["allowed_values"] is not None and row["default_value"] not in row["allowed_values"]:
+                raise ValueError("Stored value is not in allowed_values")
             self.runtime_value(row["tool"], row["variable_name"], row["default_value"])
             resolved.append(
                 {
@@ -806,12 +1031,20 @@ class ParameterStore:
                     "description": row["description"],
                     "default_value": row["default_value"],
                     "allow_project_override": row["allow_project_override"],
+                    "category": row["category"],
+                    "subcategory": row["subcategory"],
+                    "allowed_values": row["allowed_values"],
                     "icon": row["icon"],
                     "revision": 0,
                     "override_revision": None,
+                    "enabled": row["enabled"],
                     "effective_value": row["default_value"],
+                    "effective_state": "INHERIT"
+                    if row["scope"] == "project"
+                    else "SET",
                     "source": "platform",
                     "project_visible": row["project_visible"],
+                    "scope": row["scope"],
                 }
             )
         return resolved

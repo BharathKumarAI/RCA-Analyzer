@@ -196,6 +196,7 @@ export function ParameterStudio() {
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [scopeFilter, setScopeFilter] = useState<'ALL' | 'PLATFORM' | 'PROJECT'>('ALL');
   const [collapsedTools, setCollapsedTools] = useState<Record<string, boolean>>({});
 
   // Copy feedback state
@@ -215,7 +216,7 @@ export function ParameterStudio() {
   const [newDefaultBool, setNewDefaultBool] = useState(false);
   const [newDefaultNumber, setNewDefaultNumber] = useState(0);
   const [newDescription, setNewDescription] = useState('');
-  const [newAllowOverride, setNewAllowOverride] = useState(true);
+  const [newScope, setNewScope] = useState<'platform' | 'project' | 'platform_only'>('project');
   const [addError, setAddError] = useState<string | null>(null);
 
   // Edit fields for Project Override
@@ -230,6 +231,7 @@ export function ParameterStudio() {
   const [editDefaultNumber, setEditDefaultNumber] = useState<number>(0);
   const [editDescription, setEditDescription] = useState<string>('');
   const [editAllowOverride, setEditAllowOverride] = useState<boolean>(false);
+  const [editScope, setEditScope] = useState<'platform' | 'project' | 'platform_only'>('platform_only');
   const [defaultJsonError, setDefaultJsonError] = useState<string | null>(null);
 
   // Load Data
@@ -300,6 +302,7 @@ export function ParameterStudio() {
     // Populate Platform Default fields
     setEditDescription(activeParam.description || '');
     setEditAllowOverride(Boolean(activeParam.allow_project_override));
+    setEditScope(activeParam.allow_project_override ? (activeParam.project_visible ? 'project' : 'platform') : 'platform_only');
     if (activeParam.value_type === 'boolean') {
       setEditDefaultBool(Boolean(activeParam.default_value));
     } else if (activeParam.value_type === 'integer' || activeParam.value_type === 'number') {
@@ -377,6 +380,8 @@ export function ParameterStudio() {
       if (statusFilter === 'LOCKED' && item.allow_project_override) {
         return false;
       }
+      if (scopeFilter === 'PLATFORM' && item.project_visible) return false;
+      if (scopeFilter === 'PROJECT' && !item.project_visible) return false;
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -390,7 +395,7 @@ export function ParameterStudio() {
       }
       return true;
     });
-  }, [parameters, selectedTool, typeFilter, statusFilter, searchQuery]);
+  }, [parameters, selectedTool, typeFilter, statusFilter, scopeFilter, searchQuery]);
 
   // Filtered grouped by tool
   const filteredToolsMap = useMemo(() => {
@@ -478,7 +483,7 @@ export function ParameterStudio() {
         value_type: newType,
         default_value: parsedVal,
         description: newDescription.trim(),
-        allow_project_override: newAllowOverride,
+        allow_project_override: newScope !== 'platform_only',
         icon: 'sliders',
         expected_revision: 0,
       });
@@ -612,6 +617,7 @@ export function ParameterStudio() {
         description: editDescription.trim(),
         default_value: finalDefault,
         allow_project_override: editAllowOverride,
+        scope: editScope,
         icon: (activeParam as any).icon || 'sliders',
         expected_revision: activeParam.revision,
       });
@@ -796,15 +802,15 @@ export function ParameterStudio() {
               />
             </div>
 
-            {/* Allow Project Override Checkbox */}
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-              <input
-                type="checkbox"
-                checked={newAllowOverride}
-                onChange={e => setNewAllowOverride(e.target.checked)}
-              />
-              <span>Allow individual project workspaces to override this parameter</span>
-            </label>
+            <div className="param-form-group">
+              <label>Parameter Scope *</label>
+              <select value={newScope} onChange={e => setNewScope(e.target.value as typeof newScope)}>
+                <option value="platform">Platform default</option>
+                <option value="project">Project workspace</option>
+                <option value="platform_only">Platform only (locked)</option>
+              </select>
+              <span className="param-form-help">Scope maps to the persisted platform default and project override policy.</span>
+            </div>
           </div>
 
           <div className="param-modal-footer">
@@ -1262,12 +1268,21 @@ export function ParameterStudio() {
                 )}
               </div>
 
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, color: 'var(--tx)' }}>
+                <span style={{ fontSize: 12, fontWeight: 600 }}>Parameter Scope</span>
+                <select value={editScope} onChange={e => { const value = e.target.value as typeof editScope; setEditScope(value); setEditAllowOverride(value !== 'platform_only'); }} style={{ padding: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)', borderRadius: 6, color: 'var(--tx)' }}>
+                  <option value="platform">Platform default</option>
+                  <option value="project">Project workspace</option>
+                  <option value="platform_only">Platform only (locked)</option>
+                </select>
+              </label>
+
               {/* Allow Project Override Checkbox */}
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
                 <input
                   type="checkbox"
                   checked={editAllowOverride}
-                  onChange={e => setEditAllowOverride(e.target.checked)}
+                  onChange={e => { setEditAllowOverride(e.target.checked); setEditScope(e.target.checked ? 'project' : 'platform_only'); }}
                 />
                 <span style={{ fontSize: 13, color: 'var(--tx)' }}>
                   Allow project workspaces to override this parameter
@@ -1892,6 +1907,11 @@ export function ParameterStudio() {
                 <option value="boolean">Boolean</option>
                 <option value="json">JSON</option>
                 <option value="secret_ref">Secret Reference</option>
+              </select>
+              <select className="param-type-select" value={scopeFilter} onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)} aria-label="Filter parameter scope">
+                <option value="ALL">All Scopes</option>
+                <option value="PLATFORM">Platform Only</option>
+                <option value="PROJECT">Project Visible</option>
               </select>
 
               {/* Expand/Collapse All when in ALL mode */}

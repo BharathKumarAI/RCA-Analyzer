@@ -14,7 +14,7 @@ import yaml
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.capabilities.resolver import CapabilityResolver
 from app.tools.catalog import TOOL_ACTIONS
@@ -23,12 +23,19 @@ from app.configuration.yaml_data import load_yaml_data
 from app.connectors.health import CheckStatus, ConnectorHealth
 from app.connectors.providers.project_storage import project_prefix
 from app.configuration.database_bundle import update_bundle_file
+from app.models.profiles import ModelProfiles, StageModel
+from app.runtime.run_contract import content_hash
 from app.identity.principals import Role, UserPrincipal
 from app.observability.otel import telemetry_status
 from app.persistence.platform_admin import DEFAULT_PERMISSIONS, DEFAULT_SYSTEM_ROLES
-from app.api.dependencies import Principal
+from app.api.dependencies import Principal, require_roles
 
 router = APIRouter()
+
+# All configuration exposed by the admin console is scoped to the authenticated
+# deployment tenant/project.  Keep the write boundary in the route layer so a
+# read-only principal cannot mutate state by calling the API directly.
+MANAGEMENT_ROLES = {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER}
 
 
 class ProjectConfigPayload(BaseModel):
@@ -120,16 +127,14 @@ class KnowledgeUpdatePayload(BaseModel):
 
 
 class RuntimeStageUpdatePayload(BaseModel):
-    name: str
+    model_config = ConfigDict(extra="forbid")
     model: str
-    thinking_level: str = "medium"
-    thinking_budget: int = 2048
+    thinking_level: str | None = None
+    thinking_budget: int | None = None
     output_limit: int = 4096
     temperature: float = 0.2
-    tool_limit: int = 5
-    tools: list[str] = []
-    instruction: str = ""
     enabled: bool = True
+    expected_hash: str
 
 
 class AlertCreatePayload(BaseModel):
@@ -153,12 +158,12 @@ class AlertConfigUpdatePayload(BaseModel):
 
 
 class PlatformSettingsUpdatePayload(BaseModel):
-    run_timeout_seconds: int = 120
-    max_concurrent_runs: int = 4
-    max_llm_calls: int = 12
-    max_input_chars: int = 16000
-    max_context_chars: int = 64000
-    retention_days: int = 90
+    run_timeout_seconds: int = Field(default=120, ge=1, le=900)
+    max_concurrent_runs: int = Field(default=4, ge=1, le=64)
+    max_llm_calls: int = Field(default=12, ge=1, le=100)
+    max_input_chars: int = Field(default=16000, ge=100, le=16000)
+    max_context_chars: int = Field(default=64000, ge=1000, le=256000)
+    retention_days: int = Field(default=90, ge=1, le=2555)
     allowed_extensions: list[str] = [".txt", ".log", ".json", ".csv", ".pdf"]
     mode: str = "demo"
 
@@ -377,6 +382,26 @@ async def _save_project_file(request: Request, principal: Principal, content: st
     target_file.parent.mkdir(parents=True, exist_ok=True)
     target_file.write_text(content, encoding="utf-8")
     return target_file
+
+
+async def _save_model_profiles(request: Request, content: str) -> None:
+    """Persist model profiles to the active source of truth and materialize it."""
+    settings = request.app.state.settings
+    if settings.database_configuration:
+        await update_bundle_file(
+            request.app.state.store.engine,
+            settings,
+            "config/model_profiles.yaml",
+            content,
+        )
+    target = Path(settings.config_dir) / "model_profiles.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _default_connector_action(connector_id: str) -> str:
@@ -1323,6 +1348,7 @@ async def roles(request: Request, principal: Principal):
 @router.post("/api/v1/roles")
 async def create_role(payload: RoleCreatePayload, request: Request, principal: Principal):
     """Create a new role with specific capability permissions."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_role(
@@ -1333,6 +1359,7 @@ async def create_role(payload: RoleCreatePayload, request: Request, principal: P
 @router.put("/api/v1/roles/{role_id}")
 async def update_role(role_id: str, payload: RoleUpdatePayload, request: Request, principal: Principal):
     """Update description and permissions for a role."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_role(
@@ -1343,6 +1370,7 @@ async def update_role(role_id: str, payload: RoleUpdatePayload, request: Request
 @router.delete("/api/v1/roles/{role_id}", status_code=204)
 async def delete_role(role_id: str, request: Request, principal: Principal):
     """Delete a custom role definition."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     try:
@@ -1368,6 +1396,7 @@ async def get_policy(request: Request, principal: Principal):
 @router.put("/api/v1/policy")
 async def update_policy(payload: PolicyUpdatePayload, request: Request, principal: Principal):
     """Update and persist redaction patterns and guardrails."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.update_policy(
@@ -1410,9 +1439,35 @@ async def list_users(request: Request, principal: Principal):
     return list(users_dict.values())
 
 
+def _validate_user_change(roles: list[str], status: str, actor: Principal, subject: str) -> None:
+    try:
+        assigned = {Role(role) for role in roles}
+    except ValueError:
+        raise HTTPException(422, "Unknown project role") from None
+    if status not in {"active", "inactive"}:
+        raise HTTPException(422, "User status must be active or inactive")
+    if Role.PLATFORM_ADMIN not in actor.roles and Role.PLATFORM_ADMIN in assigned:
+        raise HTTPException(403, "Only PLATFORM_ADMIN can assign PLATFORM_ADMIN")
+    if subject == actor.subject and (status != "active" or not assigned.intersection(MANAGEMENT_ROLES)):
+        raise HTTPException(400, "You cannot remove your own management access")
+
+
+async def _reject_owner_admin_target(request: Request, actor: Principal, subject: str) -> None:
+    if Role.PLATFORM_ADMIN in actor.roles:
+        return
+    stored = await request.app.state.platform_admin.get_user(actor.tenant_id, actor.project_id, subject)
+    fallback = request.app.state.settings.principals.get(subject)
+    target_roles = stored.get("roles", []) if stored else [role.value for role in fallback.roles] if fallback else []
+    if Role.PLATFORM_ADMIN.value in target_roles:
+        raise HTTPException(403, "Only PLATFORM_ADMIN can modify a platform administrator")
+
+
 @router.post("/api/v1/users")
 async def create_user(payload: UserCreatePayload, request: Request, principal: Principal):
     """Register a new user membership in this project scope."""
+    require_roles(principal, MANAGEMENT_ROLES)
+    await _reject_owner_admin_target(request, principal, payload.id)
+    _validate_user_change(payload.roles, payload.status, principal, subject=payload.id)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_user(
@@ -1423,6 +1478,9 @@ async def create_user(payload: UserCreatePayload, request: Request, principal: P
 @router.put("/api/v1/users/{user_id}")
 async def update_user(user_id: str, payload: UserUpdatePayload, request: Request, principal: Principal):
     """Update assigned roles, name, email, or status for a user."""
+    require_roles(principal, MANAGEMENT_ROLES)
+    await _reject_owner_admin_target(request, principal, user_id)
+    _validate_user_change(payload.roles, payload.status, principal, subject=user_id)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_user(
@@ -1433,14 +1491,24 @@ async def update_user(user_id: str, payload: UserUpdatePayload, request: Request
 @router.delete("/api/v1/users/{user_id}", status_code=204)
 async def delete_user(user_id: str, request: Request, principal: Principal):
     """Remove user membership."""
+    require_roles(principal, MANAGEMENT_ROLES)
+    if user_id == principal.subject:
+        raise HTTPException(400, "You cannot remove your own project membership")
+    await _reject_owner_admin_target(request, principal, user_id)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
-    deleted = await request.app.state.platform_admin.delete_user(principal.tenant_id, principal.project_id, user_id)
-    in_principals = user_id in request.app.state.settings.principals
-    if in_principals:
-        del request.app.state.settings.principals[user_id]
-    if not deleted and not in_principals:
+    store = request.app.state.platform_admin
+    stored = await store.get_user(principal.tenant_id, principal.project_id, user_id)
+    fallback = request.app.state.settings.principals.get(user_id)
+    if stored is None and (fallback is None or fallback.tenant_id != principal.tenant_id or fallback.project_id != principal.project_id):
         raise HTTPException(404, "User not found")
+    if stored is not None:
+        await store.delete_user(principal.tenant_id, principal.project_id, user_id)
+    else:
+        # Keep a server-side revocation row so bootstrap membership cannot return.
+        await store.upsert_user(principal.tenant_id, principal.project_id, user_id,
+                                fallback.username, None, [role.value for role in fallback.roles], "inactive")
+
 
 
 @router.get("/api/v1/audit")
@@ -1492,6 +1560,7 @@ async def get_billing(request: Request, principal: Principal):
 @router.put("/api/v1/billing")
 async def update_billing(payload: BillingUpdatePayload, request: Request, principal: Principal):
     """Update compute tier, monthly budgets, rate limits, and model pricing."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.update_billing(
@@ -1510,6 +1579,7 @@ async def get_persistence_limits(request: Request, principal: Principal):
 @router.put("/api/v1/persistence/limits")
 async def update_persistence_limits(payload: FileLimitsUpdatePayload, request: Request, principal: Principal):
     """Update file processing limits and retention days."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.update_file_limits(
@@ -1519,32 +1589,89 @@ async def update_persistence_limits(payload: FileLimitsUpdatePayload, request: R
 
 @router.post("/api/v1/persistence/cleanup")
 async def execute_persistence_cleanup(request: Request, principal: Principal):
-    """Trigger on-demand retention purge for expired attachments and obsolete records."""
+    """Trigger on-demand retention purge for expired attachments, runs, and artifacts."""
+    require_roles(principal, MANAGEMENT_ROLES)
+    store = request.app.state.store
+    settings = request.app.state.settings
+    retention_days = settings.retention_days
+    retention_seconds = retention_days * 86400
     now = time.time()
-    limits = await request.app.state.platform_admin.get_file_limits(principal.tenant_id, principal.project_id)
-    retention_days = limits.get("retention_days", 90)
-    cutoff = now - (retention_days * 86400)
-    purged_attachments = 0
-    purged_runs = 0
-    freed_bytes = 0
+    cutoff = now - retention_seconds
+    scope = (principal.tenant_id, principal.project_id)
+
+    from sqlalchemy import select, and_
+    from app.runtime.run_contract import TERMINAL_STATUSES, RunContract, content_hash
+    from app.persistence.database import session_service
+    from app.persistence.store import runs, attachments
+
+    # 1. Query candidate expired records to compute confirmed sizes and counts
+    async with store.engine.connect() as connection:
+        expired_runs = (
+            await connection.execute(
+                select(runs).where(
+                    runs.c.status.in_(TERMINAL_STATUSES),
+                    runs.c.tenant_id == principal.tenant_id,
+                    runs.c.project_id == principal.project_id,
+                    runs.c.updated_at < cutoff,
+                )
+            )
+        ).all()
+        expired_attachments = (
+            await connection.execute(
+                select(attachments).where(
+                    attachments.c.expires_at <= now,
+                    and_(
+                        attachments.c.tenant_id == principal.tenant_id,
+                        attachments.c.project_id == principal.project_id,
+                    ),
+                )
+            )
+        ).all()
+
+    purged_attachments = len(expired_attachments)
+
+    # 2. Cleanup expired chat artifacts from storage
+    artifact_store = request.app.state.chat_artifacts
+    artifact_count = await artifact_store.cleanup(apply=True)
+
+    # 3. Clean up run outputs and ADK sessions for expired runs
+    sessions = None
+    sessions = session_service(settings.session_database_url.get_secret_value())
     try:
-        attachments = await request.app.state.store.list_attachments(principal)
-        for att in attachments:
-            created = att.get("created_at") or 0
-            if created and created < cutoff:
-                purged_attachments += 1
-                freed_bytes += att.get("size_bytes", 0)
-    except Exception:
-        pass
+        for run in expired_runs:
+            await artifact_store.cleanup_output(
+                store._response(run),
+                RunContract.model_validate_json(run.contract_json).principal,
+            )
+            await sessions.delete_session(
+                app_name="app",
+                user_id=content_hash([run.tenant_id, run.project_id, run.subject]),
+                session_id=run.run_id,
+            )
+    finally:
+        await sessions.close()
+
+    # 4. Confirmed deletion of expired runs and attachments (including CAS blobs)
+    deleted_records = await store.delete_expired(
+        retention_seconds,
+        scope=scope,
+    )
+    purged_runs = len(expired_runs)
 
     return {
         "status": "success",
         "purged_attachments": purged_attachments,
         "purged_runs": purged_runs,
-        "freed_bytes": freed_bytes,
+        "purged_artifacts": artifact_count,
+        "deleted_records": deleted_records,
+        "freed_bytes": None,
         "retention_cutoff_utc": datetime.fromtimestamp(cutoff, timezone.utc).isoformat(),
         "timestamp": datetime.fromtimestamp(now, timezone.utc).isoformat(),
-        "message": f"Retention cleanup completed for records older than {retention_days} days. {purged_attachments} attachments evaluated."
+        "message": (
+            f"Retention cleanup completed for records older than {retention_days} days. "
+            f"Purged {purged_runs} runs, {purged_attachments} attachments, and {artifact_count} raw artifacts. "
+            "Physical storage bytes freed are not measured."
+        ),
     }
 
 
@@ -1578,6 +1705,7 @@ async def knowledge(request: Request, principal: Principal):
 @router.post("/api/v1/knowledge")
 async def create_knowledge(payload: KnowledgeCreatePayload, request: Request, principal: Principal):
     """Add a new runbook or knowledge document to the corpus."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_knowledge(
@@ -1588,6 +1716,7 @@ async def create_knowledge(payload: KnowledgeCreatePayload, request: Request, pr
 @router.put("/api/v1/knowledge/{doc_id}")
 async def update_knowledge(doc_id: str, payload: KnowledgeUpdatePayload, request: Request, principal: Principal):
     """Update an existing knowledge document."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.upsert_knowledge(
@@ -1598,6 +1727,7 @@ async def update_knowledge(doc_id: str, payload: KnowledgeUpdatePayload, request
 @router.delete("/api/v1/knowledge/{doc_id}", status_code=204)
 async def delete_knowledge(doc_id: str, request: Request, principal: Principal):
     """Delete a runbook or knowledge document."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     deleted = await request.app.state.platform_admin.delete_knowledge(principal.tenant_id, principal.project_id, doc_id)
@@ -1607,20 +1737,77 @@ async def delete_knowledge(doc_id: str, request: Request, principal: Principal):
 
 @router.get("/api/v1/runtime/stages")
 async def get_runtime_stages(request: Request, principal: Principal):
-    """Get runtime stages model and orchestration tuning specifications."""
-    if not hasattr(request.app.state, "platform_admin"):
-        raise HTTPException(500, "Platform admin store not initialized")
-    return await request.app.state.platform_admin.list_runtime_stages(principal.tenant_id, principal.project_id)
+    """Return the authoritative declarative model stage configuration."""
+    stages = request.app.state.platform.profiles.stages
+    return [
+        {
+            "stage_id": stage_id,
+            "name": stage_id.replace("_", " ").title(),
+            "model": stage.model,
+            "thinking_level": stage.thinking_level,
+            "thinking_budget": stage.thinking_budget,
+            "output_limit": stage.max_output_tokens,
+            "temperature": stage.temperature,
+            "enabled": stage.enabled,
+            "content_hash": content_hash(stage.model_dump(mode="json")),
+            "editable_fields": ["model", "thinking_level", "thinking_budget", "output_limit", "temperature", "enabled"],
+            "immutable_fields": ["name", "tools", "instruction", "tool_limit"],
+        }
+        for stage_id, stage in stages.items()
+    ]
 
 
 @router.put("/api/v1/runtime/stages/{stage_id}")
 async def update_runtime_stage(stage_id: str, payload: RuntimeStageUpdatePayload, request: Request, principal: Principal):
-    """Update runtime stage model, thinking level, tokens limit, and instructions."""
-    if not hasattr(request.app.state, "platform_admin"):
-        raise HTTPException(500, "Platform admin store not initialized")
-    return await request.app.state.platform_admin.update_runtime_stage(
-        principal.tenant_id, principal.project_id, stage_id, payload.model_dump()
-    )
+    """Update the declarative model stage and activate it for new runs."""
+    require_roles(principal, MANAGEMENT_ROLES)
+    if not hasattr(request.app.state, "runtime_profiles_lock"):
+        request.app.state.runtime_profiles_lock = asyncio.Lock()
+    async with request.app.state.runtime_profiles_lock:
+        current = request.app.state.platform.profiles.stages.get(stage_id)
+        if current is None:
+            raise HTTPException(404, "Unknown runtime stage")
+        current_hash = content_hash(current.model_dump(mode="json"))
+        if payload.expected_hash != current_hash:
+            raise HTTPException(409, "Runtime stage changed; reload its hash before retrying")
+        if payload.thinking_level and payload.thinking_budget is not None:
+            raise HTTPException(422, "Use thinking_level or thinking_budget, not both")
+        try:
+            updated = StageModel(
+                model=payload.model,
+                enabled=payload.enabled,
+                temperature=payload.temperature,
+                max_output_tokens=payload.output_limit,
+                thinking_level=payload.thinking_level or None,
+                thinking_budget=payload.thinking_budget if not payload.thinking_level else None,
+            )
+            profiles = dict(request.app.state.platform.profiles.stages)
+            profiles[stage_id] = updated
+            # Re-validate the complete graph so a required stage (especially
+            # synthesis) cannot be disabled by bypassing ModelProfiles validators.
+            candidate = ModelProfiles.model_validate(
+                request.app.state.platform.profiles.model_copy(update={"stages": profiles}).model_dump(mode="json")
+            )
+            content = yaml.safe_dump(candidate.model_dump(mode="json"), sort_keys=False)
+            await _save_model_profiles(request, content)
+        except ValueError as exc:
+            if "changed" in str(exc).lower():
+                raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(422, str(exc)) from exc
+        request.app.state.platform.profiles.stages[stage_id] = updated
+    return {
+        "stage_id": stage_id,
+        "name": stage_id.replace("_", " ").title(),
+        "model": updated.model,
+        "thinking_level": updated.thinking_level,
+        "thinking_budget": updated.thinking_budget,
+        "output_limit": updated.max_output_tokens,
+        "temperature": updated.temperature,
+        "enabled": updated.enabled,
+        "content_hash": content_hash(updated.model_dump(mode="json")),
+        "editable_fields": ["model", "thinking_level", "thinking_budget", "output_limit", "temperature", "enabled"],
+        "immutable_fields": ["name", "tools", "instruction", "tool_limit"],
+    }
 
 
 @router.get("/api/v1/platform/settings")
@@ -1628,31 +1815,53 @@ async def get_platform_settings(request: Request, principal: Principal):
     """Get global platform runtime settings."""
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
-    return await request.app.state.platform_admin.get_platform_settings(principal.tenant_id, principal.project_id)
+    stored = await request.app.state.platform_admin.get_platform_settings(principal.tenant_id, principal.project_id, create=False)
+    current = request.app.state.settings
+    for key in ("run_timeout_seconds", "max_concurrent_runs", "max_llm_calls", "max_input_chars", "max_context_chars", "retention_days"):
+        stored[key] = getattr(current, key)
+    stored["mode"] = current.mode
+    stored["allowed_extensions"] = sorted(request.app.state.file_limits.allowed_extensions)
+    return stored
 
 
 @router.put("/api/v1/platform/settings")
 async def update_platform_settings(payload: PlatformSettingsUpdatePayload, request: Request, principal: Principal):
     """Update global platform execution settings."""
+    require_roles(principal, {Role.PLATFORM_ADMIN})
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
-    updated = await request.app.state.platform_admin.update_platform_settings(
-        principal.tenant_id, principal.project_id, payload.model_dump()
-    )
-    if hasattr(request.app.state, "settings"):
-        try:
-            request.app.state.settings = request.app.state.settings.model_copy(
-                update={
-                    "run_timeout_seconds": updated["run_timeout_seconds"],
-                    "max_concurrent_runs": updated["max_concurrent_runs"],
-                    "max_llm_calls": updated["max_llm_calls"],
-                    "max_input_chars": updated["max_input_chars"],
-                    "max_context_chars": updated["max_context_chars"],
-                    "retention_days": updated["retention_days"],
-                }
-            )
-        except Exception:
-            pass
+    if payload.mode != request.app.state.settings.mode:
+        raise HTTPException(409, "Runtime mode is deployment-owned and requires a restart")
+    from app.settings import Settings
+    runner = request.app.state.runner
+    async with runner.runtime_settings_lock:
+        current = request.app.state.settings
+        if payload.max_concurrent_runs != runner._run_limit and runner.run_limiter._value != runner._run_limit:
+            raise HTTPException(409, "Concurrency can only change while investigations are idle")
+        updated_settings = Settings.model_validate(
+            current.model_dump() | {
+                "run_timeout_seconds": payload.run_timeout_seconds,
+                "max_concurrent_runs": payload.max_concurrent_runs,
+                "max_llm_calls": payload.max_llm_calls,
+                "max_input_chars": payload.max_input_chars,
+                "max_context_chars": payload.max_context_chars,
+                "retention_days": payload.retention_days,
+            }
+        )
+        updated_settings.validate_runtime()
+        await request.app.state.parameters.set_runtime_values(
+            principal,
+            {name: getattr(payload, name) for name in (
+                "run_timeout_seconds", "max_concurrent_runs", "max_llm_calls",
+                "max_input_chars", "max_context_chars", "retention_days",
+            )},
+        )
+        updated = await request.app.state.platform_admin.update_platform_settings(
+            principal.tenant_id, principal.project_id, payload.model_dump()
+        )
+        from app.api.routes.parameters import refresh_runtime
+        await refresh_runtime(request, principal)
+        updated["allowed_extensions"] = sorted(request.app.state.file_limits.allowed_extensions)
     return updated
 
 
@@ -1960,6 +2169,7 @@ async def alerts(request: Request, principal: Principal):
 @router.post("/api/v1/alerts")
 async def create_alert(payload: AlertCreatePayload, request: Request, principal: Principal):
     """Broadcast an operational alert or notification."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.create_alert(
@@ -1970,6 +2180,7 @@ async def create_alert(payload: AlertCreatePayload, request: Request, principal:
 @router.patch("/api/v1/alerts/{alert_id}")
 async def update_alert_status(alert_id: str, payload: AlertStatusUpdatePayload, request: Request, principal: Principal):
     """Acknowledge or resolve an operational alert."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.update_alert_status(
@@ -1988,6 +2199,7 @@ async def get_alert_config(request: Request, principal: Principal):
 @router.put("/api/v1/alerts/config")
 async def update_alert_config(payload: AlertConfigUpdatePayload, request: Request, principal: Principal):
     """Update operational alert thresholds."""
+    require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     return await request.app.state.platform_admin.update_alert_config(
@@ -2039,12 +2251,47 @@ async def notifications(request: Request, principal: Principal):
             },
         })
 
+    read_ids = set()
+    if hasattr(request.app.state, "platform_admin"):
+        try:
+            read_ids = await request.app.state.platform_admin.get_read_notification_ids(
+                principal.tenant_id, principal.project_id, principal.subject
+            )
+        except Exception:
+            pass
+
+    for note in notifications:
+        note["read"] = note["id"] in read_ids
+
     notifications.sort(key=lambda note: note["created_at"], reverse=True)
+    unread_count = sum(1 for note in notifications if not note.get("read"))
+
     return {
         "generated_at": generated_at,
         "items": notifications[:40],
-        "unread_count": len(notifications),
+        "unread_count": unread_count,
     }
+
+
+class NotificationReadPayload(BaseModel):
+    notification_ids: list[str] | None = None
+    all: bool = False
+
+
+@router.post("/api/v1/notifications/read")
+async def mark_notifications_read(
+    payload: NotificationReadPayload, request: Request, principal: Principal
+):
+    if not hasattr(request.app.state, "platform_admin"):
+        raise HTTPException(500, "Platform admin store not initialized")
+    ids_to_mark = payload.notification_ids or []
+    if payload.all:
+        current_data = await notifications(request, principal)
+        ids_to_mark = [n["id"] for n in current_data["items"]]
+    marked = await request.app.state.platform_admin.mark_notifications_read(
+        principal.tenant_id, principal.project_id, principal.subject, ids_to_mark
+    )
+    return {"marked": marked, "status": "success"}
 
 
 def _validate_project_yaml(
@@ -2287,6 +2534,11 @@ async def project_setup(request: Request, principal: Principal):
             "revision": row["revision"],
             "override_revision": row.get("override_revision"),
             "allow_project_override": row["allow_project_override"],
+            "enabled": row.get("enabled", True),
+            "category": row.get("category"),
+            "subcategory": row.get("subcategory"),
+            "allowed_values": row.get("allowed_values"),
+            "effective_state": row.get("effective_state", "SET"),
             "project_visible": row.get("project_visible", True),
             "source": row["source"],
         }

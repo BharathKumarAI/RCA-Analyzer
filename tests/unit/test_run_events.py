@@ -6,10 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from sqlalchemy import update
+
 from app.api.routes.runs import _stream_run, run_trace, run_trace_events
 from app.identity.principals import Role, UserPrincipal
 from app.persistence.run_events import RunEventStore
-from app.persistence.store import InvestigationStore
+from app.persistence.store import InvestigationStore, runs
 from app.runtime.run_contract import RunContract, RunRequest
 
 
@@ -105,6 +107,22 @@ class RunEventStoreTests(unittest.IsolatedAsyncioTestCase):
             await self.events.append(
                 "run_missing", self.principal, "node", "progress", {}
             )
+
+    async def test_retention_removes_trace_children_with_runs(self):
+        await self.events.append(
+            self.run.run_id, self.principal, "node", "progress", {"ok": True}
+        )
+        await self.store.update_run(
+            self.run.run_id, self.principal, status="SUCCEEDED", stage="completed"
+        )
+        async with self.store.engine.begin() as connection:
+            await connection.execute(
+                update(runs)
+                .where(runs.c.run_id == self.run.run_id)
+                .values(updated_at=0)
+            )
+        self.assertEqual(await self.store.delete_expired(0), 1)
+        self.assertEqual(await self.events.list(self.run.run_id, self.principal), [])
 
     async def test_trace_endpoint_and_stream_replay_persisted_events(self):
         state = SimpleNamespace(

@@ -1,31 +1,18 @@
 import { getSessionToken } from '../../services/api';
+import type { CatalogItem, GraphEdge, GraphNode, Permissions, Workspace } from './types/workspace.generated';
 
 export type StudioSeverity = 'error' | 'warning' | 'info';
 
-export interface StudioGraphNode {
-  id: string;
-  kind: string;
-  label: string;
-  parent?: string | null;
-  ref?: string | null;
-  source?: string | null;
-  enabled?: boolean;
-  editable?: boolean;
-  reason?: string | null;
-  details?: Record<string, unknown>;
-}
+export type StudioGraphNode = GraphNode;
 
-export interface StudioGraphEdge {
-  source: string;
-  target: string;
-  kind: string;
-  label?: string | null;
-}
+export type StudioGraphEdge = GraphEdge & { label?: string | null };
 
 export interface StudioGraph {
   nodes: StudioGraphNode[];
   edges: StudioGraphEdge[];
 }
+
+export type StudioCatalogItem = CatalogItem;
 
 export interface StudioDiagnostic {
   path?: string | null;
@@ -35,20 +22,12 @@ export interface StudioDiagnostic {
   column?: number;
 }
 
-export interface StudioWorkspace {
-  files: Record<string, string>;
+export type StudioWorkspace = Workspace & {
   graph: StudioGraph;
   diagnostics: StudioDiagnostic[];
-  compatibility: Record<string, unknown>;
-  revision: string;
-  active_revision?: string | null;
-  draft_id?: string | null;
-  status: 'draft' | 'pending_review' | 'active' | 'rejected' | 'revoked' | string;
-  permissions: { edit?: boolean; review?: boolean; [key: string]: unknown };
-  capability: string;
-  capabilities?: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
+  permissions: Permissions & { [key: string]: unknown };
+  catalog?: CatalogItem[];
+};
 
 export interface StudioDraftSummary {
   draft_id: string;

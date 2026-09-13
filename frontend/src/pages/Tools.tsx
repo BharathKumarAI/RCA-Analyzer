@@ -42,6 +42,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import {
+  KnowledgeItem,
   ToolDefinition,
   ScopeLevel,
   Principal,
@@ -50,6 +51,9 @@ import {
   ConnectorHealthRecord,
 } from '../types/api';
 import {
+  fetchKnowledge,
+  createKnowledgeDoc,
+  updateKnowledgeDoc,
   fetchTools,
   fetchParameters,
   fetchCapabilities,
@@ -119,15 +123,23 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [showCallout, setShowCallout] = useState(true);
 
-  // Local operator notes per tool
-  const [toolNotes, setToolNotes] = useState<Record<string, string>>(() => {
+  const [toolNotes, setToolNotes] = useState<Record<string, KnowledgeItem>>({});
+  const [notesReady, setNotesReady] = useState(false);
+  const [noteBusy, setNoteBusy] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const loadNotes = async () => {
+    setNoteError(null);
     try {
-      const saved = localStorage.getItem('rca_tool_operator_notes');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+      const notes = await fetchKnowledge();
+      const indexed: Record<string, KnowledgeItem> = {};
+      for (const note of notes) {
+        const toolTag = note.tags.find(tag => tag.startsWith('tool:'));
+        if (note.category === 'Operator notes' && toolTag) indexed[toolTag.slice(5)] = note;
+      }
+      setToolNotes(indexed); setNotesReady(true);
+    } catch (reason) { setNoteError(reason instanceof Error ? reason.message : 'Operator notes could not load.'); }
+  };
+  useEffect(() => { void loadNotes(); }, []);
   const [currentNote, setCurrentNote] = useState<string>('');
 
   const canEdit =
@@ -203,21 +215,22 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
   useEffect(() => {
     if (selectedTool) {
       const key = selectedTool.system_name || selectedTool.id;
-      setCurrentNote(toolNotes[key] || '');
+      setCurrentNote(toolNotes[key]?.content || '');
     }
   }, [selectedTool, toolNotes]);
 
-  const saveCurrentNote = () => {
-    if (!selectedTool) return;
+  const saveCurrentNote = async () => {
+    if (!selectedTool || !notesReady) return;
     const key = selectedTool.system_name || selectedTool.id;
-    const updated = { ...toolNotes, [key]: currentNote };
-    setToolNotes(updated);
+    setNoteBusy(true); setNoteError(null);
     try {
-      localStorage.setItem('rca_tool_operator_notes', JSON.stringify(updated));
-      showToast('Operator note saved for ' + (selectedTool.name || selectedTool.id));
-    } catch {
-      showToast('Note updated in session.');
-    }
+      const payload = { title: `Operator notes: ${selectedTool.name || key}`, category: 'Operator notes', tags: [`tool:${key}`], content: currentNote, media_type: 'text/plain' };
+      const existing = toolNotes[key];
+      const saved = existing ? await updateKnowledgeDoc(existing.id, payload) : await createKnowledgeDoc(payload);
+      setToolNotes(previous => ({ ...previous, [key]: saved }));
+      showToast('Operator note saved to project knowledge.');
+    } catch (reason) { setNoteError(reason instanceof Error ? reason.message : 'Operator note could not be saved.'); }
+    finally { setNoteBusy(false); }
   };
 
   // Live connection test handler
@@ -375,88 +388,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
     if (!selectedTool) return [];
     const toolKey = selectedTool.system_name || selectedTool.id;
     const directMatches = parameters.filter(p => p.tool.toLowerCase() === toolKey.toLowerCase());
-    if (directMatches.length > 0) return directMatches;
-
-    // Fallback generated from tool attributes if parameter store has not indexed this template yet
-    const fallbackRows: ParameterDefinitionRow[] = [];
-    if (selectedTool.endpoint) {
-      fallbackRows.push({
-        tool: toolKey,
-        variable_name: 'endpoint',
-        value_type: 'string',
-        description: 'Connector API endpoint',
-        default_value: selectedTool.endpoint,
-        effective_value: selectedTool.endpoint,
-        revision: 1,
-        override_revision: null,
-        allow_project_override: selectedTool.project_can_override,
-        project_visible: true,
-        source: 'platform',
-      });
-    }
-    if (selectedTool.auth_method) {
-      fallbackRows.push({
-        tool: toolKey,
-        variable_name: 'auth_method',
-        value_type: 'string',
-        description: 'Authentication protocol',
-        default_value: selectedTool.auth_method,
-        effective_value: selectedTool.auth_method,
-        revision: 1,
-        override_revision: null,
-        allow_project_override: false,
-        project_visible: true,
-        source: 'platform',
-      });
-    }
-    if (selectedTool.timeout_seconds != null) {
-      fallbackRows.push({
-        tool: toolKey,
-        variable_name: 'timeout_seconds',
-        value_type: 'integer',
-        description: 'Request timeout limit in seconds',
-        default_value: selectedTool.timeout_seconds,
-        effective_value: selectedTool.timeout_seconds,
-        revision: 1,
-        override_revision: null,
-        allow_project_override: true,
-        project_visible: true,
-        source: 'platform',
-      });
-    }
-    if (selectedTool.rate_limit) {
-      fallbackRows.push({
-        tool: toolKey,
-        variable_name: 'rate_limit',
-        value_type: 'string',
-        description: 'Rate limit ceiling',
-        default_value: selectedTool.rate_limit,
-        effective_value: selectedTool.rate_limit,
-        revision: 1,
-        override_revision: null,
-        allow_project_override: false,
-        project_visible: true,
-        source: 'platform',
-      });
-    }
-    if (selectedTool.custom_config) {
-      Object.entries(selectedTool.custom_config).forEach(([k, v]) => {
-        fallbackRows.push({
-          tool: toolKey,
-          variable_name: k,
-          value_type: typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : typeof v === 'object' ? 'json' : 'string',
-          description: `Custom configuration parameter: ${k}`,
-          default_value: v,
-          effective_value: v,
-          revision: 1,
-          override_revision: null,
-          allow_project_override: true,
-          project_visible: true,
-          source: 'platform',
-        });
-      });
-    }
-    return fallbackRows;
+    return directMatches;
   }, [selectedTool, parameters]);
 
   // Capabilities associated with the selected tool
@@ -1507,19 +1439,22 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
           </div>
 
           {/* Operator Notes */}
+          {noteError && <p role="alert">{noteError}<button className="btn btn-secondary" onClick={() => void loadNotes()}>Reload notes</button></p>}
           <div className="inspector-section-card">
             <div className="inspector-title">
               <span>Operator Notes</span>
             </div>
             <textarea
               className="notes-textarea"
+              aria-label="Operator note"
+              readOnly={!principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role)) || !notesReady || noteBusy}
               placeholder="Add internal notes about this tool definition…"
               value={currentNote}
               onChange={e => setCurrentNote(e.target.value)}
             />
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-              <button type="button" className="btn btn-secondary save-note-btn" onClick={saveCurrentNote}>
-                Save Note
+              <button type="button" className="btn btn-secondary save-note-btn" disabled={!notesReady || noteBusy || !principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role))} onClick={() => void saveCurrentNote()}>
+                {noteBusy ? 'Saving…' : 'Save Note'}
               </button>
             </div>
           </div>

@@ -78,12 +78,13 @@ class Settings(BaseModel):
     @classmethod
     def from_env(cls) -> "Settings":
         members = json.loads(os.getenv("RCA_PRINCIPALS_JSON", "{}"))
-        content_root = Path(os.getenv("RCA_CONTENT_ROOT", str(CONTENT_ROOT))).resolve()
-        directory = Path(
-            os.getenv("RCA_CONFIG_DIR", str(content_root / "config"))
-        ).resolve()
-        values = ({} if os.getenv("RCA_DATABASE_CONFIGURATION", "false").lower() in {"true", "1"}
-                  else load_yaml_data((directory / "runtime.yaml").read_text()))
+        from app.configuration.deployment_settings import load_deployment_settings
+        pending = load_deployment_settings()
+        overlay = pending.resolved() if pending else {}
+        content_root = Path(overlay.get("content_root") or os.getenv("RCA_CONTENT_ROOT", str(CONTENT_ROOT))).resolve()
+        directory = Path(overlay.get("config_dir") or os.getenv("RCA_CONFIG_DIR", str(content_root / "config"))).resolve()
+        database_configuration = overlay.get("database_configuration", os.getenv("RCA_DATABASE_CONFIGURATION", "false").lower() in {"true", "1"})
+        values = {} if database_configuration else load_yaml_data((directory / "runtime.yaml").read_text())
         if not isinstance(values, dict):
             raise ValueError("runtime.yaml must be a mapping")
         if set(values) & {
@@ -111,6 +112,8 @@ class Settings(BaseModel):
             env_value = os.getenv("RCA_" + name.upper())
             if env_value is not None:
                 values[name] = env_value
+        # Apply persisted nonidentity settings after environment defaults.
+        values.update(overlay)
         values["config_dir"] = directory
         values["content_root"] = content_root
         values["auth_public_key"] = str(values.get("auth_public_key", "")).replace(

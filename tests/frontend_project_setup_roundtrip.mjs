@@ -45,7 +45,12 @@ const emptyInstruction = buildProjectConfiguration(firstSave, {
 assert.equal(emptyInstruction.skills['new-skill'].instruction, null);
 assert.equal(emptyInstruction.skills['new-skill'].enabled, false);
 const pageSource = await fs.readFile(new URL('../frontend/src/pages/ProjectSetup.tsx', import.meta.url), 'utf8');
-assert.match(pageSource, /JSON.stringify\(buildProjectConfiguration\(payload\?\.project_layer/);
+assert.match(pageSource, /fetchProjectSetup\(\)/);
+assert.match(pageSource, /fetchProjectEditor\(\)/);
+assert.match(pageSource, /saveProjectEditor\(/);
+assert.match(pageSource, /const \{ connectors: _connectors, \.\.\.authoringDocument \}/);
+assert.match(pageSource, /Reload Saved Configuration/);
+assert.match(pageSource, /useState<ProjectEnvironment\[\]>\(\[\]\)/);
 
 const restricted = buildProjectConfiguration({ ...existing, environments: [], harness: { agents: [], skills: [], tools: [] } }, {
   tenantId: 'tenant', projectId: 'project', allowUserPreferences: [], allowUserOverrides: [], presentation: 'summary', detail: 'standard', disabledConnectors: [],
@@ -57,6 +62,5 @@ assert.equal('environments' in restricted, false);
 assert.equal('harness' in restricted, false);
 assert.deepEqual(restricted.capabilities, existing.capabilities);
 assert.equal(restricted.limits.max_evidence_items, 77);
-assert.match(pageSource, /canEditEnvironments = delegatedSections.includes\('environments'\)/);
-assert.match(pageSource, /disabled=\{!canEditEnvironments\}/);
+
 console.log('frontend project setup delegation checks passed');

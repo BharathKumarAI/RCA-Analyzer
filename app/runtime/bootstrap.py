@@ -48,6 +48,7 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
     @asynccontextmanager
     async def lifespan(api):
         configured = settings or Settings.from_env()
+        api.state.deployment_settings = configured
         configured.validate_runtime()
         if configured.auth_public_key:
             validate_public_key(configured.auth_public_key)

@@ -9,9 +9,11 @@ export interface StudioLibraryModule {
   category: string;
   kind: string;
   editable?: boolean;
+  source?: string | null;
+  details?: Record<string, unknown>;
 }
 
-interface ModuleLibraryProps { modules: StudioLibraryModule[]; onAddModule: (type: string) => void; }
+interface ModuleLibraryProps { modules: StudioLibraryModule[]; onSelectModule: (type: string) => void; }
 
 function iconFor(kind: string): React.ReactNode {
   const value = kind.toLowerCase();
@@ -23,7 +25,7 @@ function iconFor(kind: string): React.ReactNode {
   return <Bot size={15} />;
 }
 
-export const ModuleLibrary: React.FC<ModuleLibraryProps> = ({ modules, onAddModule }) => {
+export const ModuleLibrary: React.FC<ModuleLibraryProps> = ({ modules, onSelectModule }) => {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const filtered = modules.filter(module => !query.trim() || `${module.name} ${module.description} ${module.kind}`.toLowerCase().includes(query.trim().toLowerCase()));
@@ -33,7 +35,7 @@ export const ModuleLibrary: React.FC<ModuleLibraryProps> = ({ modules, onAddModu
       <div className="hs-library-search"><Search size={14} className="hs-search-icon" /><input type="search" className="hs-search-input" placeholder="Search resolved components" value={query} onChange={event => setQuery(event.target.value)} /></div>
       <div className="hs-library-scroll">
         {categories.length === 0 && <div className="hs-library-empty">No server-resolved components are available for this workspace.</div>}
-        {categories.map(category => { const items = filtered.filter(module => module.category === category); const isCollapsed = Boolean(collapsed[category]); return <div key={category} className="hs-module-category"><div className="hs-category-head" onClick={() => setCollapsed(current => ({ ...current, [category]: !current[category] }))}><span>{category}</span>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</div>{!isCollapsed && items.map(module => <ModuleCard key={module.id} id={module.id} name={module.name} description={module.description} category={module.category} icon={iconFor(module.kind)} isCompatibility={module.editable === false} onAdd={onAddModule} />)}</div>; })}
+        {categories.map(category => { const items = filtered.filter(module => module.category === category); const isCollapsed = collapsed[category] ?? true; return <div key={category} className="hs-module-category"><div className="hs-category-head" onClick={() => setCollapsed(current => ({ ...current, [category]: !isCollapsed }))} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setCollapsed(current => ({ ...current, [category]: !isCollapsed })); } }}><span>{category}</span>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</div>{!isCollapsed && items.map(module => <ModuleCard key={module.id} id={module.id} name={module.name} description={module.description} category={module.category} icon={iconFor(module.kind)} isCompatibility={module.editable === false} onSelect={onSelectModule} />)}</div>; })}
       </div>
     </div>
   );

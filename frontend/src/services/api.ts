@@ -20,7 +20,7 @@ export const getSessionToken = () => inMemoryToken;
 export const hasSessionToken = () => Boolean(inMemoryToken);
 export class ApiError extends Error { constructor(public status: number, message: string, public details: unknown = null) { super(message); this.name = 'ApiError'; } }
 type ApiRequestOptions = Omit<RequestInit, 'body'> & { body?: unknown };
-async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers); headers.set('Accept', 'application/json'); if (inMemoryToken) headers.set('Authorization', `Bearer ${inMemoryToken}`);
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) { headers.set('Content-Type', 'application/json'); options = { ...options, body: JSON.stringify(options.body) }; }
   const { body, ...requestInit } = options;
@@ -29,7 +29,7 @@ async function request<T>(path: string, options: ApiRequestOptions = {}): Promis
     const message = typeof value === 'string' ? value : Array.isArray(value) ? value.map(item => item && typeof item === 'object' && 'msg' in item ? `${Array.isArray(item.loc) ? item.loc.join('.') + ': ' : ''}${item.msg}` : JSON.stringify(item)).join('; ') : `HTTP ${response.status}`; throw new ApiError(response.status, message, detail); }
   return response.status === 204 ? null as T : response.json() as Promise<T>;
 }
-function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run_id, mode: raw.mode, result: raw.result, capability: raw.capability, prompt: result?.summary || raw.reason || '', status: raw.status === 'SUCCEEDED' ? 'COMPLETED' : raw.status, created_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', completed_at: raw.updated_at ? new Date(raw.updated_at * 1000).toISOString() : undefined, duration_seconds: raw.created_at && raw.updated_at ? Math.max(0, raw.updated_at - raw.created_at) : undefined, stages: raw.stage ? [{ name: raw.stage, status: raw.status === 'RUNNING' ? 'running' : 'completed', agent: raw.stage, duration_ms: 0 }] : [], evidence_count: raw.evidence_count ?? 0, findings: result?.summary || raw.reason }; }
+function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run_id, mode: raw.mode, result: raw.result, capability: raw.capability, prompt: result?.summary || raw.reason || '', status: raw.status === 'SUCCEEDED' ? 'COMPLETED' : raw.status, created_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', completed_at: raw.updated_at ? new Date(raw.updated_at * 1000).toISOString() : undefined, duration_seconds: raw.created_at && raw.updated_at ? Math.max(0, raw.updated_at - raw.created_at) : undefined, stages: raw.stage ? [{ name: raw.stage, status: raw.status === 'RUNNING' ? 'running' : 'completed', agent: raw.stage, duration_ms: 0 }] : [], evidence_count: raw.evidence_count ?? 0, findings: result?.summary || raw.reason, raw }; }
 function mapAgent(raw: any): AgentConfiguration { const d = raw.definition || raw; return { id: raw.draft_id || d.id, name: d.name, role: 'Specialist', description: d.description || '', status: raw.status === 'APPROVED' ? 'active' : raw.status === 'PENDING' ? 'pending' : raw.status === 'REVOKED' ? 'deprecated' : 'draft', model: d.model_profile || d.stage_model || 'configured', temperature: 0, thinking_budget: 0, max_steps: 0, tools: [...(d.tools || [])], permissions: [], rag_sources: [], prompt: d.instruction || '', accuracy: 0, hallucination_rate: 0, avg_latency_sec: 0, version: d.version || '', updated_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', author: raw.author_subject, content_hash: raw.content_hash, approved_by: raw.reviewer_subject, rejection_reason: raw.review_reason }; }
 export async function fetchHealth(): Promise<SystemHealth> { const started = performance.now(); const data = await request<any>('/api/v1/health'); return { status: data.status, latency_ms: Math.round(performance.now() - started), tenant_id: data.tenant_id, project_id: data.project_id, mode: data.mode, active_runs: data.active_runs, total_runs: data.total_runs, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 }; }
 export async function fetchPrincipal(): Promise<Principal> { return request<Principal>('/api/v1/me'); }
@@ -55,7 +55,18 @@ export async function fetchConnectorHealthCheck(connector: string): Promise<Conn
 }
 export async function fetchAlerts(): Promise<AlertsResponse> { return request<AlertsResponse>('/api/v1/alerts'); }
 export async function fetchNotifications(): Promise<NotificationsResponse> { return request<NotificationsResponse>('/api/v1/notifications'); }
+export async function markNotificationsRead(notificationIds?: string[], markAll = false): Promise<{ marked: number; status: string }> {
+  return request<{ marked: number; status: string }>('/api/v1/notifications/read', {
+    method: 'POST',
+    body: { notification_ids: notificationIds, all: markAll }
+  });
+}
 export async function fetchProjectSetup(): Promise<ProjectSetupResponse> { return request<ProjectSetupResponse>('/api/v1/project/setup'); }
+export interface ProjectEditorDraft { document: Record<string, unknown>; version: number; }
+export async function fetchProjectEditor(): Promise<ProjectEditorDraft> { return request<ProjectEditorDraft>('/api/v1/project/editor'); }
+export async function saveProjectEditor(document: Record<string, unknown>, expectedVersion: number): Promise<ProjectEditorDraft> {
+  return request<ProjectEditorDraft>('/api/v1/project/editor', { method: 'PUT', body: { document, expected_version: expectedVersion } });
+}
 export async function validateProjectSetup(yaml: string): Promise<ProjectValidationResult> {
   return request<ProjectValidationResult>('/api/v1/project/validate', { method: 'POST', body: { yaml } });
 }
@@ -88,6 +99,10 @@ export async function updatePolicy(payload: Partial<PolicyConfig>): Promise<Poli
 
 export async function fetchFileLimits(): Promise<FileLimitsConfig> { return request<FileLimitsConfig>('/api/v1/persistence/limits'); }
 export async function updateFileLimits(payload: Partial<FileLimitsConfig>): Promise<FileLimitsConfig> { return request('/api/v1/persistence/limits', { method: 'PUT', body: payload }); }
+export async function fetchPlatformFileProcessing(): Promise<import('../types/api').PlatformFileProcessingConfig> { return request('/api/v1/platform/configuration/file-processing'); }
+export async function updatePlatformFileProcessing(values: Record<string, unknown>, expectedHash: string): Promise<import('../types/api').PlatformFileProcessingConfig> {
+  return request('/api/v1/platform/configuration/file-processing', { method: 'PUT', body: { values, expected_hash: expectedHash } });
+}
 export async function triggerRetentionCleanup(): Promise<CleanupResult> { return request<CleanupResult>('/api/v1/persistence/cleanup', { method: 'POST' }); }
 
 export async function fetchKnowledge(): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge'); }
@@ -105,9 +120,21 @@ export async function updateAlertConfig(payload: AlertConfig): Promise<AlertConf
 
 export async function fetchPlatformSettings(): Promise<PlatformSettingsConfig> { return request<PlatformSettingsConfig>('/api/v1/platform/settings'); }
 export async function updatePlatformSettings(payload: Partial<PlatformSettingsConfig>): Promise<PlatformSettingsConfig> { return request('/api/v1/platform/settings', { method: 'PUT', body: payload }); }
+export async function fetchFileProcessingConfig(): Promise<import('../types/api').PlatformConfigurationSnapshot> {
+  return request<import('../types/api').PlatformConfigurationSnapshot>('/api/v1/platform/configuration/file-processing');
+}
+export async function updateFileProcessingConfig(payload: { values: Record<string, unknown>; expected_hash: string }): Promise<import('../types/api').PlatformConfigurationSnapshot> {
+  return request<import('../types/api').PlatformConfigurationSnapshot>('/api/v1/platform/configuration/file-processing', { method: 'PUT', body: payload });
+}
+export async function fetchUiSettings(): Promise<import('../types/api').UiSettingsConfig> {
+  return request('/api/v1/platform/ui-settings');
+}
+export async function updateUiSettings(payload: Omit<import('../types/api').UiSettingsConfig, 'version' | 'tenant_id' | 'project_id' | 'updated_at'> & { expected_version: number }): Promise<import('../types/api').UiSettingsConfig> {
+  return request('/api/v1/platform/ui-settings', { method: 'PUT', body: payload });
+}
 
 export async function fetchConfig(): Promise<RuntimeConfig> { return request<RuntimeConfig>('/api/v1/config'); }
-export async function fetchParameters(): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>('/api/v1/parameters'); }
+export async function fetchParameters(view?: 'project'): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>(view ? `/api/v1/parameters?view=${view}` : '/api/v1/parameters'); }
 export async function fetchOptimizations(): Promise<any[]> { return request('/api/v1/optimizations'); }
 export async function createOptimization(body: unknown): Promise<any> { return request('/api/v1/optimizations', { method: 'POST', body }); }
 export async function reviewOptimization(id: string, approve: boolean, expectedHash: string, reason: string): Promise<any> { return request(`/api/v1/optimizations/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { expected_hash: expectedHash, reason } }); }
@@ -117,9 +144,10 @@ export async function defineParameter(tool: string, name: string, body: {
   description: string;
   default_value: unknown;
   allow_project_override: boolean;
+  scope?: 'platform' | 'project' | 'platform_only';
   icon: string;
   expected_revision: number;
-}): Promise<{ revision: number }> {
+}): Promise<{ revision: number; restart_required?: boolean }> {
   return request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/definition`, { method: 'PUT', body });
 }
 export async function deleteParameterDefinition(tool: string, name: string, revision: number): Promise<void> {
@@ -164,6 +192,33 @@ export interface RunEvidence {
 }
 export async function fetchRunEvidence(id: string): Promise<RunEvidence[]> {
   return request(`/api/v1/runs/${encodeURIComponent(id)}/evidence`);
+}
+
+export interface RunTraceEvent {
+  sequence?: number;
+  node_id?: string | null;
+  kind?: string;
+  timestamp?: string | number | null;
+  details?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface RunTraceResponse {
+  graph?: {
+    nodes?: Array<{ id: string; label?: string; [key: string]: unknown }>;
+    edges?: Array<{ from: string; to: string; [key: string]: unknown }>;
+    [key: string]: unknown;
+  } | null;
+  events: RunTraceEvent[];
+  truncated?: boolean;
+}
+
+export async function fetchRunTrace(id: string): Promise<RunTraceResponse> {
+  return request<RunTraceResponse>(`/api/v1/runs/${encodeURIComponent(id)}/trace`);
+}
+
+export async function fetchRunRaw(id: string): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(`/api/v1/runs/${encodeURIComponent(id)}`);
 }
 
 export async function saveIntegration(scope: 'platform' | 'project', id: string, body: {

@@ -22,7 +22,7 @@ scope, and approval state are resolved server-side.
 | Export | `GET /api/v1/harness/export?capability=...&draft_id=...` | Downloads a ZIP source archive; `draft_id` is optional |
 | Review | `POST /api/v1/harness/drafts/{draft_id}/{submit,approve,reject,revoke}` | Applies the two-person review lifecycle with `expected_revision` and a reason |
 
-The route implementation is in the [Harness API router](../app/api/routes/harness.py),
+The route implementation is in the [Harness API router](../app/api/routes/harness_workspace.py),
 and the browser client mirrors these operations in
 [`harnessApi.ts`](../frontend/src/features/harness-studio/harnessApi.ts).
 
@@ -33,10 +33,9 @@ source. Paths must be normalized relative POSIX paths. Hidden files,
 credential-named files, PEM/key/P12 files, symlinks, encrypted ZIP entries,
 duplicate paths, and invalid UTF-8 are rejected. The limits and path checks
 are defined in [harness_bundles.py](../app/configuration/harness_bundles.py).
-The default deployment JSON request ceiling is 128 KiB in
-[settings.py](../app/settings.py); deployments that use JSON validate/save
-requests must account for that transport ceiling as well. ZIP imports use the
-bundle limits and the configured request/upload policy.
+Harness endpoints have a 1 MiB transport ceiling for JSON escaping and multipart
+overhead in [application.py](../app/api/application.py); decoded source still obeys
+the tighter bundle limits. Authentication runs before either body is parsed.
 
 ## CLI
 
@@ -79,3 +78,40 @@ make harness-types HARNESS_SCHEMA=/path/to/openapi.json
 The generator has no code-generation dependency and does not import or
 execute workspace source files. Changes to the Pydantic `Workspace` response
 are reflected by regenerating this file against the same API revision.
+
+## Deployment and historical records
+
+Apply the versioned migrations before starting PostgreSQL deployments. The
+[harness migration](../migrations/007_harness_workspace.sql) adds bundle activation
+and trace records; the [revision-source migration](../migrations/009_harness_revision_sources.sql)
+records immutable source hashes for new audit entries. Older entries have no
+recoverable source hash and remain explicitly unknown. New SQLite databases
+create these tables at initialization.
+
+A run snapshots the approved source hash and exact post-preflight graph before
+native execution. Default attachment branches are conditional on the request;
+explicit custom DAGs requiring attachments reject a request without them.
+Revocation disables the active override for subsequent runs, restoring the
+platform workflow; already-started runs retain their immutable snapshot.
+Agent and tool durations come from actual lifecycle observations, and missing
+historical traces are reported as unavailable. These behaviors are implemented
+by [the runner](../app/runtime/runner.py), [workflow compiler](../app/configuration/workflow.py),
+and [workspace service](../app/configuration/harness_workspace.py).
+
+`scripts.sync_artifacts` checks active approved bundle integrity and rebuilds
+exports in memory with `--apply`; archives remain derived on demand by the API,
+with no separate export cache to drift. Existing chat and framework artifact
+synchronization behavior is preserved.
+
+## Component inventory and canvas
+
+The [workspace catalog](../app/configuration/harness_catalog.py) projects effective
+backend configuration into Studio categories, including session context, attachment
+limits, optimization gates, and governance. Source-backed bundle items can be
+edited through YAML and reviewed; platform-controlled entries expose effective
+values and their implementation/configuration source as read-only. The catalog
+does not provision new connectors or implement long-term memory.
+
+The canvas starts with the main workflow. Selecting a group reveals its internal
+components; selecting an agent reveals its configuration relationships. Execution
+traces use the persisted run graph, so an edited draft never changes an old trace.

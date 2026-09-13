@@ -3,6 +3,7 @@
 export interface Workspace {
   files: Record<string, string>;
   graph: Graph;
+  catalog?: Array<CatalogItem>;
   diagnostics: Array<Diagnostic>;
   compatibility: Record<string, unknown>;
   revision: string;
@@ -13,6 +14,18 @@ export interface Workspace {
   capability: string;
   capabilities: Array<string>;
   author?: string | null;
+}
+
+export interface CatalogItem {
+  id: string;
+  kind: string;
+  label: string;
+  category: string;
+  description: string;
+  source?: string | null;
+  enabled?: boolean;
+  editable?: boolean;
+  details?: Record<string, unknown>;
 }
 
 export interface Diagnostic {
@@ -48,4 +61,5 @@ export interface GraphNode {
 export interface Permissions {
   edit?: boolean;
   review?: boolean;
+  revoke?: boolean;
 }

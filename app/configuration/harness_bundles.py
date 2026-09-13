@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import posixpath
+import re
 import stat
 import zipfile
 from pathlib import PurePosixPath
@@ -91,11 +92,25 @@ class Graph(BaseModel):
 class Permissions(BaseModel):
     edit: bool = False
     review: bool = False
+    revoke: bool = False
+
+
+class CatalogItem(BaseModel):
+    id: str
+    kind: str
+    label: str
+    category: str
+    description: str
+    source: str | None = None
+    enabled: bool = True
+    editable: bool = False
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class Workspace(BaseModel):
     files: dict[str, str]
     graph: Graph
+    catalog: list[CatalogItem] = Field(default_factory=list)
     diagnostics: list[Diagnostic]
     compatibility: dict[str, Any]
     revision: str
@@ -114,6 +129,7 @@ class Compilation(BaseModel):
     overrides: dict[str, AgentDefinition] = Field(default_factory=dict)
     diagnostics: list[Diagnostic] = Field(default_factory=list)
     sources: dict[str, str] = Field(default_factory=dict)
+    output_keys: dict[str, str] = Field(default_factory=dict)
 
 
 def import_archive(data: bytes, filename: str):
@@ -151,7 +167,10 @@ def export_archive(files, diagnostics=()):
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for path, source in sorted(files.items()):
             archive.writestr(safe_path(path), source)
-        archive.writestr("RCA-PORTABILITY.txt", "Exported source bundle. Python files are inert in RCA.\n"
+        report = "RCA-PORTABILITY.txt"
+        while report in files:
+            report = "export-" + report
+        archive.writestr(report, "Exported source bundle. Python files are inert in RCA.\n"
                          "RCA workflow, governance, and model-profile references require the RCA runtime.\n"
                          + "\n".join(d.message for d in diagnostics))
     return output.getvalue()
@@ -229,6 +248,11 @@ def compile_bundle(bundle, registry, profiles):
             definition = AgentDefinition(id=name, version="1.0.0", name=name,
                 description=data.get("description", ""), instruction=data.get("instruction", ""),
                 capability=cap.id, model_profile=profile, stage_model=stage, tools=actions)
+            output_key = data.get("output_key")
+            if output_key:
+                if builtin or not isinstance(output_key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", output_key) or output_key in {"request_plan", "triage_result", "logs_result", "file_result", "specialist_result", "contract_hash"}:
+                    raise ValueError("Unsupported or reserved output_key in " + path)
+                result.output_keys[path] = output_key
             if builtin:
                 if builtin not in BUILTINS or name != builtin:
                     raise ValueError("Invalid builtin override")
@@ -272,6 +296,9 @@ def compile_bundle(bundle, registry, profiles):
     except (ValueError, TypeError, KeyError, RecursionError) as exc:
         result.diagnostics.append(Diagnostic(path="rca/workflow.yaml" if "rca/workflow.yaml" in parsed else "root_agent.yaml", message=str(exc)[:1000]))
         result.definition = None
+    for path in parsed:
+        if path != "rca/workflow.yaml" and path not in built:
+            result.diagnostics.append(Diagnostic(path=path, severity="warning", message="Source is preserved for export but is not referenced by the executable workflow"))
     return result
 
 
@@ -283,6 +310,9 @@ def enriched_graph(compilation, cap, profiles, editable=False):
     for node in list(graph.nodes):
         node.source = compilation.sources.get(node.id, "rca/workflow.yaml")
         node.editable = editable
+        workflow_node = next((n for n in compilation.definition.nodes if n.id == node.id), None)
+        if workflow_node:
+            node.details = {"children": list(workflow_node.children), "edges": [list(e) for e in workflow_node.edges]}
         definition = compilation.agents.get(node.ref) or compilation.overrides.get(node.ref)
         if definition:
             node.details = definition.model_dump(mode="json")
@@ -298,10 +328,10 @@ def enriched_graph(compilation, cap, profiles, editable=False):
                     connector = ref.split(".")[0]
                     cid = "connector:" + connector
                     if cid not in ids:
-                        graph.nodes.append(GraphNode(id=cid, kind="connector", label=connector, details={"scope": "server-owned", "access": "read-only"}))
+                        graph.nodes.append(GraphNode(id=cid, kind="connector", label=connector, source="config/connectors.yaml", details={"scope": "server-owned", "access": "read-only"}))
                         ids.add(cid)
                     graph.edges.append(GraphEdge(source=key, target=cid, kind="binding"))
-    graph.nodes.append(GraphNode(id="governance", kind="policy", label="Run governance", details={"enforced": ["authenticated scope", "tool budgets", "redaction", "evidence citations", "UTC deadline"]}))
+    graph.nodes.append(GraphNode(id="governance", kind="policy", label="Run governance", source="app/runtime/governance.py", details={"enforced": ["authenticated scope", "tool budgets", "redaction", "evidence citations", "UTC deadline"]}))
     graph.edges.append(GraphEdge(source=compilation.definition.root, target="governance", kind="dependency"))
     return graph
 

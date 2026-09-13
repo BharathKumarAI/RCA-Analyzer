@@ -8,8 +8,10 @@ import {
 } from 'lucide-react';
 import { Principal, SystemHealth } from '../types/api';
 import { ActivePage } from './Sidebar';
+import type { UiSettingsConfig } from '../types/api';
 
 interface TopbarProps {
+  settings: UiSettingsConfig;
   health: SystemHealth;
   principal: Principal;
   theme: 'dark' | 'light';
@@ -18,34 +20,12 @@ interface TopbarProps {
   onOpenSearch: () => void;
   onOpenSession: () => void;
   onOpenAlerts: () => void;
+  unreadNotificationsCount?: number;
   onNewInvestigation?: () => void;
 }
 
-const PAGE_TITLES: Record<ActivePage, string> = {
-  overview: 'Overview',
-  agents: 'Fleet & Specialists',
-  tools: 'Connectors & Tools',
-  governance: 'Governance & Audit',
-  knowledge: 'Knowledge Base',
-  runs: 'Investigations',
-  capabilities: 'Capabilities & Topology',
-  users: 'Users & Roles',
-  billing: 'Usage & Quotas',
-  settings: 'System Settings',
-  skills: 'Skills Catalog',
-  parameters: 'Parameter Studio',
-  optimization: 'Optimization & Evaluation',
-  persistence: 'Persistence & Storage',
-  policy: 'Policy & Guardrails',
-  roles: 'Roles & Access',
-  runtime: 'Runtime & ADK',
-  alerts: 'Operational Alerts',
-  'health-checks': 'Health Checks',
-  'project-setup': 'Project Setup',
-  'harness-library': 'Harness Library',
-};
-
 export const Topbar: React.FC<TopbarProps> = ({
+  settings,
   principal,
   health,
   theme,
@@ -54,8 +34,11 @@ export const Topbar: React.FC<TopbarProps> = ({
   onOpenSearch,
   onOpenSession,
   onOpenAlerts,
+  unreadNotificationsCount = 0,
 }) => {
-  const currentCrumb = PAGE_TITLES[activePage] || 'Overview';
+  const currentNav = settings.navigation.find(item => item.page === activePage);
+  const currentGroup = currentNav?.group;
+  const currentCrumb = currentNav?.label || activePage;
 
   return (
     <header className="topbar">
@@ -66,10 +49,16 @@ export const Topbar: React.FC<TopbarProps> = ({
         </div>
         <div className="brand-info">
           <div className="brand-title">
-            <span className="gradient-text">RCA Analyzer</span>
+            <span title={settings.brand_name}>{settings.brand_name}</span>
           </div>
+          {currentGroup && (
+            <>
+              <span className="topbar-crumb-sep">/</span>
+              <span className="topbar-crumb-group" title={currentGroup}>{currentGroup}</span>
+            </>
+          )}
           <span className="topbar-crumb-sep">/</span>
-          <span className="topbar-crumb">Admin / {currentCrumb}</span>
+          <span className="topbar-crumb">{currentCrumb}</span>
         </div>
       </div>
 
@@ -96,11 +85,17 @@ export const Topbar: React.FC<TopbarProps> = ({
 
         <button
           type="button"
-          className="icon-btn"
+          className="icon-btn topbar-bell-btn"
           onClick={onOpenAlerts}
-          title="Open operational alerts"
+          title={unreadNotificationsCount > 0 ? `${unreadNotificationsCount} unread notification${unreadNotificationsCount === 1 ? '' : 's'}` : "Open operational alerts & notifications"}
+          aria-label={unreadNotificationsCount > 0 ? `${unreadNotificationsCount} unread notification${unreadNotificationsCount === 1 ? '' : 's'}` : "Open operational alerts and notifications"}
         >
           <Bell size={15} />
+          {unreadNotificationsCount > 0 && (
+            <span className="topbar-bell-badge">
+              {unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount}
+            </span>
+          )}
         </button>
         <button
           type="button"

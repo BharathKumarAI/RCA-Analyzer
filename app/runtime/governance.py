@@ -9,6 +9,7 @@ from app.policy.abac import AuthorizationContext
 from app.policy.engine import PolicyDecisionType
 from app.policy.redaction import exceeds_bounds, redact
 from app.runtime.run_contract import content_hash
+from app.runtime.context import ContextLimitExceeded, evidence_context, fit_evidence
 from app.schemas.evidence import EvidenceBundle, EvidenceSource
 
 from app.tools.catalog import TOOL_ACTIONS
@@ -28,6 +29,10 @@ class RunGovernance:
         self.truncated = False
         self.run_events = None
         self.tool_started = {}
+        self._pending_evidence = 0
+        self.evidence_marker = "EVIDENCE_" + uuid.uuid4().hex
+        self.attachment_marker = "ATTACHMENTS_" + uuid.uuid4().hex
+        self.context_limit_exceeded = False
 
     async def check_tool_budget(self):
         self.tool_calls += 1
@@ -89,39 +94,67 @@ class RunGovernance:
             PolicyDecisionType.REDACT,
         }:
             raise PermissionError("Tool action denied by policy")
+        call_id = getattr(tool_context, "function_call_id", None) or f"local_{id(tool_context)}"
+        self.tool_started[call_id] = (tool.name, time.perf_counter())
         if self.run_events:
-            call_id = getattr(tool_context, "function_call_id", None) or tool.name
-            self.tool_started[call_id] = time.perf_counter()
             await self.run_events.append(self.contract.run_id, self.contract.principal,
-                "tool:" + tool.name, "tool_started", {"call_id": call_id, "arguments": args})
+                "tool:" + TOOL_ACTIONS.get(tool.name, tool.name), "tool_started", {"call_id": call_id, "arguments": args})
         return None
 
     async def after_tool(self, tool, args, tool_context, tool_response):
-        if self.run_events:
-            call_id = getattr(tool_context, "function_call_id", None) or tool.name
-            elapsed = time.perf_counter() - self.tool_started.pop(call_id, time.perf_counter())
-            await self.run_events.append(self.contract.run_id, self.contract.principal,
-                "tool:" + tool.name, "tool_completed", {"call_id": call_id, "duration_ms": elapsed * 1000,
-                "result": redact(tool_response, max_text=self.settings.max_evidence_chars)})
+        call_id = getattr(tool_context, "function_call_id", None) or f"local_{id(tool_context)}"
         if isinstance(tool_response, dict) and "error" in tool_response:
+            if call_id in self.tool_started:
+                self.failures.append(f"{tool.name} returned an unavailable source")
+            await self.finish_tool(call_id, "tool_failed", error_type="ToolResponseError")
             return redact(tool_response)
-        return await self.capture(
-            TOOL_ACTIONS[tool.name].split(".")[0], tool.name, args, tool_response
-        )
+        try:
+            result = await self.capture(
+                TOOL_ACTIONS[tool.name].split(".")[0], tool.name, args, tool_response
+            )
+        except Exception as error:
+            await self.finish_tool(call_id, "tool_failed", error_type=type(error).__name__)
+            raise
+        await self.finish_tool(call_id, "tool_completed", result=result)
+        return result
+
+    async def finish_tool(self, call_id, kind, **details):
+        """Finalize a started call once, after its evidence has been persisted."""
+        started = self.tool_started.pop(call_id, None)
+        if started is None:
+            return
+        name, began = started
+        try:
+            if self.run_events:
+                await self.run_events.append(
+                    self.contract.run_id, self.contract.principal,
+                    "tool:" + TOOL_ACTIONS.get(name, name), kind,
+                    {"call_id": call_id, "duration_ms": (time.perf_counter() - began) * 1000,
+                     **details},
+                )
+        except BaseException:
+            self.tool_started[call_id] = started
+            raise
+
+    async def finish_pending_tools(self, cancelled=False):
+        for call_id in list(self.tool_started):
+            await self.finish_tool(
+                call_id, "tool_cancelled" if cancelled else "tool_failed",
+                error_type="RunCancelled" if cancelled else "RunInterrupted",
+            )
 
     async def on_tool_error(self, tool, args, tool_context, error):
         # Provider messages and exception bodies can contain credential-bearing
         # URLs or raw payloads. Expose only stable names, never exception text.
         self.failures.append(f"{tool.name} did not complete ({type(error).__name__})")
-        if self.run_events:
-            await self.run_events.append(self.contract.run_id, self.contract.principal,
-                "tool:" + tool.name, "tool_failed", {"error_type": type(error).__name__})
+        call_id = getattr(tool_context, "function_call_id", None) or f"local_{id(tool_context)}"
+        await self.finish_tool(call_id, "tool_failed", error_type=type(error).__name__)
         return {
             "error": "The connector operation could not complete. Treat this source as unavailable."
         }
 
     async def capture(self, connector, operation, query, data):
-        if len(self.evidence) >= self.settings.max_evidence_items:
+        if len(self.evidence) + self._pending_evidence >= self.settings.max_evidence_items:
             raise PermissionError("Evidence item limit exceeded")
         self.truncated |= exceeds_bounds(
             data, max_text=self.settings.max_evidence_chars
@@ -146,29 +179,41 @@ class RunGovernance:
             content_json=json.dumps(clean, ensure_ascii=False, sort_keys=True),
             content_hash=content_hash(clean),
         )
-        await self.store.save(bundle, self.contract.principal)
-        result = {"evidence_id": evidence_id, "source": connector, "data": clean}
-        self.evidence.append(result)
-        return result
+        # Reserve before the first await so concurrent branches share the limit.
+        self._pending_evidence += 1
+        try:
+            await self.store.save(bundle, self.contract.principal)
+            result = {"evidence_id": evidence_id, "source": connector, "data": clean}
+            self.evidence.append(result)
+            return result
+        finally:
+            self._pending_evidence -= 1
 
     def context(self) -> str:
-        included = []
-        size = 0
-        for item in self.evidence:
-            encoded = json.dumps(item, ensure_ascii=False)
-            if size + len(encoded) > self.settings.max_context_chars:
-                self.truncated = True
-                break
-            included.append(item)
-            size += len(encoded)
-        return json.dumps(
-            {
-                "evidence": included,
-                "unavailable_sources": self.failures,
-                "truncated": self.truncated,
-            },
-            ensure_ascii=False,
+        result = evidence_context(
+            self.evidence, self.failures, self.settings.max_context_chars
         )
+        self.truncated |= json.loads(result)["truncated"]
+        return result
+
+    async def prepare_model_request(self, request):
+        try:
+            request, projections = fit_evidence(request, {
+                self.evidence_marker: self.evidence,
+                self.attachment_marker: [item for item in self.evidence if item["source"] == "attachments"],
+            }, self.failures, self.settings.max_context_chars)
+        except ContextLimitExceeded:
+            self.context_limit_exceeded = True
+            raise
+        self.truncated |= any(p["truncated"] for p in projections)
+        if self.run_events and projections:
+            await self.run_events.append(
+                self.contract.run_id, self.contract.principal, "context", "context_selected",
+                {"projections": [{"evidence_ids": [i["evidence_id"] for i in p["evidence"]],
+                                  "omitted_evidence_count": p["omitted_evidence_count"],
+                                  "truncated": p["truncated"]} for p in projections]},
+            )
+        return request
 
     async def after_model(self, callback_context, llm_response):
         if llm_response.content:

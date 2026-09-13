@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import HTTPException, Request
 
 from app.identity.principals import UserPrincipal
+from app.identity.principals import Role
 
 
 def validate_public_key(key: str) -> None:
@@ -41,7 +42,27 @@ async def authenticated_principal(request: Request) -> UserPrincipal:
             "Invalid or expired bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
-    principal = settings.principals.get(claims["sub"])
+    subject = claims["sub"]
+    principal = None
+    admin_store = getattr(request.app.state, "platform_admin", None)
+    if admin_store is not None:
+        stored = await admin_store.get_user(settings.tenant_id, settings.project_id, subject)
+        if stored is not None:
+            if stored.get("status") != "active":
+                raise HTTPException(403, "This identity's project membership is inactive")
+            try:
+                roles = tuple(Role(role) for role in (stored.get("roles") or []))
+            except ValueError:
+                raise HTTPException(403, "This identity has invalid project roles") from None
+            principal = UserPrincipal(
+                subject=subject,
+                username=stored.get("email") or subject,
+                tenant_id=settings.tenant_id,
+                project_id=settings.project_id,
+                roles=roles,
+            )
+    if principal is None:
+        principal = settings.principals.get(subject)
     if principal is None:
         raise HTTPException(403, "No project membership for this identity")
     if (
