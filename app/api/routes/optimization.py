@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/api/v1/optimization-datasets")
 async def optimization_datasets(request: Request, principal: Principal):
-    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER})
+    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER, Role.PROJECT_MANAGER, Role.PROJECT_ANALYST})
     return await request.app.state.optimizations.list_datasets(principal)
 
 
@@ -37,7 +37,7 @@ async def create_optimization_dataset(
 
 @router.get("/api/v1/optimizations")
 async def optimizations(request: Request, principal: Principal):
-    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER})
+    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER, Role.PROJECT_MANAGER, Role.PROJECT_ANALYST})
     return await request.app.state.optimizations.list(principal)
 
 
@@ -64,7 +64,7 @@ async def create_optimization(
 async def get_optimization(
     optimization_id: str, request: Request, principal: Principal
 ):
-    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER})
+    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER, Role.PROJECT_MANAGER, Role.PROJECT_ANALYST})
     result = await request.app.state.optimizations.get(optimization_id, principal)
     if result is None:
         raise HTTPException(404, "Optimization not found")

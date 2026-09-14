@@ -13,6 +13,7 @@ import {
   Sliders,
   Sparkles,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import { fetchPolicy, updatePolicy } from '../services/api';
 import type { PolicyConfig, RedactionPattern } from '../types/api';
 
@@ -225,18 +226,21 @@ export const Policy: React.FC = () => {
       </section>
 
       {error && (
-        <div className="notice-banner red" role="alert" style={{ marginBottom: 16 }}>
-          <AlertTriangle size={15} /> {error}{' '}
-          <button className="btn btn-outline btn-sm" onClick={() => setError(null)} style={{ marginLeft: 'auto' }}>
-            Dismiss
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {saveSuccess && (
-        <div className="notice-banner green" role="status" style={{ marginBottom: 16 }}>
-          <CheckCircle2 size={15} /> {saveSuccess}
-        </div>
+        <NotificationBanner
+          type="success"
+          message={saveSuccess}
+          onClose={() => setSaveSuccess(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Grid: Redaction Manager & Guardrails */}

@@ -7,16 +7,18 @@ from pathlib import Path
 from app.persistence.lineage import ingestion_context
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.identity.auth import authenticated_principal
-from app.identity.principals import Role
+from app.policy.access import enforce_api_access
 
 from app.runtime.bootstrap import application_lifespan
 from app.api.routes import catalog, files, runs, agents, optimization, chats, parameters, harness, deployment_settings
 from app.api.routes import platform_configuration
-from app.api.routes import integrations, harness_workspace, ui_settings, project_editor
+from app.api.routes import integrations, harness_workspace, ui_settings, project_editor, connectors_api
+from app.api.routes import project_redaction
+from app.api.routes import knowledge_uploads, playground
 
 
 def create_app(settings=None, *, connectors=None, model_factory=None):
@@ -32,17 +34,14 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
         if request.url.path.startswith("/api/"):
             try:
                 request.state.principal = await authenticated_principal(request)
-                if request.url.path != "/api/v1/me" and set(
-                    request.state.principal.roles
-                ) <= {Role.GENERIC_USER}:
-                    raise HTTPException(403, "Project membership role required")
+                enforce_api_access(request.state.principal, request.method, request.url.path.rstrip("/"))
             except HTTPException as exc:
                 return JSONResponse(
                     {"detail": exc.detail},
                     status_code=exc.status_code,
                     headers=exc.headers,
                 )
-        is_upload = request.url.path == "/api/v1/files" and request.method == "POST"
+        is_upload = request.url.path in {"/api/v1/files", "/api/v1/knowledge/upload"} and request.method == "POST"
         if is_upload:
             project = request.app.state.registry.inheritance.project(
                 request.state.principal
@@ -95,7 +94,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
                 response = await call_next(request)
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Cache-Control"] = "no-store"
-            if request.url.path.startswith("/admin") or request.url.path == "/":
+            if request.url.path.startswith(("/admin", "/p/")) or request.url.path == "/":
                 response.headers["Content-Security-Policy"] = (
                     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
                 )
@@ -117,15 +116,25 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             status_code=422,
         )
 
-    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace, ui_settings, project_editor, deployment_settings):
+    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace, ui_settings, project_editor, deployment_settings, connectors_api):
         api.include_router(module.router)
     api.include_router(platform_configuration.router)
+    api.include_router(project_redaction.router)
+    api.include_router(knowledge_uploads.router)
+    api.include_router(playground.router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     web_dir = Path(__file__).resolve().parents[2] / "web"
     admin_dir = frontend_dist if frontend_dist.is_dir() else web_dir
     if admin_dir.is_dir():
         api.mount("/admin", StaticFiles(directory=str(admin_dir), html=True), name="admin")
+
+        @api.get("/p/{project_key}", include_in_schema=False)
+        @api.get("/p/{project_key}/{page:path}", include_in_schema=False)
+        async def project_workspace(project_key: str, page: str = ""):
+            # Only serve the application shell; all project data still requires
+            # authenticated API scope, and the client checks the URL project key.
+            return FileResponse(admin_dir / "index.html")
 
         @api.get("/", include_in_schema=False)
         async def root_redirect():

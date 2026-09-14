@@ -393,6 +393,8 @@ def test_api_test_route_uses_saved_effective_definition_and_enforces_permissions
                 json={
                     "definition": {
                         "name": "Project agent",
+                        "environment_dependency": "independent",
+                        "tool_environment": "Shared",
                         "kind": "mcp",
                         "endpoint": endpoint + "/mcp",
                         "description": "project",

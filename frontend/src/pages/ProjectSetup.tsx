@@ -40,8 +40,12 @@ import {
 import {
   fetchProjectSetup,
   fetchProjectEditor,
+  fetchProjectRedaction,
+  previewProjectRedaction,
   fetchPrincipal,
-  fetchConnectorHealthCheck,
+  fetchConnectorTemplates,
+  fetchProjectConnectors,
+  deleteProjectConnector,
   validateProjectSetup,
   saveProjectSetup,
   saveProjectEditor,
@@ -51,9 +55,12 @@ import {
 import type {
   ProjectSetupResponse,
   ProjectValidationResult,
-  ConnectorHealthRecord,
-  ConnectorParameterField,
+  ConnectorTemplateItem,
+  ProjectConnectorInstanceItem,
+  ProjectRedactionPolicy,
+  RedactionPreviewResponse,
 } from '../types/api';
+import { ConnectorInstanceEditor } from '../components/ConnectorInstanceEditor';
 
 import {
   ProjectEnvironment,
@@ -83,7 +90,7 @@ const STEPS = [
   { number: 3, id: 'config', title: 'Configuration', desc: 'Resolution & policies', icon: SlidersHorizontal },
   { number: 4, id: 'time', title: 'Time & Scheduling', desc: 'Time policy, schedules', icon: Clock },
   { number: 5, id: 'connectors-tools', title: 'Connectors & Tools', desc: 'Instances, tools & mapping', icon: Database },
-  { number: 6, id: 'deploy', title: 'Review & Deploy', desc: 'Validate and save', icon: CheckSquare },
+  { number: 6, id: 'review', title: 'Review & Save', desc: 'Validate and save', icon: CheckSquare },
 ];
 
 // Rich Dark Editor YamlCodeViewer with syntax highlighting and line numbers
@@ -157,10 +164,18 @@ export const ProjectSetup: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<ProjectSetupResponse | null>(null);
+  const [redactionPolicy, setRedactionPolicy] = useState<ProjectRedactionPolicy | null>(null);
+  const [redactionSample, setRedactionSample] = useState('');
+  const [redactionPreview, setRedactionPreview] = useState<RedactionPreviewResponse | null>(null);
+  const [redactionPreviewError, setRedactionPreviewError] = useState<string | null>(null);
+  const [redactionPreviewLoading, setRedactionPreviewLoading] = useState(false);
   const [principal, setPrincipal] = useState<import('../types/api').Principal | null>(null);
   const [editorVersion, setEditorVersion] = useState<number>(0);
   const [viewFullYaml, setViewFullYaml] = useState<boolean>(false);
   const [showQuickYaml, setShowQuickYaml] = useState<boolean>(false);
+  const [showSidebar, setShowSidebar] = useState<boolean>(() => window.innerWidth >= 1680);
+  const [templateSearch, setTemplateSearch] = useState<string>('');
+  const [templateCategoryFilter, setTemplateCategoryFilter] = useState<string>('all');
   const [copied, setCopied] = useState<boolean>(false);
 
   // Status & Validation
@@ -261,6 +276,7 @@ export const ProjectSetup: React.FC = () => {
   const [priority, setPriority] = useState<string>('Normal');
   const [enableAnalytics, setEnableAnalytics] = useState<boolean>(true);
   const [enableNotifications, setEnableNotifications] = useState<boolean>(true);
+  const [showAdvancedOverrides, setShowAdvancedOverrides] = useState<boolean>(false);
 
   // Step 4: Time & Scheduling
   const [anchors, setAnchors] = useState<Array<{ source: string; priority: number; confidence: number; label: string }>>([]);
@@ -275,14 +291,14 @@ export const ProjectSetup: React.FC = () => {
     id: '',
     name: '',
     capability: 'triage.poll',
-    cron: '*/15 * * * *',
-    timezone: 'America/Chicago',
-    enabled: true,
+    cron: '',
+    timezone: '',
+    enabled: false,
     executionType: 'jql',
     targetJqlId: 'polling',
     scriptPath: '',
-    adminApproved: true,
-    frequencyLabel: 'Every 15 minutes',
+    adminApproved: false,
+    frequencyLabel: '',
     description: '',
   });
 
@@ -291,10 +307,8 @@ export const ProjectSetup: React.FC = () => {
   const [selectedEnvForJql, setSelectedEnvForJql] = useState<string>('');
   const [showJqlBuildSteps, setShowJqlBuildSteps] = useState<boolean>(true);
 
-  // Step 4 & 5: Jira Custom Field Mappings (18 fields directly from sample.yaml + user additions)
+  // Step 4: Jira custom field mappings loaded from the saved project configuration
   const [jiraCustomFields, setJiraCustomFields] = useState<JiraCustomFieldMapping[]>([]);
-  const [customFieldFilter, setCustomFieldFilter] = useState<'all' | 'mandatory'>('all');
-  const [showCustomFieldMappings, setShowCustomFieldMappings] = useState<boolean>(true);
   const [isAddingCustomField, setIsAddingCustomField] = useState<boolean>(false);
   const [customFieldSearch, setCustomFieldSearch] = useState<string>('');
   const [activeJqlTarget, setActiveJqlTarget] = useState<'polling' | 'reporting' | 'amdocs' | 'env'>('polling');
@@ -371,9 +385,58 @@ export const ProjectSetup: React.FC = () => {
 
   // Step 5: Connectors & Tools (3 Subtabs)
   const [step5Tab, setStep5Tab] = useState<'connectors' | 'tools' | 'mapping'>('connectors');
-  const [connectorInstances, setConnectorInstances] = useState<ConnectorInstance[]>([]);
   const [tools, setTools] = useState<ToolItem[]>([]);
-  const [testingConnectorId, setTestingConnectorId] = useState<string | null>(null);
+
+  // Step 5: Connectors & Tools Lifecycle Management
+  const [persistedConnectors, setPersistedConnectors] = useState<ProjectConnectorInstanceItem[]>([]);
+  const [connectorTemplates, setConnectorTemplates] = useState<ConnectorTemplateItem[]>([]);
+  const [editingConnector, setEditingConnector] = useState<{
+    template?: ConnectorTemplateItem;
+    instance?: ProjectConnectorInstanceItem;
+  } | null>(null);
+  const [isAddingConnector, setIsAddingConnector] = useState<boolean>(false);
+  const [connectorSearch, setConnectorSearch] = useState<string>('');
+
+  // Connector instances are owned by the project connector API. Keep the
+  // legacy authoring model out of readiness, counts, and generated config.
+  const persistedConnectorSummaries = useMemo<ConnectorInstance[]>(() => persistedConnectors.map(conn => ({
+    id: conn.instance_id,
+    name: conn.system_name,
+    type: conn.template_id,
+    scope: conn.environment_dependency === 'dependent' ? 'environment' : 'project',
+    enabled: conn.enabled,
+    endpoint: typeof conn.definition_json?.endpoint === 'string' ? conn.definition_json.endpoint : '',
+    secretRef: '',
+    timeoutSeconds: typeof conn.definition_json?.timeout_seconds === 'number' ? conn.definition_json.timeout_seconds : 0,
+    rateLimitRpm: 0,
+    healthStatus: 'UNKNOWN',
+  })), [persistedConnectors]);
+
+  const loadProjectConnectors = async (pid: string) => {
+    if (!pid) return;
+    try {
+      const [conns, tmpls] = await Promise.all([
+        fetchProjectConnectors(pid).catch(() => []),
+        fetchConnectorTemplates().catch(() => []),
+      ]);
+      setPersistedConnectors(conns);
+      setConnectorTemplates(tmpls);
+    } catch (err) {
+      console.error('Failed to load project connectors or templates', err);
+    }
+  };
+
+  const handleDeleteConnector = async (instanceId: string) => {
+    if (!projectId) return;
+    if (!window.confirm(`Are you sure you want to delete connector instance '${instanceId}'?`)) return;
+    try {
+      await deleteProjectConnector(projectId, instanceId);
+      setStatusNotice({ type: 'info', text: `Connector instance '${instanceId}' removed.` });
+      await loadProjectConnectors(projectId);
+    } catch (err: any) {
+      setStatusNotice({ type: 'error', text: err.message || 'Failed to delete connector instance.' });
+    }
+  };
 
   // Initial Environment Bindings (Project Environment -> Tool Instances)
   const [environmentBindings, setEnvironmentBindings] = useState<EnvironmentBinding[]>([]);
@@ -385,6 +448,9 @@ export const ProjectSetup: React.FC = () => {
     try {
       const [data, editor] = await Promise.all([fetchProjectSetup(), fetchProjectEditor()]);
       setPayload(data);
+      // Redaction is a separate read-only policy surface. A policy read failure
+      // should not hide the rest of the authenticated project configuration.
+      void fetchProjectRedaction().then(setRedactionPolicy).catch(() => setRedactionPolicy(null));
       setEditorVersion(editor.version);
       const document = editor.document as Partial<PrismFullConfigurationData>;
       const metadata = document.metadata;
@@ -438,6 +504,7 @@ export const ProjectSetup: React.FC = () => {
       if (Array.isArray(document.environmentBindings)) setEnvironmentBindings(document.environmentBindings);
       if (data.scope.project_id) {
         setProjectId(data.scope.project_id);
+        void loadProjectConnectors(data.scope.project_id);
       }
       // Populate backend environments if present
       if (!hasAuthoringEnvironments && Array.isArray(data.project_layer?.environments) && data.project_layer.environments.length > 0) {
@@ -459,6 +526,20 @@ export const ProjectSetup: React.FC = () => {
       setError(cause instanceof Error ? cause.message : 'Unable to load project configuration snapshot.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRedactionPreview = async () => {
+    const sample = redactionSample.trim();
+    if (!sample) return;
+    setRedactionPreviewLoading(true);
+    setRedactionPreviewError(null);
+    try {
+      setRedactionPreview(await previewProjectRedaction(sample));
+    } catch (cause) {
+      setRedactionPreviewError(cause instanceof Error ? cause.message : 'Redaction preview failed.');
+    } finally {
+      setRedactionPreviewLoading(false);
     }
   };
 
@@ -530,7 +611,7 @@ export const ProjectSetup: React.FC = () => {
       jqlConfiguration: jqlConfig,
       jiraCustomFields,
       schedules,
-      connectors: connectorInstances,
+      connectors: persistedConnectorSummaries,
       tools,
       environmentBindings,
     };
@@ -563,7 +644,7 @@ export const ProjectSetup: React.FC = () => {
     jqlConfig,
     jiraCustomFields,
     schedules,
-    connectorInstances,
+    persistedConnectorSummaries,
     tools,
     environmentBindings,
   ]);
@@ -588,7 +669,7 @@ export const ProjectSetup: React.FC = () => {
         allowUserOverrides: ['incident-triage', 'log-correlation'],
         presentation: 'summary',
         detail: 'standard',
-        disabledConnectors: connectorInstances.filter(c => !c.enabled).map(c => c.type),
+        disabledConnectors: persistedConnectorSummaries.filter(c => !c.enabled).map(c => c.type),
         capProfiles: {},
         maxLlmCalls: 12,
         maxToolCalls: 4,
@@ -601,7 +682,7 @@ export const ProjectSetup: React.FC = () => {
         delegatedSections: payload?.platform_policy?.project_sections,
       })
     );
-  }, [payload, projectId, connectorInstances, environments]);
+  }, [payload, projectId, persistedConnectorSummaries, environments]);
 
   // Tag Handlers
   const handleAddTag = () => {
@@ -705,34 +786,6 @@ export const ProjectSetup: React.FC = () => {
     });
   };
 
-  // Connector Test Probe
-  const handleTestConnector = async (conn: ConnectorInstance) => {
-    setTestingConnectorId(conn.id);
-    setStatusNotice({ text: `Probing connector connectivity for ${conn.name}...`, type: 'info' });
-    try {
-      const probe = await fetchConnectorHealthCheck(conn.type);
-      setConnectorInstances(prev =>
-        prev.map(c =>
-          c.id === conn.id
-            ? {
-                ...c,
-                healthStatus: probe.overall === 'HEALTHY' ? 'HEALTHY' : 'DEGRADED',
-                latencyMs: probe.latency_ms ?? 50,
-              }
-            : c
-        )
-      );
-      setStatusNotice({
-        text: `${conn.name} probe completed: status ${probe.overall} (${probe.latency_ms ?? 0}ms latency).`,
-        type: probe.overall === 'HEALTHY' ? 'success' : 'error',
-      });
-    } catch {
-      setStatusNotice({ text: `${conn.name} probe connection failed.`, type: 'error' });
-    } finally {
-      setTestingConnectorId(null);
-    }
-  };
-
   // Schedule Handlers
   const handleStartAddSchedule = () => {
     setEditingScheduleId(null);
@@ -740,14 +793,14 @@ export const ProjectSetup: React.FC = () => {
       id: '',
       name: '',
       capability: 'triage.poll',
-      cron: '*/15 * * * *',
+      cron: '',
       timezone: timezone || 'America/Chicago',
       enabled: true,
       executionType: 'jql',
       targetJqlId: 'polling',
       scriptPath: '',
-      adminApproved: true,
-      frequencyLabel: 'Every 15 minutes',
+      adminApproved: false,
+      frequencyLabel: '',
       description: '',
     });
     setIsAddingSchedule(true);
@@ -821,15 +874,17 @@ export const ProjectSetup: React.FC = () => {
     // 2. Governance
     const retentionValid = Boolean(dataRetention);
     const auditValid = auditLogging !== 'Disabled';
-    const secretRefsValid = connectorInstances.every(
-      c => !c.secretRef || c.secretRef.startsWith('secret://') || c.secretRef.startsWith('env://')
+    const secretRefsValid = persistedConnectors.every(c =>
+      Object.entries(c.definition_json?.credentials || {}).every(([key, value]) =>
+        !value || !/(?:_ref|token|password|private_key|secret)/i.test(key) || String(value).startsWith('env://')
+      )
     );
     const governancePass = retentionValid && auditValid && secretRefsValid;
 
     // 3. Operational
     const mappedEnvCount = environmentBindings.length;
     const allEnvsMapped = environments.length > 0 && mappedEnvCount >= Math.min(environments.length, 3);
-    const healthyConnectors = connectorInstances.filter(c => c.healthStatus === 'HEALTHY').length;
+    const enabledConnectorCount = persistedConnectors.filter(c => c.enabled).length;
     const hasOwners = members.owners.length > 0;
     const operationalPass = allEnvsMapped && hasOwners;
 
@@ -845,10 +900,10 @@ export const ProjectSetup: React.FC = () => {
       operationalPass,
       score,
       mappedEnvCount,
-      healthyConnectors,
+      enabledConnectorCount,
       hasOwners,
     };
-  }, [projectId, projectName, responsibility, environments, dataRetention, auditLogging, connectorInstances, environmentBindings, members]);
+  }, [projectId, projectName, responsibility, environments, dataRetention, auditLogging, persistedConnectors, environmentBindings, members]);
 
   const handleValidate = async () => {
     setValidating(true);
@@ -888,7 +943,7 @@ export const ProjectSetup: React.FC = () => {
       const editor = await saveProjectEditor(authoringDocument as unknown as Record<string, unknown>, editorVersion);
       setEditorVersion(editor.version);
       setStatusNotice({
-        text: `Project '${projectId}' saved. Supported runtime settings are active; authoring drafts do not start schedules or grant access.`,
+        text: `Project '${projectId}' saved. Runtime settings are active; saved editor content does not start schedules or grant access.`,
         type: 'success',
       });
       await refresh();
@@ -911,44 +966,47 @@ export const ProjectSetup: React.FC = () => {
     );
   }, [environments, envSearch]);
 
-  const completenessPercentage = Math.round((currentStep / 6) * 100);
-
   return (
     <div className="view-container project-setup-page">
       {/* Standard Hero Banner Aligned With Platform Pages */}
       <section className="hero-banner">
         <div className="hero-main">
           <div className="hero-eyebrow-row">
-            <span className="hero-tag">PRISM CONTROL PLANE</span>
-            <span className="hero-tag teal">SCOPED CONFIGURATION</span>
+            <span className="hero-tag">PROJECT CONFIGURATION</span>
+            <span className="hero-tag teal">CONFIGURATION SETUP</span>
           </div>
           <h1 className="hero-title">
-            Project Setup &amp; <span>Scoped Configuration</span>
+            Project <span>Setup</span>
           </h1>
           <p className="hero-lede">
-            Manage project configuration and authoring drafts. Scheduling drafts do not run automatically; access and connector permissions use their dedicated editors.
+            Manage saved project settings. Scheduled work does not start automatically; access and connector permissions use their dedicated editors.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>Scope:</b> {payload?.scope?.tenant_id || 'default'} / {payload?.scope?.project_id || projectId}
-            </span>
-            <span className="hero-stat-chip">
               <ShieldCheck size={12} color="var(--ps-primary)" />
-              <b>Step:</b> {currentStep} of 6 ({completenessPercentage}%)
+              <b>Progress:</b> Step {currentStep} of 6
             </span>
             <span className="hero-stat-chip">
               <Boxes size={12} color="var(--ps-primary)" />
-              <b>Environments:</b> {environments.filter(e => e.enabled !== false).length} Active
+              <b>Environments:</b> {environments.filter(e => e.enabled === true).length} Active
             </span>
             <span className="hero-stat-chip">
               <Database size={12} color="var(--ps-success)" />
-              <b>Conduits:</b> {connectorInstances.filter(c => c.enabled).length} Bound
+              <b>Connectors:</b> {persistedConnectors.filter(c => c.enabled).length} Enabled
             </span>
           </div>
         </div>
 
         <div className="hero-actions">
           <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setShowSidebar(!showSidebar)}
+              title="Toggle the configuration preview and status panel"
+            >
+              <Code size={13} /> {showSidebar ? 'Hide preview' : 'Show preview'}
+            </button>
             {currentStep > 1 && (
               <button
                 type="button"
@@ -963,17 +1021,9 @@ export const ProjectSetup: React.FC = () => {
               className="btn btn-secondary"
               onClick={() => void refresh()}
               disabled={loading}
-              title="Reset to live server configuration"
-            >
-              <RefreshCw size={13} className={loading ? 'spin' : ''} /> Reset
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => void refresh()}
               title="Reload saved project configuration"
             >
-              <RefreshCw size={13} /> Reload Saved Configuration
+              <RefreshCw size={13} className={loading ? 'spin' : ''} /> {loading ? 'Loading…' : 'Reload'}
             </button>
             {currentStep < 6 ? (
               <button
@@ -990,11 +1040,81 @@ export const ProjectSetup: React.FC = () => {
                 onClick={() => void handleSave()}
                 disabled={saving || !principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role))}
               >
-                <Save size={13} /> {saving ? 'Deploying…' : 'Save Project'}
+                <Save size={13} /> {saving ? 'Saving…' : 'Save configuration'}
               </button>
             )}
           </div>
         </div>
+      </section>
+
+      <section className="ps-redaction-panel" aria-labelledby="project-redaction-heading">
+        <div className="ps-redaction-header">
+          <div>
+            <h2 id="project-redaction-heading">Project redaction</h2>
+            <p>Effective protection applied before project evidence is shown to agents.</p>
+          </div>
+          <span className={`badge ${redactionPolicy?.enabled ? 'badge-active' : 'badge-neutral'}`}>
+            {redactionPolicy ? (redactionPolicy.enabled ? 'ENABLED' : 'DISABLED') : 'LOADING'}
+          </span>
+        </div>
+        {redactionPolicy ? (
+          <>
+            <div className="ps-redaction-summary">
+              <span>{redactionPolicy.rules.filter(rule => rule.enabled).length} active built-in rules</span>
+              <span>Source: <code>{redactionPolicy.source}</code></span>
+              {redactionPolicy.configured_custom_rule_count ? <span>{redactionPolicy.configured_custom_rule_count} custom rules configured</span> : null}
+              <details className="ps-redaction-details">
+                <summary>View policy details and preview</summary>
+                <div className="ps-redaction-meta">
+                  <span>Policy <code>{redactionPolicy.policy_id}</code></span>
+                  <span>Project <code>{redactionPolicy.project_id}</code></span>
+                </div>
+                <div className="ps-redaction-rules">
+                  {redactionPolicy.rules.length > 0 ? redactionPolicy.rules.map(rule => (
+                    <div className="ps-redaction-rule" key={rule.id}>
+                      <span className={`ps-redaction-dot ${rule.enabled ? 'enabled' : ''}`} aria-hidden="true" />
+                      <div><strong>{rule.label}</strong><span>{rule.description}</span></div>
+                    </div>
+                  )) : <span className="ps-redaction-muted">No configured rules were returned for this project.</span>}
+                </div>
+                {(redactionPolicy.limitations.length > 0 || redactionPolicy.custom_rules_enforced === false) && (
+                  <div className="ps-redaction-limitations">
+                    <strong>Coverage limits</strong>
+                    {redactionPolicy.limitations.map(limit => <span key={limit}>{limit}</span>)}
+                    {redactionPolicy.custom_rules_enforced === false && redactionPolicy.configured_custom_rule_count ? (
+                      <span>{redactionPolicy.configured_custom_rule_count} custom rule(s) are configured but are not enforced by the current runtime.</span>
+                    ) : null}
+                  </div>
+                )}
+                <div className="ps-redaction-preview">
+              <div>
+                <strong>Preview the runtime policy</strong>
+                <span>Submit only text you are authorized to inspect. This preview is not saved.</span>
+              </div>
+              <textarea
+                value={redactionSample}
+                onChange={event => { setRedactionSample(event.target.value); setRedactionPreview(null); setRedactionPreviewError(null); }}
+                placeholder="Paste a short evidence excerpt to inspect its masking"
+                maxLength={32000}
+                rows={3}
+                aria-label="Text to preview through the project redaction policy"
+              />
+              <div className="ps-redaction-preview-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => void handleRedactionPreview()} disabled={!redactionSample.trim() || redactionPreviewLoading}>
+                  {redactionPreviewLoading ? 'Previewing…' : 'Preview redaction'}
+                </button>
+                {redactionPreviewError && <span className="ps-redaction-preview-error" role="alert">{redactionPreviewError}</span>}
+              </div>
+              {redactionPreview && (
+                <pre className="ps-redaction-preview-result" aria-live="polite">{redactionPreview.redacted_text}</pre>
+              )}
+                </div>
+              </details>
+            </div>
+          </>
+        ) : (
+          <p className="ps-redaction-muted">The project redaction policy could not be loaded from the authenticated backend.</p>
+        )}
       </section>
 
       {/* Scope Banner */}
@@ -1005,9 +1125,9 @@ export const ProjectSetup: React.FC = () => {
           </div>
           <div className="ps-scope-text">
             <div>
-              <strong style={{ color: 'var(--ps-text-title)' }}>Active Project Scope:</strong>{' '}
+              <strong style={{ color: 'var(--ps-text-title)' }}>Configured deployment:</strong>{' '}
               <span className="ps-scope-tag">
-                {payload?.scope?.tenant_id || 'default'} / {payload?.scope?.project_id || projectId}
+                {payload?.scope?.tenant_id || 'Not configured'} / {payload?.scope?.project_id || projectId}
               </span>
             </div>
             <div className="ps-scope-desc">
@@ -1015,8 +1135,12 @@ export const ProjectSetup: React.FC = () => {
             </div>
           </div>
         </div>
-        <a className="btn btn-secondary" href="#settings" style={{ fontSize: '12px', whiteSpace: 'nowrap' }}>
-          Platform Settings <ChevronRight size={13} />
+        <a
+          className="btn btn-secondary"
+          href="/admin/#settings"
+          style={{ fontSize: '12px', whiteSpace: 'nowrap' }}
+        >
+          Project settings <ChevronRight size={13} />
         </a>
       </div>
 
@@ -1043,13 +1167,14 @@ export const ProjectSetup: React.FC = () => {
         </div>
       )}
 
-      {/* Main 3-Column Layout */}
-      <div className="ps-wizard-grid">
+      {/* Main Responsive Layout: 2-Column Default, 3-Column / Drawer when Blueprint is toggled */}
+      <div className={`ps-wizard-grid ${showSidebar ? 'with-sidebar' : ''}`}>
         {/* Left Stepper Column */}
         <aside className="ps-stepper-col">
           {STEPS.map(step => {
             const isActive = currentStep === step.number;
             const isCompleted = currentStep > step.number;
+            const StepIcon = step.icon;
             return (
               <button
                 key={step.number}
@@ -1061,7 +1186,10 @@ export const ProjectSetup: React.FC = () => {
                   {isCompleted ? <Check size={13} /> : step.number}
                 </div>
                 <div className="ps-step-info">
-                  <span className="ps-step-title">{step.title}</span>
+                  <span className="ps-step-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <StepIcon size={13} style={{ color: isActive ? 'var(--ps-primary)' : 'var(--ps-text-muted)' }} />
+                    {step.title}
+                  </span>
                   <span className="ps-step-desc">{step.desc}</span>
                 </div>
               </button>
@@ -1091,11 +1219,12 @@ export const ProjectSetup: React.FC = () => {
 
               <div className="ps-form-grid">
                 <div className="ps-form-group">
-                  <label className="ps-form-label">
+                  <label className="ps-form-label" htmlFor="project-id">
                     Project ID <span className="ps-form-label-required">*</span>
                   </label>
                   <input
                     type="text"
+                    id="project-id"
                     value={projectId}
                     readOnly
                     aria-readonly="true"
@@ -1106,11 +1235,12 @@ export const ProjectSetup: React.FC = () => {
                 </div>
 
                 <div className="ps-form-group">
-                  <label className="ps-form-label">
+                  <label className="ps-form-label" htmlFor="project-name">
                     Project Name <span className="ps-form-label-required">*</span>
                   </label>
                   <input
                     type="text"
+                    id="project-name"
                     value={projectName}
                     onChange={e => setProjectName(e.target.value)}
                     className="ps-form-input"
@@ -1122,10 +1252,11 @@ export const ProjectSetup: React.FC = () => {
 
               <div className="ps-form-grid">
                 <div className="ps-form-group">
-                  <label className="ps-form-label">
+                  <label className="ps-form-label" htmlFor="project-responsibility">
                     Responsibility <span className="ps-form-label-required">*</span>
                   </label>
                   <select
+                    id="project-responsibility"
                     value={responsibility}
                     onChange={e => setResponsibility(e.target.value)}
                     className="ps-form-select"
@@ -1139,11 +1270,12 @@ export const ProjectSetup: React.FC = () => {
                 </div>
 
                 <div className="ps-form-group">
-                  <label className="ps-form-label">Status</label>
-                  <div className="ps-status-toggle-group">
+                  <span className="ps-form-label" id="project-status-label">Status</span>
+                  <div className="ps-status-toggle-group" role="group" aria-labelledby="project-status-label">
                     <button
                       type="button"
                       className={`ps-status-pill-btn ${status === 'active' ? 'active' : ''}`}
+                      aria-pressed={status === 'active'}
                       onClick={() => setStatus('active')}
                     >
                       {status === 'active' && <Check size={12} />} Active
@@ -1151,6 +1283,7 @@ export const ProjectSetup: React.FC = () => {
                     <button
                       type="button"
                       className={`ps-status-pill-btn ${status === 'inactive' ? 'active' : ''}`}
+                      aria-pressed={status === 'inactive'}
                       onClick={() => setStatus('inactive')}
                     >
                       {status === 'inactive' && <Check size={12} />} Inactive
@@ -1160,11 +1293,12 @@ export const ProjectSetup: React.FC = () => {
               </div>
 
               <div className="ps-form-group">
-                <label className="ps-form-label">
+                <label className="ps-form-label" htmlFor="project-objective">
                   <span>Objective</span>
                   <span style={{ fontSize: 11, color: 'var(--dim)' }}>{objective.length}/1000</span>
                 </label>
                 <textarea
+                  id="project-objective"
                   rows={5}
                   value={objective}
                   maxLength={1000}
@@ -1175,10 +1309,11 @@ export const ProjectSetup: React.FC = () => {
               </div>
 
               <div className="ps-form-group">
-                <label className="ps-form-label">
+                <label className="ps-form-label" htmlFor="project-timezone">
                   Timezone <span className="ps-form-label-required">*</span>
                 </label>
                 <select
+                  id="project-timezone"
                   value={timezone}
                   onChange={e => setTimezone(e.target.value)}
                   className="ps-form-select"
@@ -1194,7 +1329,7 @@ export const ProjectSetup: React.FC = () => {
               </div>
 
               <div className="ps-form-group">
-                <label className="ps-form-label">Tags</label>
+                <label className="ps-form-label" htmlFor="project-tags">Tags</label>
                 <div className="ps-tags-container">
                   {tags.map(tag => (
                     <span key={tag} className="ps-tag-chip">
@@ -1211,6 +1346,7 @@ export const ProjectSetup: React.FC = () => {
                   ))}
                   <input
                     type="text"
+                    id="project-tags"
                     value={newTagInput}
                     onChange={e => setNewTagInput(e.target.value)}
                     onKeyDown={e => {
@@ -1586,7 +1722,7 @@ export const ProjectSetup: React.FC = () => {
                 )}
               </div>
 
-              {/* Jira Team Scoping & Custom Field Bindings Card (references/sample.yaml) */}
+              {/* Jira team scope and custom field bindings */}
               <div className="ps-card">
                 <div className="ps-card-header">
                   <div>
@@ -1728,7 +1864,7 @@ export const ProjectSetup: React.FC = () => {
                 >
                   <Info size={15} style={{ color: 'var(--ps-primary)', flexShrink: 0 }} />
                   <div>
-                    <strong>PRISM Dynamic JQL Rule:</strong> Option values are automatically quoted and joined into{' '}
+                    <strong>Query builder behavior:</strong> Option values are automatically quoted and joined into{' '}
                     <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--ps-primary)' }}>IN (...)</code> clauses in Step 4. If any list is empty, that OR-branch is safely dropped rather than emitting invalid{' '}
                     <code style={{ fontFamily: 'var(--font-mono)' }}>in ()</code>.
                   </div>
@@ -1740,13 +1876,12 @@ export const ProjectSetup: React.FC = () => {
           {/* STEP 3: CONFIGURATION (RESOLUTION & POLICIES) */}
           {currentStep === 3 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {principal && <ParameterSettingsPanel principal={principal} scope="project" />}
               <div className="ps-card">
                 <div className="ps-card-header">
                   <div>
-                    <h2 className="ps-card-title">Configuration Resolution</h2>
+                    <h2 className="ps-card-title">Configuration priority</h2>
                     <p className="ps-card-subtitle">
-                      Set the precedence hierarchy for configuration resolution and override rules.
+                      Set the order used when more than one setting applies.
                     </p>
                   </div>
                 </div>
@@ -1755,7 +1890,7 @@ export const ProjectSetup: React.FC = () => {
                   {/* Fixed Precedence Hierarchy */}
                   <div>
                     <label className="ps-form-label" style={{ marginBottom: 8 }}>
-                      Precedence Hierarchy (Fixed Platform Order)
+                      Priority order (set by platform)
                     </label>
                     <div className="ps-precedence-list">
                       <div className="ps-precedence-item locked">
@@ -1820,7 +1955,7 @@ export const ProjectSetup: React.FC = () => {
                   {/* Override Rules Toggles */}
                   <div>
                     <label className="ps-form-label" style={{ marginBottom: 8 }}>
-                      Override Permissions & Boundaries
+                      Who can override values
                     </label>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1987,6 +2122,34 @@ export const ProjectSetup: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              <details
+                className="ps-advanced-overrides"
+                open={showAdvancedOverrides}
+                onToggle={event => setShowAdvancedOverrides(event.currentTarget.open)}
+              >
+                <summary>
+                  <span className="ps-advanced-overrides-summary">
+                    <SlidersHorizontal size={15} />
+                    <span>
+                      <strong>Advanced overrides</strong>
+                      <small>Optional project-level parameter values</small>
+                    </span>
+                  </span>
+                  <ChevronDown size={15} aria-hidden="true" />
+                </summary>
+                <div className="ps-advanced-overrides-body">
+                  <div className="ps-advanced-overrides-intro">
+                    <p>
+                      Use these overrides only when a project needs a value different from the platform default. The full parameter catalog stays in Parameter Studio.
+                    </p>
+                    <a className="btn btn-secondary" href="#parameters?scope=project">
+                      Open Parameter Studio <ExternalLink size={13} />
+                    </a>
+                  </div>
+                  {principal && <ParameterSettingsPanel principal={principal} scope="project" />}
+                </div>
+              </details>
             </div>
           )}
 
@@ -2070,7 +2233,7 @@ export const ProjectSetup: React.FC = () => {
                 </div>
               </div>
 
-              {/* JQL Dynamic Query Builder & Clause Templates (references/sample.yaml) */}
+              {/* JQL query builder and clause templates */}
               <div className="ps-card">
                 <div className="ps-card-header">
                   <div>
@@ -2079,7 +2242,7 @@ export const ProjectSetup: React.FC = () => {
                       JQL Dynamic Query Builder & Clause Templates
                     </h2>
                     <p className="ps-card-subtitle">
-                      Clause templates configured in references/sample.yaml. JQL queries are dynamically assembled at runtime from team scope values, member account IDs, and incident anchors.
+                      Clause templates are assembled from saved team scope values, member account IDs, environment selection, and incident anchors.
                     </p>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -2462,9 +2625,9 @@ export const ProjectSetup: React.FC = () => {
                     <div className="ps-jql-card-header">
                       <div className="ps-jql-card-title">
                         <span>1. Incident Ticket Polling Job</span>
-                        <span className="ps-jql-cron-pill">*/15 * * * * • Every 15 min</span>
+                        <span className="ps-jql-cron-pill">Draft clause · no scheduler</span>
                       </div>
-                      <span className="badge badge-active" style={{ fontSize: 11 }}>Active Job</span>
+                      <span className="badge badge-neutral" style={{ fontSize: 11 }}>Draft only</span>
                     </div>
                     <div className="ps-form-group" style={{ margin: 0 }}>
                       <label className="ps-form-label" style={{ fontSize: 11 }}>
@@ -2481,7 +2644,7 @@ export const ProjectSetup: React.FC = () => {
                     <div>
                       <div className="ps-jql-preview-header">
                         <span className="ps-jql-preview-label">
-                          <CheckCircle2 size={12} style={{ color: '#22c55e' }} /> Live Interpolated JQL Sent to Jira API
+                          <Info size={12} style={{ color: 'var(--ps-primary)' }} /> Interpolated JQL preview; not sent by this editor
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--ps-text-dim)' }}>
                           Dynamic evaluation from Step 2 teams & members
@@ -2517,7 +2680,7 @@ export const ProjectSetup: React.FC = () => {
                     <div>
                       <div className="ps-jql-preview-header">
                         <span className="ps-jql-preview-label">
-                          <CheckCircle2 size={12} style={{ color: '#22c55e' }} /> Live Interpolated JQL Sent to Jira API
+                          <Info size={12} style={{ color: 'var(--ps-primary)' }} /> Interpolated JQL preview; not sent by this editor
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--ps-text-dim)' }}>
                           Includes native Jira commentedBy & updated &gt;= -7d filter
@@ -2559,7 +2722,7 @@ export const ProjectSetup: React.FC = () => {
                     <div>
                       <div className="ps-jql-preview-header">
                         <span className="ps-jql-preview-label">
-                          <CheckCircle2 size={12} style={{ color: '#22c55e' }} /> Live Interpolated JQL Sent to Jira API
+                          <Info size={12} style={{ color: 'var(--ps-primary)' }} /> Interpolated JQL preview; not sent by this editor
                         </span>
                         {teamScope.amdocsTeamValues.length === 0 && (
                           <span style={{ fontSize: 10.5, color: '#f59e0b' }}>
@@ -2611,7 +2774,7 @@ export const ProjectSetup: React.FC = () => {
                     <div>
                       <div className="ps-jql-preview-header">
                         <span className="ps-jql-preview-label">
-                          <CheckCircle2 size={12} style={{ color: '#22c55e' }} /> Live Interpolated JQL for Environment Diagnosis
+                          <Info size={12} style={{ color: 'var(--ps-primary)' }} /> Interpolated JQL preview; not sent by this editor
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--ps-text-dim)' }}>
                           Queries {teamScope.environmentField || 'customfield_10291'} for {selectedEnvForJql}
@@ -2631,7 +2794,7 @@ export const ProjectSetup: React.FC = () => {
                   <div>
                     <h2 className="ps-card-title">3. Automated Schedules & Execution Mapping</h2>
                     <p className="ps-card-subtitle">
-                      Map background cron schedules directly to Dynamic JQL queries, approved custom Python runner scripts, or connector health probes.
+                      Record intended schedule mappings for review. This release has no durable background worker, so saved drafts do not start jobs.
                     </p>
                   </div>
                   <button
@@ -2780,7 +2943,7 @@ export const ProjectSetup: React.FC = () => {
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
                               <input
                                 type="checkbox"
-                                checked={scheduleForm.adminApproved ?? true}
+                                checked={scheduleForm.adminApproved ?? false}
                                 onChange={e => setScheduleForm({ ...scheduleForm, adminApproved: e.target.checked })}
                               />
                               <span>Admin Approved Script</span>
@@ -2792,7 +2955,7 @@ export const ProjectSetup: React.FC = () => {
                       {/* Capability Mapping Info */}
                       {scheduleForm.executionType === 'capability' && (
                         <div style={{ fontSize: 11.5, color: 'var(--ps-text-dim)', padding: '4px 0' }}>
-                          Executes registered native ADK capability <code>{scheduleForm.capability || 'capability.run'}</code> across configured connectors.
+                          Draft mapping for native ADK capability <code>{scheduleForm.capability || 'capability.run'}</code>; execution is not started by this editor.
                         </div>
                       )}
                     </div>
@@ -3058,7 +3221,7 @@ export const ProjectSetup: React.FC = () => {
                   className={`ps-subtab-btn ${step5Tab === 'connectors' ? 'active' : ''}`}
                   onClick={() => setStep5Tab('connectors')}
                 >
-                  <Database size={13} /> Connectors <span className="ps-subtab-count">{connectorInstances.length}</span>
+                  <Database size={13} /> Connectors <span className="ps-subtab-count">{persistedConnectors.length}</span>
                 </button>
                 <button
                   type="button"
@@ -3079,227 +3242,256 @@ export const ProjectSetup: React.FC = () => {
               {/* TAB 1: CONNECTORS */}
               {step5Tab === 'connectors' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    Connectors manage integration endpoints, authentication via secret references, and health probes.
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-                    {connectorInstances.map(conn => (
-                      <div
-                        key={conn.id}
-                        style={{
-                          padding: 16,
-                          border: '1px solid var(--line)',
-                          borderRadius: 8,
-                          background: 'var(--card-subtle)',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 10,
+                  {editingConnector ? (
+                    <div className="ps-connector-focus-canvas">
+                      <div className="ps-connector-breadcrumb-bar">
+                        <button
+                          type="button"
+                          className="ps-breadcrumb-back-btn"
+                          onClick={() => setEditingConnector(null)}
+                        >
+                          <ChevronLeft size={14} /> Back to Connectors &amp; Tools
+                        </button>
+                        <div className="ps-connector-editing-badge">
+                          <span>Configuring:</span>
+                          <code>{editingConnector.instance?.system_name || editingConnector.template?.name}</code>
+                        </div>
+                      </div>
+                      <ConnectorInstanceEditor
+                        projectId={projectId}
+                        template={editingConnector.template}
+                        instance={editingConnector.instance}
+                        availableEnvironments={environments.map(e => ({ id: e.id, name: e.displayName || e.id }))}
+                        principal={principal || undefined}
+                        onCancel={() => setEditingConnector(null)}
+                        onSave={saved => {
+                          setEditingConnector(current => current ? { ...current, instance: saved } : current);
+                          void loadProjectConnectors(projectId);
+                          setStatusNotice({ type: 'success', text: `Connector instance '${saved.instance_id}' persisted.` });
                         }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--tx)' }}>{conn.name}</div>
-                            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
-                              ID: {conn.id} · Type: <strong>{conn.type}</strong>
-                            </div>
+                      />
+                    </div>
+                  ) : isAddingConnector ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, background: 'var(--ps-card-subtle)', padding: 20, borderRadius: 10, border: '1px solid var(--ps-border-subtle)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ps-text-title)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Database size={16} style={{ color: 'var(--ps-primary)' }} />
+                            <span>Platform Connector Marketplace</span>
                           </div>
-                          <span className={`badge ${conn.healthStatus === 'HEALTHY' ? 'badge-active' : 'badge-failed'}`}>
-                            {conn.healthStatus || 'HEALTHY'}
-                          </span>
-                        </div>
-
-                        <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          <div>Scope: <strong style={{ color: 'var(--tx)' }}>{conn.scope}</strong></div>
-                          <div>Endpoint: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--tx)' }}>{conn.endpoint}</span></div>
-                          <div>Secret Ref: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--acc)' }}>{conn.secretRef}</span></div>
-                          <div>Latency: <strong>{conn.latencyMs ?? 50} ms</strong> · Timeout: <strong>{conn.timeoutSeconds}s</strong></div>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                          <label className="ps-switch-label" style={{ fontSize: 11 }}>
-                            <span className="ps-switch">
-                              <input
-                                type="checkbox"
-                                checked={conn.enabled}
-                                onChange={e => {
-                                  const checked = e.target.checked;
-                                  setConnectorInstances(prev =>
-                                    prev.map(c => (c.id === conn.id ? { ...c, enabled: checked } : c))
-                                  );
-                                }}
-                              />
-                              <span className="ps-slider" />
-                            </span>
-                            <span>Enabled</span>
-                          </label>
-
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={() => void handleTestConnector(conn)}
-                            disabled={testingConnectorId === conn.id}
-                            style={{ fontSize: 11, padding: '3px 10px' }}
-                          >
-                            <RefreshCw size={11} className={testingConnectorId === conn.id ? 'spin' : ''} />
-                            {testingConnectorId === conn.id ? 'Testing…' : 'Test Connection'}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Jira Custom Field Mappings (references/sample.yaml) */}
-                  <div
-                    style={{
-                      border: '1px solid var(--ps-border-subtle)',
-                      borderRadius: 8,
-                      background: 'var(--ps-card-bg)',
-                      padding: 16,
-                      marginTop: 8,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ps-text-title)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <FileCode size={15} style={{ color: 'var(--ps-primary)' }} />
-                          Jira Custom Field Mappings (18 Normalized Fields from sample.yaml)
-                        </div>
-                        <div style={{ fontSize: 11.5, color: 'var(--ps-text-muted)', marginTop: 2 }}>
-                          Instance-specific <code className="mono">customfield_*</code> mappings for triage, routing, and investigation.
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button
-                            type="button"
-                            className={`btn ${customFieldFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setCustomFieldFilter('all')}
-                            style={{ fontSize: 11, padding: '2px 8px' }}
-                          >
-                            All 18 Fields
-                          </button>
-                          <button
-                            type="button"
-                            className={`btn ${customFieldFilter === 'mandatory' ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setCustomFieldFilter('mandatory')}
-                            style={{ fontSize: 11, padding: '2px 8px' }}
-                          >
-                            Core Triage (6)
-                          </button>
+                          <div style={{ fontSize: 12.5, color: 'var(--ps-text-muted)', marginTop: 2 }}>
+                            Select a published platform connector template to configure a scoped project integration.
+                          </div>
                         </div>
                         <button
                           type="button"
                           className="btn btn-secondary"
-                          onClick={() => setShowCustomFieldMappings(!showCustomFieldMappings)}
-                          style={{ fontSize: 11, padding: '2px 8px' }}
+                          style={{ fontSize: 11.5, padding: '4px 10px' }}
+                          onClick={() => { setIsAddingConnector(false); setTemplateSearch(''); }}
                         >
-                          {showCustomFieldMappings ? 'Collapse Table' : 'Expand Table'}
+                          <X size={12} /> Close Marketplace
                         </button>
                       </div>
-                    </div>
 
-                    {showCustomFieldMappings && (
-                      <div className="ps-table-container" style={{ marginTop: 14 }}>
-                        <table className="ps-table">
-                          <thead>
-                            <tr>
-                              <th>Logical Name</th>
-                              <th>Field ID</th>
-                              <th>Jira Field Name</th>
-                              <th>Type</th>
-                              <th>Scope</th>
-                              <th>Mandatory</th>
-                              <th>Description</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {jiraCustomFields
-                              .filter(f => (customFieldFilter === 'mandatory' ? f.mandatory : true))
-                              .map(field => (
-                                <tr key={field.logical_name}>
-                                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--ps-primary)' }}>
-                                    {field.logical_name}
-                                  </td>
-                                  <td>
-                                    <span className="ps-cf-badge">{field.customfield_id}</span>
-                                  </td>
-                                  <td style={{ fontWeight: 600 }}>{field.jira_name}</td>
-                                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ps-text-muted)' }}>
-                                    {field.type}
-                                  </td>
-                                  <td>
-                                    <span className="badge badge-neutral" style={{ fontSize: 10 }}>
-                                      {field.scope}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    <span className={`badge ${field.mandatory ? 'badge-active' : 'badge-neutral'}`} style={{ fontSize: 10 }}>
-                                      {field.mandatory ? 'Mandatory' : 'Optional'}
-                                    </span>
-                                  </td>
-                                  <td style={{ fontSize: 11, color: 'var(--ps-text-muted)', maxWidth: 280 }}>
-                                    {field.description}
-                                  </td>
-                                </tr>
-                              ))}
-                          </tbody>
-                        </table>
+                      {/* Search and Category Filter Bar */}
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ position: 'relative', flex: '1 1 240px' }}>
+                          <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--ps-text-dim)' }} />
+                          <input
+                            type="text"
+                            placeholder="Filter connector templates…"
+                            value={templateSearch}
+                            onChange={e => setTemplateSearch(e.target.value)}
+                            className="ps-form-input"
+                            style={{ paddingLeft: 30, height: 34, fontSize: 12 }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {['all', 'itsm', 'telemetry', 'infra', 'mcp_a2a'].map(cat => (
+                            <button
+                              key={cat}
+                              type="button"
+                              className={`ps-sched-preset-btn ${templateCategoryFilter === cat ? 'active' : ''}`}
+                              style={{ fontSize: 11, padding: '4px 10px' }}
+                              onClick={() => setTemplateCategoryFilter(cat)}
+                            >
+                              {cat === 'all' ? 'All Integrations' : cat === 'itsm' ? 'ITSM' : cat === 'telemetry' ? 'Telemetry' : cat === 'infra' ? 'Infra / SCM' : 'MCP & A2A'}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    )}
-                  </div>
 
-                  {/* Connector Temporal Lookback Windows (references/sample.yaml) */}
-                  <div
-                    style={{
-                      border: '1px solid var(--ps-border-subtle)',
-                      borderRadius: 8,
-                      background: 'var(--ps-card-bg)',
-                      padding: 16,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ps-text-title)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Clock size={15} style={{ color: 'var(--ps-primary)' }} />
-                      Connector Investigation Lookback Windows (ISO-8601 Durations)
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
+                        {connectorTemplates
+                          .filter(tmpl => {
+                            if (templateSearch) {
+                              const q = templateSearch.toLowerCase();
+                              if (!tmpl.name.toLowerCase().includes(q) && !tmpl.system_name.toLowerCase().includes(q) && !(tmpl.description || '').toLowerCase().includes(q)) {
+                                return false;
+                              }
+                            }
+                            if (templateCategoryFilter === 'itsm') {
+                              return ['itsm', 'jira', 'confluence', 'qtest'].includes(tmpl.system_name);
+                            }
+                            if (templateCategoryFilter === 'telemetry') {
+                              return ['log_search', 'splunk', 'signalfx'].includes(tmpl.system_name);
+                            }
+                            if (templateCategoryFilter === 'infra') {
+                              return ['gitlab', 'oracle', 'kafka', 'unix', 'kubernetes'].includes(tmpl.system_name);
+                            }
+                            if (templateCategoryFilter === 'mcp_a2a') {
+                              return ['mcp', 'a2a'].includes(tmpl.system_name);
+                            }
+                            return true;
+                          })
+                          .map(tmpl => {
+                            const isBlocked = tmpl.availability === 'disabled_by_policy' || tmpl.system_name === 'oracle';
+                            return (
+                              <div
+                                key={tmpl.template_id || tmpl.system_name}
+                                className="ps-card"
+                                style={{
+                                  padding: 16,
+                                  background: isBlocked ? '#fef2f2' : 'var(--ps-card-bg)',
+                                  borderColor: isBlocked ? '#fca5a5' : 'var(--ps-border-subtle)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  justifyContent: 'space-between',
+                                  gap: 12,
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                    <span style={{ fontWeight: 700, fontSize: 13.5, color: isBlocked ? '#991b1b' : 'var(--ps-text-title)' }}>
+                                      {tmpl.name}
+                                    </span>
+                                    <span className={`badge ${isBlocked ? 'badge-failed' : tmpl.availability === 'published' ? 'badge-active' : 'badge-planned'}`} style={{ fontSize: 10 }}>
+                                      {isBlocked ? 'BLOCKED' : tmpl.availability?.toUpperCase() || 'PUBLISHED'}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--ps-text-dim)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span>Key: <code>{tmpl.system_name}</code></span>
+                                    <span>·</span>
+                                    <span>v{tmpl.version || '1.0.0'}</span>
+                                  </div>
+                                  <p style={{ fontSize: 11.5, color: isBlocked ? '#7f1d1d' : 'var(--ps-text-muted)', margin: '8px 0 0', lineHeight: 1.45 }}>
+                                    {isBlocked
+                                      ? 'Database querying is disabled by platform governance policy.'
+                                      : (tmpl.description || 'Platform connector integration.')}
+                                  </p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  className={`btn ${isBlocked ? 'btn-secondary' : 'btn-primary'}`}
+                                  style={{ fontSize: 11.5, padding: '6px 12px', width: '100%', justifyContent: 'center' }}
+                                  disabled={isBlocked}
+                                  onClick={() => {
+                                    setEditingConnector({ template: tmpl });
+                                    setIsAddingConnector(false);
+                                  }}
+                                >
+                                  {isBlocked ? 'Disabled by Policy' : 'Configure New Instance'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, fontSize: 12 }}>
-                      <div style={{ padding: 10, borderRadius: 6, background: 'var(--ps-card-subtle)', border: '1px solid var(--ps-border-subtle)' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--ps-text-title)' }}>Jira ITSM</div>
-                        <div style={{ color: 'var(--ps-text-muted)', marginTop: 4 }}>
-                          Discovery: <strong className="mono">P7D</strong> (7 days)<br />
-                          Analyst Activity: <strong className="mono">P7D</strong><br />
-                          Similarity Search: <strong className="mono">P365D</strong> (Adaptive)
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                          Project connectors provide typed credentials and bounded read-only queries for RCA investigations.
                         </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => setIsAddingConnector(true)}
+                          style={{ fontSize: 11.5, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 6 }}
+                        >
+                          <Plus size={13} /> Add Connector Instance
+                        </button>
                       </div>
-                      <div style={{ padding: 10, borderRadius: 6, background: 'var(--ps-card-subtle)', border: '1px solid var(--ps-border-subtle)' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--ps-text-title)' }}>Splunk Log Aggregation</div>
-                        <div style={{ color: 'var(--ps-text-muted)', marginTop: 4 }}>
-                          Initial Window: <strong className="mono">PT1H</strong> (±1 hour)<br />
-                          Adaptive: <strong className="mono">PT4H → PT12H → P1D</strong><br />
-                          Max Window: <strong className="mono">P1D</strong> lookback, <strong className="mono">PT2H</strong> lookahead
-                        </div>
+
+                      {/* Display Persisted DB Connector Instances if available, or fallback */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: 14 }}>
+                        {persistedConnectors.length > 0 ? (
+                          persistedConnectors.map(conn => {
+                            const matchingTmpl = connectorTemplates.find(
+                              t => t.system_name === conn.system_name || t.template_id === conn.template_id
+                            );
+                            const isBlocked = conn.system_name === 'oracle' || matchingTmpl?.availability === 'disabled_by_policy';
+                            return (
+                              <div
+                                key={conn.instance_id}
+                                style={{
+                                  padding: 16,
+                                  border: '1px solid var(--line)',
+                                  borderRadius: 8,
+                                  background: isBlocked ? '#fef2f2' : 'var(--card-subtle)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 10,
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                  <div>
+                                    <div style={{ fontWeight: 700, fontSize: 14, color: isBlocked ? '#991b1b' : 'var(--tx)' }}>
+                                      {conn.system_name}
+                                    </div>
+                                    <div style={{ fontSize: 11.5, color: isBlocked ? '#7f1d1d' : 'var(--muted)', marginTop: 2 }}>
+                                      Template: {matchingTmpl?.name || conn.template_id}
+                                    </div>
+                                    <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
+                                      ID: {conn.instance_id} · v{conn.template_version} · rev-{conn.revision}
+                                    </div>
+                                  </div>
+                                  <span className={`badge ${conn.enabled ? 'badge-active' : 'badge-planned'}`}>
+                                    {conn.enabled ? 'ENABLED' : 'DISABLED'}
+                                  </span>
+                                </div>
+
+                                <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <div>Endpoint: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--tx)' }}>{conn.definition_json?.endpoint || 'Not configured'}</span></div>
+                                  <div>Auth: <strong>{conn.definition_json?.auth_type || 'Not configured'}</strong></div>
+                                  <div>Status: <strong>{conn.status}</strong></div>
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setEditingConnector({ instance: conn, template: matchingTmpl })}
+                                    style={{ fontSize: 11, padding: '3px 10px', display: 'flex', alignItems: 'center', gap: 4 }}
+                                  >
+                                    <Edit3 size={11} /> Configure
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => void handleDeleteConnector(conn.instance_id)}
+                                    style={{ fontSize: 11, padding: '3px 8px', color: '#dc2626' }}
+                                    title="Delete connector instance"
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="gate-callout warning" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+                            <Info size={16} />
+                            <div>No connector instances are persisted for this authenticated project. Choose <strong>Add Connector Instance</strong> to start from a published template.</div>
+                          </div>
+                        )}
                       </div>
-                      <div style={{ padding: 10, borderRadius: 6, background: 'var(--ps-card-subtle)', border: '1px solid var(--ps-border-subtle)' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--ps-text-title)' }}>SignalFx APM</div>
-                        <div style={{ color: 'var(--ps-text-muted)', marginTop: 4 }}>
-                          Trace Window: <strong className="mono">PT2H</strong> (±2 hours)<br />
-                          Max Lookback: <strong className="mono">P1D</strong><br />
-                          Correlates span errors &amp; service graph
-                        </div>
-                      </div>
-                      <div style={{ padding: 10, borderRadius: 6, background: 'var(--ps-card-subtle)', border: '1px solid var(--ps-border-subtle)' }}>
-                        <div style={{ fontWeight: 700, color: 'var(--ps-text-title)' }}>Oracle DB &amp; Kafka</div>
-                        <div style={{ color: 'var(--ps-text-muted)', marginTop: 4 }}>
-                          Oracle: <strong className="mono">P1D</strong> window, <strong className="mono">PT1H</strong> probe<br />
-                          Kafka: <strong className="mono">PT2H</strong> window, <strong className="mono">500</strong> records<br />
-                          Kubernetes: <strong className="mono">P1D</strong> event window
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                    </>
+                  )}
+
                 </div>
               )}
 
@@ -3397,16 +3589,16 @@ export const ProjectSetup: React.FC = () => {
             </div>
           )}
 
-          {/* STEP 6: REVIEW & DEPLOY */}
+          {/* STEP 6: REVIEW & SAVE */}
           {currentStep === 6 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               {/* 3-Tier Validation Scorecard */}
               <div className="ps-card">
                 <div className="ps-card-header">
                   <div>
-                    <h2 className="ps-card-title">Configuration Readiness & 3-Tier Validation</h2>
+                    <h2 className="ps-card-title">Review configuration</h2>
                     <p className="ps-card-subtitle">
-                      Evaluates schema structure, governance delegation, and operational mapping completeness before deployment.
+                      Check the saved configuration for structure, policy, and operational readiness before saving.
                     </p>
                   </div>
                   <button
@@ -3421,37 +3613,37 @@ export const ProjectSetup: React.FC = () => {
 
                 <div className="ps-scorecard-grid">
                   <div className="ps-scorecard-card">
-                    <span className="ps-scorecard-label">1. Schema Validation</span>
-                    <span className="ps-scorecard-status pass">
-                      <CheckCircle2 size={16} /> PASS
+                    <span className="ps-scorecard-label">Structure checks</span>
+                    <span className={`ps-scorecard-status ${validationScores.schemaPass ? 'pass' : 'warn'}`}>
+                      {validationScores.schemaPass ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />} {validationScores.schemaPass ? 'PASS' : 'PARTIAL'}
                     </span>
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>PrismProjectConfiguration 1.0</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>Project metadata and at least one active environment</span>
                   </div>
 
                   <div className="ps-scorecard-card">
-                    <span className="ps-scorecard-label">2. Governance Validation</span>
-                    <span className="ps-scorecard-status pass">
-                      <CheckCircle2 size={16} /> PASS
+                    <span className="ps-scorecard-label">Policy checks</span>
+                    <span className={`ps-scorecard-status ${validationScores.governancePass ? 'pass' : 'warn'}`}>
+                      {validationScores.governancePass ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />} {validationScores.governancePass ? 'PASS' : 'PARTIAL'}
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>Platform policies & secret refs</span>
                   </div>
 
                   <div className="ps-scorecard-card">
-                    <span className="ps-scorecard-label">3. Operational Validation</span>
+                    <span className="ps-scorecard-label">Operational checks</span>
                     <span className={`ps-scorecard-status ${validationScores.operationalPass ? 'pass' : 'warn'}`}>
                       <CheckCircle2 size={16} /> {validationScores.operationalPass ? 'PASS' : 'PARTIAL'}
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                      {validationScores.mappedEnvCount} mapped · {validationScores.healthyConnectors} healthy
+                      {validationScores.mappedEnvCount} mapped · {validationScores.enabledConnectorCount} enabled; health tests are separate
                     </span>
                   </div>
 
                   <div className="ps-scorecard-card">
-                    <span className="ps-scorecard-label">Overall Readiness</span>
-                    <span className="ps-scorecard-status pass" style={{ color: 'var(--acc)' }}>
-                      {validationScores.score}% READY
+                    <span className="ps-scorecard-label">Overall readiness</span>
+                    <span className={`ps-scorecard-status ${validationScores.score === 100 ? 'pass' : 'warn'}`} style={{ color: 'var(--acc)' }}>
+                      {validationScores.score}% CONFIGURATION SCORE
                     </span>
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>All critical stages configured</span>
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>Run backend validation before saving; this check does not test live connectors.</span>
                   </div>
                 </div>
               </div>
@@ -3462,7 +3654,7 @@ export const ProjectSetup: React.FC = () => {
                   <div>
                     <h2 className="ps-card-title">Generated PRISM Project Configuration YAML</h2>
                     <p className="ps-card-subtitle">
-                      Production declarative artifact conforming to references/sample.yaml structure.
+                      Generated from the current saved project values and ready to validate before saving.
                     </p>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -3485,12 +3677,12 @@ export const ProjectSetup: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      className="btn btn-primary"
+                      className="btn btn-secondary"
                       onClick={() => void handleSave()}
                       disabled={saving || !principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role))}
                       style={{ fontSize: 12 }}
                     >
-                      <Save size={13} /> {saving ? 'Saving…' : 'Save & Deploy Project'}
+                      <Save size={13} /> {saving ? 'Saving…' : 'Save configuration'}
                     </button>
                   </div>
                 </div>
@@ -3501,8 +3693,24 @@ export const ProjectSetup: React.FC = () => {
           )}
         </main>
 
-        {/* Right Sidebar Column */}
-        <aside className="ps-sidebar-col">
+        {/* Inline configuration preview panel */}
+        {showSidebar && (
+          <aside className="ps-sidebar-col">
+            <div className="ps-sidebar-header-row">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13, color: 'var(--ps-text-title)' }}>
+                <Code size={14} style={{ color: 'var(--ps-primary)' }} />
+                <span>Configuration preview &amp; status</span>
+              </div>
+              <button
+                type="button"
+                className="ps-panel-close-btn"
+                onClick={() => setShowSidebar(false)}
+                title="Close configuration preview"
+                aria-label="Close configuration preview"
+              >
+                <X size={14} />
+              </button>
+            </div>
           {/* Live Contextual YAML Preview Card (Primary on Step 1, Step 6, or toggled on Steps 2-5) */}
           {(currentStep === 1 || currentStep === 6 || showQuickYaml) && (
             <div className="ps-preview-card">
@@ -3617,7 +3825,7 @@ export const ProjectSetup: React.FC = () => {
           {currentStep === 5 && (
             <div className="ps-guidelines-card">
               <div className="ps-guidelines-title">
-                <Info size={14} style={{ color: 'var(--ps-primary)' }} /> Connector &amp; Tool Architecture
+                <Info size={14} style={{ color: 'var(--ps-primary)' }} /> Connections and tools
               </div>
               <ul className="ps-guidelines-list">
                 <li><b>Connector ≠ Tool ≠ Tool Env ≠ Project Env</b>.</li>
@@ -3628,17 +3836,14 @@ export const ProjectSetup: React.FC = () => {
             </div>
           )}
 
-          {/* Configuration Completeness Card */}
+          {/* Configuration Progress Card */}
           <div className="ps-completeness-card">
             <div className="ps-completeness-header">
-              <span>Configuration Completeness</span>
-              <span style={{ fontWeight: 700 }}>{completenessPercentage}%</span>
-            </div>
-            <div className="ps-progress-bar-wrap">
-              <div className="ps-progress-bar-fill" style={{ width: `${completenessPercentage}%` }} />
+              <span>Configuration progress</span>
+              <span style={{ fontWeight: 700 }}>Step {currentStep} of 6</span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--ps-text-dim)' }}>
-              {currentStep} of 6 steps completed
+              Use the stepper to move between sections. Save when the review is complete.
             </div>
           </div>
 
@@ -3664,6 +3869,7 @@ export const ProjectSetup: React.FC = () => {
             </div>
           )}
         </aside>
+      )}
       </div>
 
       {/* Bottom About Banner */}
@@ -3675,9 +3881,6 @@ export const ProjectSetup: React.FC = () => {
             including environments, connectors, time policies, and routing rules. You can modify these settings later.
           </div>
         </div>
-        <a href="#documentation" className="ps-bottom-banner-link">
-          View Documentation <ExternalLink size={12} />
-        </a>
       </footer>
     </div>
   );

@@ -1,12 +1,14 @@
 import type {
   Principal, AgentConfiguration, Run, ToolDefinition, AuditLog, SystemHealth, SystemDiagnostics, CapabilityItem, ConnectorTemplateItem, RuntimeConfig,
+  ProjectConnectorInstanceItem, CandidateTestResponse,
   ConnectorsHealthResponse, AlertsResponse, NotificationsResponse, ProjectSetupResponse,
   ParameterDefinitionRow,
   ConnectorHealthRecord, SkillItem, SkillSaveResponse, ProjectValidationResult, ConnectionTestResponse,
   HarnessResponse, HarnessSelection,
   UserItem, UserPayload, RoleItem, RolePayload, BillingConfig, BillingPayload,
-  PolicyConfig, RedactionPattern, FileLimitsConfig, CleanupResult, KnowledgeItem, KnowledgePayload,
-  RuntimeStageItem, RuntimeStagePayload, CustomAlertPayload, AlertConfig, PlatformSettingsConfig
+  PolicyConfig, FileLimitsConfig, CleanupResult, KnowledgeItem, KnowledgePayload,
+  RuntimeStageItem, RuntimeStagePayload, CustomAlertPayload, AlertConfig, PlatformSettingsConfig,
+  ProjectRedactionPolicy, RedactionPreviewResponse
 } from '../types/api';
 // Session credentials stay in memory; discard storage left by older builds.
 let inMemoryToken: string | null = null;
@@ -33,6 +35,12 @@ function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run
 function mapAgent(raw: any): AgentConfiguration { const d = raw.definition || raw; return { id: raw.draft_id || d.id, name: d.name, role: 'Specialist', description: d.description || '', status: raw.status === 'APPROVED' ? 'active' : raw.status === 'PENDING' ? 'pending' : raw.status === 'REVOKED' ? 'deprecated' : 'draft', model: d.model_profile || d.stage_model || 'configured', temperature: 0, thinking_budget: 0, max_steps: 0, tools: [...(d.tools || [])], permissions: [], rag_sources: [], prompt: d.instruction || '', accuracy: 0, hallucination_rate: 0, avg_latency_sec: 0, version: d.version || '', updated_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', author: raw.author_subject, content_hash: raw.content_hash, approved_by: raw.reviewer_subject, rejection_reason: raw.review_reason }; }
 export async function fetchHealth(): Promise<SystemHealth> { const started = performance.now(); const data = await request<any>('/api/v1/health'); return { status: data.status, latency_ms: Math.round(performance.now() - started), tenant_id: data.tenant_id, project_id: data.project_id, mode: data.mode, active_runs: data.active_runs, total_runs: data.total_runs, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 }; }
 export async function fetchPrincipal(): Promise<Principal> { return request<Principal>('/api/v1/me'); }
+export async function fetchProjectRedaction(): Promise<ProjectRedactionPolicy> {
+  return request<ProjectRedactionPolicy>('/api/v1/project/redaction');
+}
+export async function previewProjectRedaction(text: string): Promise<RedactionPreviewResponse> {
+  return request<RedactionPreviewResponse>('/api/v1/project/redaction/preview', { method: 'POST', body: { text } });
+}
 export async function fetchAgents(): Promise<AgentConfiguration[]> { return (await request<any[]>('/api/v1/agent-configurations')).map(mapAgent); }
 export async function submitAgentYaml(yaml: string): Promise<AgentConfiguration> { return mapAgent(await request('/api/v1/agent-configurations', { method: 'POST', body: { yaml } })); }
 export async function approveAgent(id: string, expectedHash: string, reason: string) { return mapAgent(await request(`/api/v1/agent-configurations/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { expected_hash: expectedHash, reason } })); }
@@ -48,7 +56,49 @@ export async function uploadInvestigationFiles(files: File[], chatId?: string): 
 export async function triggerRun(capability: string, prompt: string, incidentId?: string, attachmentIds: string[] = [], chatId?: string): Promise<Run> { return mapRun(await request('/api/v1/runs', { method: 'POST', body: { capability, prompt, incident_id: incidentId || null, chat_id: chatId || null, attachment_ids: attachmentIds } })); }
 export async function fetchCapabilities(all = false): Promise<CapabilityItem[]> { return request<CapabilityItem[]>(`/api/v1/capabilities${all ? '?all=true' : ''}`); }
 export async function fetchTools(): Promise<ToolDefinition[]> { return request<ToolDefinition[]>('/api/v1/tools'); }
-export async function fetchConnectorTemplates(): Promise<ConnectorTemplateItem[]> { return request<ConnectorTemplateItem[]>('/api/v1/tools/templates'); }
+export async function fetchConnectorTemplates(status?: string): Promise<ConnectorTemplateItem[]> {
+  return request<ConnectorTemplateItem[]>(`/api/v1/connectors/templates${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+}
+export async function fetchConnectorTemplate(id: string, version?: string): Promise<ConnectorTemplateItem> {
+  return request<ConnectorTemplateItem>(`/api/v1/connectors/templates/${encodeURIComponent(id)}${version ? `?version=${encodeURIComponent(version)}` : ''}`);
+}
+export async function saveConnectorTemplate(payload: { template_id: string; version: string; status: string; definition: any }): Promise<any> {
+  return request('/api/v1/connectors/templates', { method: 'POST', body: payload });
+}
+export async function publishConnectorTemplate(id: string, version = '1.0.0'): Promise<any> {
+  return request(`/api/v1/connectors/templates/${encodeURIComponent(id)}/publish?version=${encodeURIComponent(version)}`, { method: 'POST' });
+}
+export async function deprecateConnectorTemplate(id: string, version = '1.0.0'): Promise<any> {
+  return request(`/api/v1/connectors/templates/${encodeURIComponent(id)}/deprecate?version=${encodeURIComponent(version)}`, { method: 'POST' });
+}
+export async function fetchProjectConnectors(projectId: string): Promise<ProjectConnectorInstanceItem[]> {
+  return request<ProjectConnectorInstanceItem[]>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`);
+}
+export async function getProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
+  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}`);
+}
+export async function saveProjectConnector(projectId: string, payload: any): Promise<ProjectConnectorInstanceItem> {
+  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`, { method: 'POST', body: payload });
+}
+export async function enableProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
+  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/enable`, { method: 'POST' });
+}
+export async function disableProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
+  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/disable`, { method: 'POST' });
+}
+export async function deleteProjectConnector(projectId: string, instanceId: string): Promise<{ status: string; instance_id: string }> {
+  return request<{ status: string; instance_id: string }>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
+}
+export async function validateConnectorCandidate(candidate: Record<string, any>): Promise<{ valid: boolean; errors: string[]; candidate_hash: string }> {
+  return request('/api/v1/connectors/validate', { method: 'POST', body: { candidate } });
+}
+export async function testConnectorCandidate(candidate: Record<string, any>, operation = 'test_connection'): Promise<CandidateTestResponse> {
+  return request<CandidateTestResponse>('/api/v1/connectors/test', { method: 'POST', body: { candidate, operation } });
+}
+export async function discoverConnectorFields(projectId: string, instanceId: string, environmentId?: string): Promise<{ fields: { id: string; name: string }[] }> {
+  const query = environmentId ? `?environment_id=${encodeURIComponent(environmentId)}` : '';
+  return request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/fields${query}`);
+}
 export async function fetchConnectorsHealth(): Promise<ConnectorsHealthResponse> { return request<ConnectorsHealthResponse>('/api/v1/connectors/health'); }
 export async function fetchConnectorHealthCheck(connector: string): Promise<ConnectorHealthRecord> {
   return request<ConnectorHealthRecord>(`/api/v1/connectors/${encodeURIComponent(connector)}/health`);
@@ -107,6 +157,13 @@ export async function triggerRetentionCleanup(): Promise<CleanupResult> { return
 
 export async function fetchKnowledge(): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge'); }
 export async function createKnowledgeDoc(payload: KnowledgePayload): Promise<KnowledgeItem> { return request('/api/v1/knowledge', { method: 'POST', body: payload }); }
+export async function uploadKnowledgeDoc(file: File, title: string, category?: string): Promise<KnowledgeItem> {
+  const body = new FormData();
+  body.append('file', file);
+  body.append('title', title);
+  if (category?.trim()) body.append('category', category.trim());
+  return request<KnowledgeItem>('/api/v1/knowledge/upload', { method: 'POST', body });
+}
 export async function updateKnowledgeDoc(id: string, payload: KnowledgePayload): Promise<KnowledgeItem> { return request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
 export async function deleteKnowledgeDoc(id: string): Promise<void> { await request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 
@@ -135,6 +192,10 @@ export async function updateUiSettings(payload: Omit<import('../types/api').UiSe
 
 export async function fetchConfig(): Promise<RuntimeConfig> { return request<RuntimeConfig>('/api/v1/config'); }
 export async function fetchParameters(view?: 'project'): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>(view ? `/api/v1/parameters?view=${view}` : '/api/v1/parameters'); }
+export async function fetchParameterTaxonomy(): Promise<Record<string, string[]>> {
+  const res = await request<{ categories: Record<string, string[]> }>('/api/v1/parameters/taxonomy');
+  return res.categories;
+}
 export async function fetchOptimizations(): Promise<any[]> { return request('/api/v1/optimizations'); }
 export async function createOptimization(body: unknown): Promise<any> { return request('/api/v1/optimizations', { method: 'POST', body }); }
 export async function reviewOptimization(id: string, approve: boolean, expectedHash: string, reason: string): Promise<any> { return request(`/api/v1/optimizations/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { expected_hash: expectedHash, reason } }); }
@@ -146,6 +207,10 @@ export async function defineParameter(tool: string, name: string, body: {
   allow_project_override: boolean;
   scope?: 'platform' | 'project' | 'platform_only';
   icon: string;
+  category?: string;
+  subcategory?: string | null;
+  allowed_values?: unknown[] | null;
+  enabled?: boolean;
   expected_revision: number;
 }): Promise<{ revision: number; restart_required?: boolean }> {
   return request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/definition`, { method: 'PUT', body });

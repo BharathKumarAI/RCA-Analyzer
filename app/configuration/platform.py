@@ -13,6 +13,79 @@ from app.configuration.models import ConnectorTemplate
 STAGES = {"triage", "logs", "extraction", "synthesis", "router", "orchestrator"}
 
 
+def _normalize_legacy_connector_template(row: dict) -> dict:
+    """Add project identity metadata while reading pre-schema catalog bundles.
+
+    Older bundles contain operational connector defaults but no project-instance
+    fields. Keep those values intact and synthesize only the three required form
+    fields in memory. Publication still validates the complete typed contract.
+    """
+    existing_fields = row.get("parameter_fields")
+    existing_names = {
+        field.get("variable_name")
+        for field in existing_fields
+        if isinstance(field, dict)
+    } if isinstance(existing_fields, list) else set()
+    if "availability" in row and {
+        "system_name",
+        "environment_dependency",
+        "tool_environment",
+    } <= existing_names:
+        return row
+    normalized = dict(row)
+    display_name = normalized.get("name") or normalized.get("system_name")
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise ValueError("Legacy connector templates require a display name")
+    existing = normalized.get("parameter_fields")
+    fields = list(existing) if isinstance(existing, list) else []
+    names = {field.get("variable_name") for field in fields if isinstance(field, dict)}
+    core = (
+        {
+            "variable_name": "system_name",
+            "label": "System Name",
+            "description": "Project-defined connector instance name.",
+            "value_type": "string",
+            "default_value": display_name,
+            "required": True,
+            "allow_project_override": True,
+            "visible_in_project": True,
+            "ownership": "project_only",
+            "category": "operational",
+            "icon": "tag",
+        },
+        {
+            "variable_name": "environment_dependency",
+            "label": "Environment Dependent/Independent",
+            "description": "Whether this connector is mapped per project environment.",
+            "value_type": "string",
+            "default_value": "independent",
+            "allowed_values": ["dependent", "independent"],
+            "required": True,
+            "allow_project_override": True,
+            "visible_in_project": True,
+            "ownership": "project_only",
+            "category": "operational",
+            "icon": "layers",
+        },
+        {
+            "variable_name": "tool_environment",
+            "label": "Tool Environment",
+            "description": "Authorized external tool environment; Shared for independent connectors.",
+            "value_type": "string",
+            "default_value": "Shared",
+            "required": True,
+            "allow_project_override": True,
+            "visible_in_project": True,
+            "ownership": "project_only",
+            "category": "operational",
+            "icon": "globe",
+        },
+    )
+    fields.extend(field for field in core if field["variable_name"] not in names)
+    normalized["parameter_fields"] = fields
+    return normalized
+
+
 @dataclass(frozen=True)
 class PlatformConfiguration:
     registry: CapabilityRegistry
@@ -35,7 +108,12 @@ class PlatformConfiguration:
             rows = read("connector_templates.yaml")
             if not isinstance(rows, list):
                 raise ValueError("connector_templates.yaml must define a list")
-            return [ConnectorTemplate.model_validate(row) for row in rows]
+            if not all(isinstance(row, dict) for row in rows):
+                raise ValueError("connector_templates.yaml entries must be objects")
+            return [
+                ConnectorTemplate.model_validate(_normalize_legacy_connector_template(row))
+                for row in rows
+            ]
 
         registry = registry or CapabilityRegistry(
             str(settings.content_root / "capabilities"), settings.projects_root

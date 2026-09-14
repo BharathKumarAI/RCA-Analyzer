@@ -17,6 +17,7 @@ from google.genai import types
 from app.agents.root import build_root_agent
 from app.capabilities.resolver import CapabilityResolver, required_connector_error
 from app.connectors.health import CheckStatus, ConnectorHealth
+from app.connectors.providers.registry import resolve_project_connector
 from app.configuration.platform import PlatformConfiguration
 from app.configuration.models import ExecutionLimits
 from app.observability.otel import get_tracer
@@ -48,6 +49,10 @@ class ExecutionRunner:
         optimization_service=None,
         platform=None,
         chat_artifacts=None,
+        connector_instance_store=None,
+        connector_secret_references=None,
+        connector_allowed_hosts=None,
+        connector_enabled_adapters=None,
     ):
         self.settings, self.registry, self.store, self.connectors = (
             settings,
@@ -56,6 +61,11 @@ class ExecutionRunner:
             connectors,
         )
         self.chat_artifacts = chat_artifacts
+        self.connector_instance_store = connector_instance_store
+        self.connector_secret_references = connector_secret_references
+        self.connector_allowed_hosts = connector_allowed_hosts
+        self.connector_enabled_adapters = connector_enabled_adapters
+        self._run_connectors: dict[str, list] = {}
         self.harness = registry.harness
         self.configuration_service = configuration_service
         self.model_factory = model_factory
@@ -94,7 +104,9 @@ class ExecutionRunner:
             self._run_limit = new_limit
         self.settings = settings
 
-    async def health(self, connector_names=None):
+    async def health(self, connector_names=None, connectors=None):
+        connectors = self.connectors if connectors is None else connectors
+
         async def probe(name, connector):
             try:
                 async with asyncio.timeout(self.settings.health_timeout_seconds):
@@ -111,11 +123,150 @@ class ExecutionRunner:
             await asyncio.gather(
                 *(
                     probe(name, connector)
-                    for name, connector in self.connectors.items()
+                    for name, connector in connectors.items()
                     if connector_names is None or name in connector_names
                 )
             )
         )
+
+    async def _connectors_for_run(self, principal, connector_names, required_connectors=None):
+        """Overlay enabled, project-scoped instances onto deployment clients."""
+        if self.connector_instance_store is None:
+            return self.connectors, []
+        instances = await self.connector_instance_store.list_project_connector_instances(
+            principal.tenant_id, principal.project_id
+        )
+        managed: dict[str, list[dict]] = {}
+        required_connectors = set(required_connectors or ())
+        project = self.registry.inheritance.project(principal)
+        active_project_environments = {
+            environment.id
+            for environment in project.environments
+            if environment.enabled
+        } if project else set()
+        for instance in instances:
+            adapter = instance.get("provider_adapter_id") or instance.get("template_id")
+            if adapter in connector_names:
+                managed.setdefault(adapter, []).append(instance)
+
+        resolved = dict(self.connectors)
+        created = []
+
+        async def close_created():
+            await asyncio.gather(
+                *(item.aclose() for item in created if hasattr(item, "aclose")),
+                return_exceptions=True,
+            )
+
+        for adapter, candidates in managed.items():
+            is_required = adapter in required_connectors
+            template_id = candidates[0].get("template_id") if candidates else adapter
+            template_version = candidates[0].get("template_version", "1.0.0") if candidates else "1.0.0"
+            current_template = next(
+                (
+                    item for item in getattr(self.platform, "connector_templates", ())
+                    if (item.system_name == template_id or item.type == template_id)
+                    and getattr(item, "version", "1.0.0") == template_version
+                ),
+                None,
+            )
+            if (
+                current_template is None
+                or getattr(current_template, "availability", "published") != "published"
+                or not getattr(current_template, "platform_enabled", True)
+                or not getattr(current_template, "is_enabled_by_policy", True)
+            ):
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' uses an unavailable or mismatched template version"
+                )
+            if self.connector_enabled_adapters is not None and adapter not in self.connector_enabled_adapters:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' is disabled by deployment configuration"
+                )
+            enabled = [
+                item for item in candidates
+                if item.get("status") == "enabled" and item.get("enabled") is True
+            ]
+            if len(enabled) != 1:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' requires exactly one enabled project instance; "
+                    "an explicit authenticated selector is required for multiple instances"
+                )
+            instance = enabled[0]
+            definition = instance.get("definition_json") or {}
+            dependency = definition.get("environment_dependency") or instance.get("environment_dependency")
+            bindings = [
+                binding for binding in instance.get("bindings", [])
+                if isinstance(binding, dict) and binding.get("status", "active") == "active"
+            ]
+            all_bindings = [
+                binding for binding in instance.get("bindings", [])
+                if isinstance(binding, dict)
+            ]
+            invalid_environments = {
+                binding.get("project_env_id")
+                for binding in all_bindings
+                if binding.get("project_env_id") not in active_project_environments
+            }
+            if invalid_environments:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                invalid = ", ".join(sorted(value or "<missing>" for value in invalid_environments))
+                raise PermissionError(
+                    f"Connector '{adapter}' references inactive or out-of-scope project environments: {invalid}"
+                )
+            environment_id = None
+            if dependency == "dependent":
+                if len(bindings) != 1 or not bindings[0].get("project_env_id"):
+                    if not is_required:
+                        resolved.pop(adapter, None)
+                        continue
+                    await close_created()
+                    raise PermissionError(
+                        f"Connector '{adapter}' has ambiguous environment bindings; "
+                        "an authenticated environment selector is required"
+                    )
+                environment_id = bindings[0]["project_env_id"]
+            try:
+                provider = resolve_project_connector(
+                    instance,
+                    environment_id=environment_id,
+                    deployment_tenant_id=principal.tenant_id,
+                    deployment_project_id=principal.project_id,
+                    allowed_secret_references=self.connector_secret_references,
+                    allowed_hosts=self.connector_allowed_hosts,
+                )
+            except Exception:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise
+            resolved[adapter] = provider
+            created.append(provider)
+        return resolved, created
+
+    async def _close_run_connectors(self, run_id: str):
+        providers = self._run_connectors.pop(run_id, [])
+        if providers:
+            await asyncio.gather(
+                *(provider.aclose() for provider in providers if hasattr(provider, "aclose")),
+                return_exceptions=True,
+            )
 
     async def execute(
         self, principal, request: RunRequest, capability_id: str, idempotency_key=None, on_created=None
@@ -386,6 +537,7 @@ class ExecutionRunner:
                             cancelled=response.status == "CANCELLED"
                         ))
                     finally:
+                        await self._close_run_connectors(contract.run_id)
                         self.tasks.pop(contract.run_id, None)
                 record_run_metrics(
                     span,
@@ -425,7 +577,11 @@ class ExecutionRunner:
         connector_names = set(capability.requires.connectors) | {
             action.split(".", 1)[0] for action in capability.allowed_actions
         }
-        health = await self.health(connector_names)
+        runtime_connectors, created_connectors = await self._connectors_for_run(
+            principal, connector_names, capability.requires.connectors
+        )
+        self._run_connectors[contract.run_id] = created_connectors
+        health = await self.health(connector_names, runtime_connectors)
         reason = required_connector_error(capability, health)
         if reason:
             return await self.store.update_run(
@@ -449,7 +605,7 @@ class ExecutionRunner:
             )
         usable = {
             name: connector
-            for name, connector in self.connectors.items()
+            for name, connector in runtime_connectors.items()
             if name in health and health[name].overall == CheckStatus.HEALTHY
         }
         for name in capability.optional.connectors:

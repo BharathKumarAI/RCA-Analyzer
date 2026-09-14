@@ -52,6 +52,11 @@
   background: var(--card-subtle);
 }
 
+.iam-tab-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
 .iam-tab-btn.active {
   color: var(--acc);
   background: var(--acc-subtle);
@@ -79,74 +84,100 @@
   gap: 8px;
 }
 
-/* IAM Stat Bar */
-.iam-stat-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 12px;
-}
-
-.iam-stat-box {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 16px;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  transition: border-color 0.15s ease, transform 0.15s ease;
-}
-
-.iam-stat-box:hover {
-  border-color: var(--line-strong, rgba(255, 255, 255, 0.15));
-  transform: translateY(-1px);
-}
-
-.iam-stat-icon-wrapper {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+/* Compact IAM Control Header */
+.iam-control-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.iam-header-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.iam-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.iam-page-title {
+  font-size: 16px;
+  font-weight: 750;
+  color: var(--text);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.iam-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: #10b981;
+  font-weight: 600;
+}
+
+.iam-header-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.iam-metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 16px;
   background: var(--card-subtle);
   border: 1px solid var(--line);
+  color: var(--text);
 }
 
-.iam-stat-icon-wrapper.indigo { background: rgba(99, 102, 241, 0.12); color: #818cf8; border-color: rgba(99, 102, 241, 0.25); }
-.iam-stat-icon-wrapper.emerald { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.25); }
-.iam-stat-icon-wrapper.amber { background: rgba(245, 158, 11, 0.12); color: #fbbf24; border-color: rgba(245, 158, 11, 0.25); }
-.iam-stat-icon-wrapper.purple { background: rgba(168, 85, 247, 0.12); color: #c084fc; border-color: rgba(168, 85, 247, 0.25); }
-
-.iam-stat-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.iam-stat-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.iam-stat-number {
-  font-size: 20px;
+.iam-metric-pill strong {
   font-weight: 700;
   color: var(--text);
-  line-height: 1.2;
 }
 
-.iam-stat-caption {
-  font-size: 11px;
+.iam-metric-label {
   color: var(--muted);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.iam-metric-pill.user-session {
+  background: var(--card-subtle);
+}
+
+.iam-session-role {
+  font-size: 10px;
+  color: var(--acc);
+  font-family: var(--mono);
+  background: var(--acc-subtle);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.iam-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Toolbar & Filter Bar */
@@ -189,6 +220,91 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.iam-filter-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.iam-filter-select {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.iam-filter-select:hover,
+.iam-filter-select:focus {
+  border-color: var(--acc);
+}
+
+.iam-status-segmented {
+  display: inline-flex;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.iam-segmented-btn {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 550;
+  transition: all 0.12s ease;
+}
+
+.iam-segmented-btn:hover {
+  color: var(--text);
+}
+
+.iam-segmented-btn.active {
+  background: var(--card);
+  color: var(--text);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.iam-clear-search-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.iam-clear-search-btn:hover {
+  color: var(--text);
+}
+
+.iam-reset-filters-btn {
+  padding: 4px 8px;
+  font-size: 11.5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.iam-reset-filters-btn:hover {
+  color: var(--text);
 }
 
 .iam-filter-chip {
@@ -248,7 +364,7 @@
 /* User Card Grid */
 .iam-user-cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
 }
 
@@ -402,8 +518,83 @@
   justify-content: space-between;
   padding-top: 10px;
   border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.iam-avatar-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--card);
+}
+
+.iam-avatar-dot.active {
+  background: #10b981;
+}
+
+.iam-avatar-dot.inactive {
+  background: #9ca3af;
+}
+
+.iam-user-id-badge {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--muted);
+  background: var(--card-subtle);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  display: inline-block;
+  align-self: flex-start;
+}
+
+.iam-auth-badge {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  opacity: 0.85;
+}
+
+.iam-email-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.iam-no-email {
+  font-style: italic;
+  opacity: 0.65;
+}
+
+.iam-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.iam-cap-note {
   font-size: 11px;
   color: var(--muted);
+  line-height: 1.45;
+  margin: 4px 0 8px;
+}
+
+.iam-caps-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 10px;
+  text-align: center;
+  background: var(--card-subtle);
+  border-radius: 6px;
+  border: 1px solid var(--line);
 }
 
 .iam-status-dot {
@@ -428,6 +619,123 @@
   .iam-master-detail {
     grid-template-columns: 1fr;
   }
+}
+
+/* Dedicated Roles Master-Detail: Fluid Master and Fluid Dossier */
+.iam-roles-master-detail {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+@media (max-width: 1120px) {
+  .iam-roles-master-detail {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .iam-role-list-pane {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+  }
+}
+
+.iam-roles-master-detail .iam-detail-card {
+  position: static;
+  top: auto;
+}
+
+/* Dossier Inner Multi-Column Grid */
+.iam-dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.iam-dossier-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.iam-descriptive-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.iam-resp-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  list-style: none;
+  padding: 0;
+}
+
+.iam-resp-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  padding: 6px 10px;
+  background: var(--card-subtle);
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+/* Matrix Toolbar & Filters */
+.iam-matrix-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  background: var(--card-subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.iam-matrix-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  min-width: 240px;
+  max-width: 380px;
+  flex: 1;
+}
+
+.iam-matrix-search input {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  width: 100%;
+  outline: none;
+}
+
+.iam-matrix-meta-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .iam-detail-card {
@@ -589,53 +897,127 @@
   opacity: 0.35;
 }
 
-/* Role Master-Detail */
+/* Role Master-Detail & Fluid Card Layout */
 .iam-role-list-pane {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .iam-role-item-btn {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px 14px;
   background: var(--card);
   border: 1px solid var(--line);
+  border-left: 3px solid transparent;
   border-radius: 10px;
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s ease;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   width: 100%;
 }
 
 .iam-role-item-btn:hover {
-  border-color: var(--acc);
-  transform: translateX(2px);
+  border-color: var(--line-active, var(--line));
+  border-left-color: var(--acc);
+  background: var(--card-subtle);
+  transform: translateY(-1px);
 }
 
 .iam-role-item-btn.selected {
   border-color: var(--acc);
+  border-left-color: var(--acc);
   background: var(--acc-subtle);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.08);
 }
 
-.iam-role-item-left {
+.iam-role-card-header {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .iam-role-item-title {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 650;
   color: var(--text);
+  line-height: 1.3;
+  flex: 1;
+  min-width: 0;
+}
+
+.iam-role-card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.iam-role-user-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--card-subtle);
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.iam-role-chevron {
+  color: var(--muted);
+  opacity: 0.45;
+  transition: all 0.15s ease;
+}
+
+.iam-role-item-btn:hover .iam-role-chevron,
+.iam-role-item-btn.selected .iam-role-chevron {
+  opacity: 0.9;
+  color: var(--acc);
+  transform: translateX(2px);
+}
+
+.iam-role-card-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .iam-role-item-code {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--muted);
   font-family: var(--mono);
+  background: var(--card-subtle);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+
+.iam-role-item-scope {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.iam-role-no-triage {
+  color: #f59e0b;
+  font-weight: 600;
+  margin-left: 2px;
+}
+
+.iam-role-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 /* Modals */
@@ -746,6 +1128,11 @@
   background: var(--card-subtle);
   border-color: var(--line);
   transform: scale(1.15);
+}
+
+.iam-matrix-toggle-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
 }
 
 .iam-matrix-toggle-btn.active {

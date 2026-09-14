@@ -24,7 +24,7 @@ async def agent_schema(principal: Principal):
 
 @router.get("/api/v1/agent-configurations", response_model=list[AgentDraft])
 async def agent_configurations(request: Request, principal: Principal):
-    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER})
+    require_roles(principal, AUTHOR_ROLES | {Role.PROJECT_VIEWER, Role.PROJECT_MANAGER, Role.PROJECT_ANALYST})
     return await request.app.state.configurations.list(principal)
 
 

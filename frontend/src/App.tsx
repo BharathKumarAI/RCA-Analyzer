@@ -43,6 +43,57 @@ import {
 } from './services/api';
 import { SystemHealth, Principal, AgentConfiguration, Run, UiSettingsConfig } from './types/api';
 
+type LocationRoute = { projectKey: string | null; page: ActivePage | null; invalidProjectKey: boolean };
+
+const pageFromSegment = (segment: string | undefined): ActivePage | null => {
+  if (!segment) return null;
+  const normalized = segment.toLowerCase() === 'project' ? 'project-setup' : segment.toLowerCase();
+  return isActivePage(normalized) ? normalized : null;
+};
+
+const readLocationRoute = (): LocationRoute => {
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const normalizedPathParts = pathParts.map(part => part.toLowerCase());
+  const projectIndex = pathParts.findIndex(part => part.toLowerCase() === 'p');
+  if (projectIndex >= 0 && pathParts[projectIndex + 1]) {
+    let projectKey: string;
+    try {
+      projectKey = decodeURIComponent(pathParts[projectIndex + 1]);
+    } catch {
+      return { projectKey: null, page: null, invalidProjectKey: true };
+    }
+    return {
+      projectKey,
+      page: pageFromSegment(pathParts[projectIndex + 2]) || 'overview',
+      invalidProjectKey: false,
+    };
+  }
+  if (normalizedPathParts[0] === 'admin' && pathParts[1] && pathParts[2]) {
+    try {
+      const candidateProjectKey = decodeURIComponent(pathParts[1]);
+      const candidatePage = pageFromSegment(pathParts[2]);
+      return {
+        projectKey: candidateProjectKey,
+        page: candidatePage || 'overview',
+        invalidProjectKey: false,
+      };
+    } catch {
+      return { projectKey: null, page: null, invalidProjectKey: true };
+    }
+  }
+  if (normalizedPathParts[0] === 'admin' && pathParts[1]) {
+    return {
+      projectKey: null,
+      page: pageFromSegment(pathParts[1]),
+      invalidProjectKey: false,
+    };
+  }
+  const hashPage = pageFromSegment(window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0]);
+  return { projectKey: null, page: hashPage, invalidProjectKey: false };
+};
+
+const projectPath = (projectKey: string, page: ActivePage, search = window.location.search) => `/p/${encodeURIComponent(projectKey)}/${page}${search}`;
+
 class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -57,6 +108,8 @@ class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, {
 
 export const App: React.FC = () => {
   const [activePage, setActivePage] = useState<ActivePage>('overview');
+  const [routeProjectKey, setRouteProjectKey] = useState<string | null>(() => readLocationRoute().projectKey);
+  const [invalidProjectRoute, setInvalidProjectRoute] = useState(() => readLocationRoute().invalidProjectKey);
   const [initialRunId, setInitialRunId] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [uiSettings, setUiSettings] = useState<UiSettingsConfig | null>(null);
@@ -113,18 +166,25 @@ export const App: React.FC = () => {
   useEffect(() => {
     // Hash & Path router synchronization
     const handleHashChange = () => {
+      const route = readLocationRoute();
+      setRouteProjectKey(route.projectKey);
+      setInvalidProjectRoute(route.invalidProjectKey);
       const rawHash = window.location.hash
         .replace(/^#\/?/, '')
         .split('?')[0]
         .split('/')[0]
-        .toLowerCase() as ActivePage;
+        .toLowerCase();
 
 
 
       const hashStr = (window.location.hash + ' ' + window.location.pathname).toLowerCase();
 
-      if (isActivePage(rawHash)) {
+      if (route.page && !rawHash) {
+        setActivePage(route.page);
+      } else if (isActivePage(rawHash)) {
         setActivePage(rawHash);
+      } else if (rawHash.startsWith('template-') || rawHash.startsWith('registration-')) {
+        setActivePage('tools');
       } else if (hashStr.includes('persistence') || hashStr.includes('storage')) {
         setActivePage('persistence');
       } else if (hashStr.includes('skill')) {
@@ -161,9 +221,13 @@ export const App: React.FC = () => {
     };
 
     window.addEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleHashChange);
     handleHashChange();
 
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('popstate', handleHashChange);
+    };
   }, []);
 
   const loadData = async () => {
@@ -218,18 +282,25 @@ export const App: React.FC = () => {
     void fetchUiSettings().then(next => {
       if (cancelled || token !== getSessionToken()) return;
       applyUiSettings(next);
-      if (!window.location.hash && isActivePage(next.default_page)) setActivePage(next.default_page);
+      if (!readLocationRoute().page && !window.location.hash && isActivePage(next.default_page)) setActivePage(next.default_page);
     }).catch(error => {
       if (cancelled || token !== getSessionToken()) return;
       if (error instanceof ApiError && error.status === 401) clearScopedData(error.message);
       else setUiError(error instanceof Error ? error.message : 'Workspace settings could not load.');
     });
     return () => { cancelled = true; };
-  }, [principal, uiReload]);
+  }, [principal, uiReload, routeProjectKey]);
 
   const handleSelectPage = (page: ActivePage) => {
     setActivePage(page);
-    window.location.hash = page;
+    const scopedProjectKey = routeProjectKey;
+    if (scopedProjectKey) {
+      window.history.pushState({}, '', projectPath(scopedProjectKey, page));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } else {
+      window.history.pushState({}, '', `/admin/${window.location.search}#${page}`);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
   };
 
   const handleNavigateFromAlert = (page: ActivePage, options?: { runId?: string; filter?: string; targetId?: string }) => {
@@ -248,8 +319,7 @@ export const App: React.FC = () => {
   const handleRunCreated = (newRun: Run) => {
     setRuns(prev => [newRun, ...prev]);
     setInitialRunId(newRun.id);
-    setActivePage('runs');
-    window.location.hash = 'runs';
+    handleSelectPage('runs');
     void loadData();
   };
 
@@ -270,6 +340,7 @@ export const App: React.FC = () => {
         principal={principal}
         theme={theme}
         activePage={activePage}
+        projectKey={routeProjectKey}
         unreadNotificationsCount={unreadNotificationsCount}
         onToggleTheme={toggleTheme}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -292,9 +363,19 @@ export const App: React.FC = () => {
         <main key={sessionVersion} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, width: '100%' }}>
           {loadError && <div className="notice-banner" role="alert">{loadError}<button className="btn btn-secondary" onClick={() => void loadData()}>Retry loading data</button></div>}
           {loadingData && <div role="status" style={{ padding: '8px 24px', color: 'var(--muted)' }}>Refreshing workspace data…</div>}
+          {invalidProjectRoute && (
+            <div className="notice-banner" role="alert" style={{ margin: 24 }}>
+              This project URL is malformed. Use a URL-encoded project key in the form <code>/p/&lt;project_key&gt;/</code>.
+            </div>
+          )}
+          {routeProjectKey && principal && routeProjectKey !== principal.project_id && (
+            <div className="notice-banner" role="alert" style={{ margin: 24 }}>
+              This URL is outside the authenticated project scope. Sign in with a session for <code>{routeProjectKey}</code> or open <button type="button" className="btn btn-secondary" onClick={() => { window.history.replaceState({}, '', projectPath(principal.project_id, activePage)); window.dispatchEvent(new PopStateEvent('popstate')); }}>{principal.project_id}</button>.
+            </div>
+          )}
           <PageErrorBoundary>
           <Suspense fallback={<div role="status" style={{ padding: 24 }}>Loading page…</div>}>
-          {activePage === 'overview' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'overview' && (
             <Overview
               settings={uiSettings}
               health={health}
@@ -306,83 +387,83 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activePage === 'runs' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'runs' && (
             <Runs initialRunId={initialRunId} runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
           )}
 
-          {activePage === 'capabilities' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'capabilities' && (
             <Capabilities onNewInvestigation={openInvestigation} />
           )}
 
-          {activePage === 'skills' && (
-            <Skills principal={principal} onNavigate={setActivePage} />
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'skills' && (
+            <Skills principal={principal} onNavigate={handleSelectPage} />
           )}
 
-          {activePage === 'harness-library' && (
-            <HarnessLibrary principal={principal} onNavigate={setActivePage} />
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'harness-library' && (
+            <HarnessLibrary principal={principal} onNavigate={handleSelectPage} />
           )}
 
-          {activePage === 'runtime' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'runtime' && (
             <Runtime health={health} />
           )}
 
-          {activePage === 'parameters' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'parameters' && (
             <ParameterStudio />
           )}
 
-          {activePage === 'optimization' && (
-            <Optimization onNavigate={setActivePage} />
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'optimization' && (
+            <Optimization onNavigate={handleSelectPage} />
           )}
 
-          {activePage === 'agents' && (
-            <Agents agents={agents} principal={principal} onRefresh={loadData} onNavigate={setActivePage} />
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'agents' && (
+            <Agents agents={agents} principal={principal} onRefresh={loadData} onNavigate={handleSelectPage} />
           )}
 
-          {activePage === 'tools' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'tools' && (
             <Tools tools={tools} principal={principal} onNavigate={handleSelectPage} />
           )}
 
-          {activePage === 'alerts' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'alerts' && (
             <Alerts onNavigate={handleNavigateFromAlert} onNotificationsUpdated={loadData} />
           )}
 
-          {activePage === 'health-checks' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'health-checks' && (
             <HealthChecks />
           )}
 
-          {activePage === 'project-setup' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'project-setup' && (
             <ProjectSetup />
           )}
 
-          {activePage === 'persistence' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'persistence' && (
             <Persistence />
           )}
 
-          {activePage === 'policy' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'policy' && (
             <Policy />
           )}
 
-          {activePage === 'roles' && (
-            <Users onSelectPage={handleSelectPage} initialTab="roles" />
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'roles' && (
+            <Users onSelectPage={handleSelectPage} initialTab="directory" />
           )}
 
-          {activePage === 'governance' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'governance' && (
             <Governance logs={auditLogs} agents={agents} />
           )}
 
-          {activePage === 'knowledge' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'knowledge' && (
             <Knowledge />
           )}
 
-          {activePage === 'users' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'users' && (
             <Users onSelectPage={handleSelectPage} />
           )}
 
-          {activePage === 'billing' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'billing' && (
             <Billing />
           )}
 
-          {activePage === 'settings' && (
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'settings' && (
             <Settings principal={principal} health={health} onUiSettingsChanged={applyUiSettings} />
           )}
           </Suspense>

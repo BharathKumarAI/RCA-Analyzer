@@ -8,7 +8,9 @@ import {
 import { AgentConfiguration, Principal, HarnessResponse } from '../types/api';
 import { approveAgent, rejectAgent, revokeAgent, submitAgentYaml, fetchHarnessLibrary } from '../services/api';
 import type { ActivePage } from '../components/Sidebar';
+import { NotificationBanner } from '../components/NotificationBanner';
 import '../styles/agents-workspace.css';
+import '../styles/harness-library.css';
 
 interface UnifiedAgentItem extends AgentConfiguration {
   source: 'platform' | 'custom';
@@ -247,7 +249,19 @@ instruction: Investigate the supplied incident evidence and report bounded findi
 
   return (
     <div className="view-container agents-page">
-      {catalogError && <div className="notice-banner" role="alert">{catalogError}<button className="btn btn-secondary" onClick={() => void loadHarness()}>Retry platform agents</button></div>}
+      {catalogError && (
+        <NotificationBanner
+          type="error"
+          message={catalogError}
+          onClose={() => setCatalogError(null)}
+          action={
+            <button className="btn btn-secondary btn-sm" onClick={() => void loadHarness()}>
+              Retry platform agents
+            </button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
       {/* Breadcrumbs */}
       <nav className="agents-breadcrumbs" aria-label="Breadcrumb">
         <span>Admin</span>
@@ -685,7 +699,14 @@ instruction: Investigate the supplied incident evidence and report bounded findi
             </header>
 
             <div className="harness-drawer-body">
-              {actionError && <div className="notice-banner red" role="alert">{actionError}</div>}
+              {actionError && (
+                <NotificationBanner
+                  type="error"
+                  message={actionError}
+                  onClose={() => setActionError(null)}
+                  style={{ marginBottom: 14 }}
+                />
+              )}
 
               {/* Dual-Custody Peer Review Box for Pending Agents */}
               {selectedAgent.status === 'pending' && (

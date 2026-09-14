@@ -768,7 +768,21 @@ async def ready(request: Request):
 
 @router.get("/api/v1/me", response_model=UserPrincipal)
 async def me(principal: Principal):
-    return principal
+    from app.policy.access import project_access
+    return principal if project_access(principal) else principal.model_copy(update={"tenant_id": "", "project_id": ""})
+
+
+@router.get("/api/v1/access")
+async def access(principal: Principal):
+    from app.policy.access import PROJECT_ADMIN_ROLES, project_access
+    project = project_access(principal)
+    return {
+        "project_access": project,
+        "can_triage": project,
+        "can_manage_project": bool(set(principal.roles) & PROJECT_ADMIN_ROLES),
+        "can_use_playground": bool(principal.roles),
+        "external_writes": False,
+    }
 
 
 @router.get("/api/v1/health")
@@ -1032,11 +1046,10 @@ async def save_project_skill(
     if not {
         Role.PLATFORM_ADMIN,
         Role.PROJECT_OWNER,
-        Role.PROJECT_MANAGER,
     }.intersection(principal.roles):
         raise HTTPException(
             403,
-            "Only PLATFORM_ADMIN, PROJECT_OWNER, or PROJECT_MANAGER can modify project skill overrides",
+            "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project skill overrides",
         )
 
     registry = request.app.state.registry
@@ -1262,11 +1275,10 @@ async def reset_project_skill(
     if not {
         Role.PLATFORM_ADMIN,
         Role.PROJECT_OWNER,
-        Role.PROJECT_MANAGER,
     }.intersection(principal.roles):
         raise HTTPException(
             403,
-            "Only PLATFORM_ADMIN, PROJECT_OWNER, or PROJECT_MANAGER can modify project skill overrides",
+            "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project skill overrides",
         )
 
     projects_root = Path(request.app.state.settings.projects_root)

@@ -23,7 +23,7 @@ def read_platform(settings, registry=None):
     files = {}
     for prefix, directory, pattern in [
         ("config", settings.config_dir, "*.yaml"),
-        ("capabilities", settings.content_root / "capabilities", "*.yaml"),
+        ("capabilities", settings.content_root / "capabilities", "**/*.yaml"),
         ("skills", settings.content_root / "skills", "*/SKILL.md"),
     ]:
         for path in sorted(directory.glob(pattern)):

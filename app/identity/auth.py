@@ -65,6 +65,10 @@ async def authenticated_principal(request: Request) -> UserPrincipal:
         principal = settings.principals.get(subject)
     if principal is None:
         raise HTTPException(403, "No project membership for this identity")
+    if principal.roles and set(principal.roles) <= {Role.GENERIC_USER}:
+        if principal.tenant_id != settings.tenant_id:
+            raise HTTPException(403, "Identity is outside this platform tenant")
+        return principal.model_copy(update={"project_id": ""})
     if (
         principal.tenant_id != settings.tenant_id
         or principal.project_id != settings.project_id

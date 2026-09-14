@@ -2,6 +2,26 @@
 
 Sign in as `PLATFORM_ADMIN` or `PROJECT_OWNER` to edit administrative settings.
 The server verifies the token and scope before accepting writes.
+Viewer and Manager roles can start read-only triage and view project data;
+Generic User has a separate personal playground. See the
+[backend access model](project-access-model.md) for permissions and API contracts.
+
+Administration opens at `/admin/` and page navigation stays at `/admin/#<page>`.
+Signing in does not redirect administrators into their session's project URL.
+The header identifies this surface as Administration for template and
+configuration setup. Explicit `/p/<project_key>/` links remain project workspaces
+and still reject a project key outside the authenticated scope.
+
+The deployment boundary is shown in setup and settings instead of repeated
+page-header scope badges. Session details show identity and assigned roles.
+This presentation does not make saved
+project configuration global: the server still applies its configured tenant and
+project. Deployment identifiers come from configuration, not UI defaults.
+
+Sources: [navigation](../frontend/src/App.tsx),
+[header](../frontend/src/components/Topbar.tsx),
+[deployment details](../frontend/src/pages/Settings.tsx),
+[authentication](../app/identity/auth.py).
 
 ## Workspace presentation
 

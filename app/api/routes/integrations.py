@@ -72,6 +72,12 @@ async def save_integration(
     if integration_id in {"itsm", "log_search"} | {t.system_name for t in request.app.state.platform.connector_templates}:
         raise HTTPException(409, "Use a unique ID; this ID belongs to a deployment template")
     try:
+        request.app.state.integrations.authorize(principal, scope)
+        if scope == "project" and body.definition.project_environment_ids:
+            project = request.app.state.registry.inheritance.project(principal)
+            allowed = {env.id for env in project.environments if env.enabled} if project else set()
+            if not set(body.definition.project_environment_ids) <= allowed:
+                raise ValueError("Map only active environments belonging to this project")
         await request.app.state.integrations.save(principal, scope, integration_id, body)
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from None

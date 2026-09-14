@@ -23,7 +23,11 @@ import {
   ChevronRight,
   Sparkles,
   AlertTriangle,
+  Info,
+  Mail,
+  BookOpen,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   fetchUsers,
   fetchRoles,
@@ -48,6 +52,27 @@ interface UsersProps {
 
 export type TabType = 'directory' | 'roles' | 'matrix' | 'capabilities' | 'security';
 type ViewMode = 'grid' | 'table';
+
+export const SUBROUTE_MAP: Record<TabType, string> = {
+  directory: 'roles/directory',
+  roles: 'roles/catalog',
+  matrix: 'roles/role-matrix',
+  capabilities: 'roles/capability-matrix',
+  security: 'roles/security',
+};
+
+export const getTabFromHash = (fallback: TabType = 'directory'): TabType => {
+  if (typeof window === 'undefined') return fallback;
+  const hash = window.location.hash.toLowerCase();
+  if (hash.includes('roles/directory') || hash === '#users') return 'directory';
+  if (hash.includes('roles/catalog')) return 'roles';
+  if (hash.includes('roles/role-matrix') || hash.includes('role-matrix')) return 'matrix';
+  if (hash.includes('roles/capability-matrix') || hash.includes('capability-matrix')) return 'capabilities';
+  if (hash.includes('roles/security') || hash.includes('security')) return 'security';
+  if (hash === '#roles') return fallback;
+  return fallback;
+};
+
 
 export const ROLE_RESPONSIBILITIES: Record<
   string,
@@ -92,18 +117,11 @@ export const ROLE_RESPONSIBILITIES: Record<
   },
   PROJECT_MANAGER: {
     displayName: 'Project Manager',
-    summary:
-      'Governs team resource allocation, tracks SLA metrics, manages project parameters and user memberships, monitors budgets and audit logs. Explicitly excluded from executing incident triage or active log analysis investigations.',
+    summary: 'Starts read-only triage and views project investigations, metrics, and feedback. Cannot change project settings, membership, feedback, or external systems.',
     tier: 'Management',
-    analysisAllowed: false,
-    responsibilities: [
-      'Team resource allocation & member management',
-      'SLA tracking & incident resolution metrics',
-      'Project parameter governance & stage defaults',
-      'Budget and token spend monitoring',
-      'Audit log reviews & compliance tracking',
-    ],
-    governanceScope: 'Project Management (No Triage)',
+    analysisAllowed: true,
+    responsibilities: ['Start read-only incident analyses', 'View the live triage board and evidence', 'Review project metrics and feedback'],
+    governanceScope: 'Project Analysis & Read Access',
   },
   PROJECT_ANALYST: {
     displayName: 'Project Analyst',
@@ -122,30 +140,19 @@ export const ROLE_RESPONSIBILITIES: Record<
   },
   PROJECT_VIEWER: {
     displayName: 'Project Viewer',
-    summary:
-      'Read-only observer: view completed investigation reports, root cause syntheses, evidence citations, and operational health dashboards without mutation authority.',
+    summary: 'Starts read-only triage and views project investigations, metrics, and feedback. Cannot change project settings, membership, feedback, or external systems.',
     tier: 'Read-Only',
-    analysisAllowed: false,
-    responsibilities: [
-      'View completed investigation runs and syntheses',
-      'Inspect citations and evidence trace bundles',
-      'Monitor project health checks and probe latencies',
-      'Read-only dashboard visibility',
-    ],
-    governanceScope: 'Observability Only',
+    analysisAllowed: true,
+    responsibilities: ['Start read-only incident analyses', 'View live and completed investigations', 'Inspect evidence, metrics, and feedback'],
+    governanceScope: 'Project Analysis & Read Access',
   },
   GENERIC_USER: {
     displayName: 'Generic User',
-    summary:
-      'Standard authenticated platform member: general platform identity with access to documentation, runbooks, and self-service profile review.',
+    summary: 'Uses personal platform experiments and local text tools. Has no access to project boards, metrics, feedback, knowledge, or connectors.',
     tier: 'General',
     analysisAllowed: false,
-    responsibilities: [
-      'Access platform runbooks and knowledge items',
-      'Review authenticated session identity and scopes',
-      'View basic infrastructure operational status',
-    ],
-    governanceScope: 'Self-Service & Runbooks',
+    responsibilities: ['Experiment with personally supplied text and JSON', 'Review own experiment results', 'Review own authenticated identity'],
+    governanceScope: 'Personal Playground',
   },
 };
 
@@ -161,8 +168,12 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [activeTab, setActiveTab] = useState<TabType>(() => getTabFromHash(initialTab));
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+
+  // Mutation and permission states
+  const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   // Users Tab filters
   const [search, setSearch] = useState('');
@@ -195,14 +206,65 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   const [roleSubmitting, setRoleSubmitting] = useState(false);
 
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [savingRolePermission, setSavingRolePermission] = useState<string | null>(null);
+  const [matrixUserSearch, setMatrixUserSearch] = useState('');
+  const [capMatrixSearch, setCapMatrixSearch] = useState('');
+  const [capMatrixCategory, setCapMatrixCategory] = useState('ALL');
   const assignableRoles = useMemo(() => roles.filter(role => ASSIGNABLE_ROLE_IDS.has(role.id)), [roles]);
 
-  // Synchronize initialTab if prop changes
-  useEffect(() => {
-    if (initialTab) {
-      setActiveTab(initialTab);
+  // Permission helpers
+  const MANAGEMENT_ROLES = useMemo(() => new Set(['PLATFORM_ADMIN', 'PROJECT_OWNER']), []);
+  const isPlatformAdmin = Boolean(principal?.roles?.includes('PLATFORM_ADMIN'));
+  const canManageUsers = Boolean(principal?.roles?.some(r => MANAGEMENT_ROLES.has(r)));
+  const isSelf = (userId: string) => principal?.subject === userId;
+
+  const canModifyTargetUser = (targetUser: UserItem) => {
+    if (!canManageUsers) return false;
+    if (targetUser.roles.includes('PLATFORM_ADMIN') && !isPlatformAdmin) return false;
+    return true;
+  };
+
+  const canDeleteTargetUser = (targetUser: UserItem) => {
+    if (isSelf(targetUser.id)) return false;
+    if (!canModifyTargetUser(targetUser)) return false;
+    return true;
+  };
+
+  const canToggleTargetStatus = (targetUser: UserItem) => {
+    if (isSelf(targetUser.id) && targetUser.status === 'active') return false;
+    if (!canModifyTargetUser(targetUser)) return false;
+    return true;
+  };
+
+
+  // Tab switching with browser history pushState
+  const handleTabClick = (tab: TabType) => {
+    setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      const { pathname, search } = window.location;
+      const subroute = SUBROUTE_MAP[tab];
+      const newUrl = `${pathname}${search}#${subroute}`;
+      if (window.location.hash !== `#${subroute}`) {
+        window.history.pushState(null, '', newUrl);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }
     }
+  };
+
+  // Synchronize activeTab with URL hash changes (back/forward and direct links)
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const current = getTabFromHash(initialTab);
+      setActiveTab(current);
+    };
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
   }, [initialTab]);
+
 
   const loadData = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -341,6 +403,43 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
     });
   }, [selectedRole, capabilities]);
 
+  // Filtered users for Role Assignment Matrix
+  const filteredMatrixUsers = useMemo(() => {
+    const q = matrixUserSearch.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter(
+      u => u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)
+    );
+  }, [users, matrixUserSearch]);
+
+  // Distinct capability categories
+  const distinctCapCategories = useMemo(() => {
+    const set = new Set<string>();
+    capabilities.forEach(c => {
+      if (c.category) set.add(c.category);
+    });
+    return Array.from(set);
+  }, [capabilities]);
+
+  // Filtered capabilities for Capability Matrix
+  const filteredMatrixCaps = useMemo(() => {
+    const q = capMatrixSearch.trim().toLowerCase();
+    return capabilities.filter(cap => {
+      const matchesSearch =
+        !q ||
+        cap.name.toLowerCase().includes(q) ||
+        cap.id.toLowerCase().includes(q) ||
+        (cap.description && cap.description.toLowerCase().includes(q));
+      const matchesCat = capMatrixCategory === 'ALL' || cap.category === capMatrixCategory;
+      return matchesSearch && matchesCat;
+    });
+  }, [capabilities, capMatrixSearch, capMatrixCategory]);
+
+  // Total role assignments across all users
+  const totalRoleAssignments = useMemo(() => {
+    return users.reduce((acc, u) => acc + (u.roles || []).length, 0);
+  }, [users]);
+
   // User Actions
   const handleOpenCreateUser = () => {
     setUserModalMode('create');
@@ -395,28 +494,58 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
     }
   };
 
-  const handleDeleteUser = async (userId: string, e?: React.MouseEvent) => {
+  const handleDeleteUser = async (target: UserItem | string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (!window.confirm(`Are you sure you want to remove membership for '${userId}'?`)) return;
+    const user = typeof target === 'string' ? users.find(u => u.id === target) : target;
+    const userId = typeof target === 'string' ? target : target.id;
+    if (user && !canDeleteTargetUser(user)) {
+      setError(isSelf(userId) ? 'Cannot delete your own membership account.' : 'Insufficient permissions to delete this user.');
+      return;
+    }
+    if (deletingUserId) return;
+    if (!window.confirm(`Are you sure you want to remove membership for '${user?.name || userId}'?`)) return;
+    setDeletingUserId(userId);
     try {
       await deleteUser(userId);
-      setActionFeedback(`User ${userId} deleted from database.`);
+      setActionFeedback(`User ${user?.name || userId} deleted from database.`);
+      if (inspectedUser?.id === userId) {
+        setInspectedUser(null);
+      }
       await loadData(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete user');
+    } finally {
+      setDeletingUserId(null);
     }
   };
 
   const handleToggleUserRole = async (user: UserItem, roleId: string) => {
+    if (!canModifyTargetUser(user)) {
+      setError('Insufficient permissions to modify roles for this user.');
+      return;
+    }
+    if (roleId === 'PLATFORM_ADMIN' && !isPlatformAdmin) {
+      setError('Only a Platform Administrator can assign or revoke the Platform Administrator role.');
+      return;
+    }
     const hasRole = user.roles.includes(roleId);
     const nextRoles = hasRole
       ? user.roles.filter(r => r !== roleId)
       : [...user.roles, roleId];
     if (nextRoles.length === 0) {
-      setError(`Cannot revoke all roles: User '${user.name}' must retain at least one role.`);
+      setError(`Cannot revoke all roles: User '${user.name || user.id}' must retain at least one role.`);
       return;
     }
-    // Optimistic update
+    if (hasRole && isSelf(user.id) && MANAGEMENT_ROLES.has(roleId)) {
+      const remainingManagement = nextRoles.filter(r => MANAGEMENT_ROLES.has(r));
+      if (remainingManagement.length === 0) {
+        setError('Cannot remove your own last management role.');
+        return;
+      }
+    }
+    if (savingUserId) return;
+    setSavingUserId(user.id);
+    const previousRoles = user.roles;
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: nextRoles } : u)));
     if (inspectedUser?.id === user.id) {
       setInspectedUser(prev => (prev ? { ...prev, roles: nextRoles } : null));
@@ -429,20 +558,40 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         status: user.status,
       });
       setActionFeedback(
-        `${hasRole ? 'Revoked' : 'Granted'} role ${roleId} for ${user.name} (persisted)`
+        `${hasRole ? 'Revoked' : 'Granted'} role ${roleId} for ${user.name || user.id} (persisted)`
       );
     } catch (err) {
+      setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: previousRoles } : u)));
+      if (inspectedUser?.id === user.id) {
+        setInspectedUser(prev => (prev ? { ...prev, roles: previousRoles } : null));
+      }
       setError(err instanceof Error ? err.message : 'Failed to update role assignment');
       await loadData(true);
+    } finally {
+      setSavingUserId(null);
     }
   };
 
   const handleRemoveUserRole = async (user: UserItem, roleId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (user.roles.length <= 1) {
-      setError(`User '${user.name}' must retain at least one role.`);
+    if (!canModifyTargetUser(user)) {
+      setError('Insufficient permissions to modify roles for this user.');
       return;
     }
+    if (user.roles.length <= 1) {
+      setError(`User '${user.name || user.id}' must retain at least one role.`);
+      return;
+    }
+    if (isSelf(user.id) && MANAGEMENT_ROLES.has(roleId)) {
+      const remainingManagement = user.roles.filter(r => r !== roleId && MANAGEMENT_ROLES.has(r));
+      if (remainingManagement.length === 0) {
+        setError('Cannot remove your own last management role.');
+        return;
+      }
+    }
+    if (savingUserId) return;
+    setSavingUserId(user.id);
+    const previousRoles = user.roles;
     const nextRoles = user.roles.filter(r => r !== roleId);
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: nextRoles } : u)));
     if (inspectedUser?.id === user.id) {
@@ -455,15 +604,32 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         roles: nextRoles,
         status: user.status,
       });
-      setActionFeedback(`Removed role ${roleId} from ${user.name} (persisted)`);
+      setActionFeedback(`Removed role ${roleId} from ${user.name || user.id} (persisted)`);
     } catch (err) {
+      setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: previousRoles } : u)));
+      if (inspectedUser?.id === user.id) {
+        setInspectedUser(prev => (prev ? { ...prev, roles: previousRoles } : null));
+      }
       setError(err instanceof Error ? err.message : 'Failed to remove role');
       await loadData(true);
+    } finally {
+      setSavingUserId(null);
     }
   };
 
   const handleAddUserRole = async (user: UserItem, roleId: string) => {
     if (!roleId || user.roles.includes(roleId)) return;
+    if (!canModifyTargetUser(user)) {
+      setError('Insufficient permissions to modify roles for this user.');
+      return;
+    }
+    if (roleId === 'PLATFORM_ADMIN' && !isPlatformAdmin) {
+      setError('Only a Platform Administrator can assign the Platform Administrator role.');
+      return;
+    }
+    if (savingUserId) return;
+    setSavingUserId(user.id);
+    const previousRoles = user.roles;
     const nextRoles = [...user.roles, roleId];
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: nextRoles } : u)));
     if (inspectedUser?.id === user.id) {
@@ -476,15 +642,28 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         roles: nextRoles,
         status: user.status,
       });
-      setActionFeedback(`Assigned role ${roleId} to ${user.name} (persisted)`);
+      setActionFeedback(`Assigned role ${roleId} to ${user.name || user.id} (persisted)`);
     } catch (err) {
+      setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, roles: previousRoles } : u)));
+      if (inspectedUser?.id === user.id) {
+        setInspectedUser(prev => (prev ? { ...prev, roles: previousRoles } : null));
+      }
       setError(err instanceof Error ? err.message : 'Failed to add role');
       await loadData(true);
+    } finally {
+      setSavingUserId(null);
     }
   };
 
   const handleToggleUserStatus = async (user: UserItem) => {
-    const nextStatus = user.status === 'active' ? 'inactive' : 'active';
+    if (!canToggleTargetStatus(user)) {
+      setError(isSelf(user.id) ? 'Cannot suspend your own authenticated account.' : 'Insufficient permissions to change status for this user.');
+      return;
+    }
+    if (savingUserId) return;
+    setSavingUserId(user.id);
+    const previousStatus = user.status;
+    const nextStatus = previousStatus === 'active' ? 'inactive' : 'active';
     setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, status: nextStatus } : u)));
     if (inspectedUser?.id === user.id) {
       setInspectedUser(prev => (prev ? { ...prev, status: nextStatus } : null));
@@ -496,12 +675,19 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         roles: user.roles,
         status: nextStatus,
       });
-      setActionFeedback(`Membership status for ${user.name} set to ${nextStatus} (persisted)`);
+      setActionFeedback(`Membership status for ${user.name || user.id} set to ${nextStatus} (persisted)`);
     } catch (err) {
+      setUsers(prev => prev.map(u => (u.id === user.id ? { ...u, status: previousStatus } : u)));
+      if (inspectedUser?.id === user.id) {
+        setInspectedUser(prev => (prev ? { ...prev, status: previousStatus } : null));
+      }
       setError(err instanceof Error ? err.message : 'Failed to toggle status');
       await loadData(true);
+    } finally {
+      setSavingUserId(null);
     }
   };
+
 
   // Role Actions
   const handleOpenCreateRole = () => {
@@ -568,7 +754,10 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
   };
 
   const handleRemovePermission = async (role: RoleItem, permission: string) => {
-    const nextPerms = (role.permissions || []).filter(p => p !== permission);
+    if (savingRolePermission) return;
+    setSavingRolePermission(permission);
+    const previousPerms = role.permissions || [];
+    const nextPerms = previousPerms.filter(p => p !== permission);
     setRoles(prev => prev.map(r => (r.id === role.id ? { ...r, permissions: nextPerms } : r)));
     if (selectedRole?.id === role.id) {
       setSelectedRole(prev => (prev ? { ...prev, permissions: nextPerms } : null));
@@ -580,16 +769,25 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         permissions: nextPerms,
         status: role.status || 'active',
       });
-      setActionFeedback(`Revoked permission '${permission}' from ${role.name} (persisted)`);
+      setActionFeedback(`Revoked descriptive action '${permission}' from role definition ${role.name}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to revoke permission');
-      await loadData(true);
+      // Rollback to previous permissions on failure
+      setRoles(prev => prev.map(r => (r.id === role.id ? { ...r, permissions: previousPerms } : r)));
+      if (selectedRole?.id === role.id) {
+        setSelectedRole(prev => (prev ? { ...prev, permissions: previousPerms } : null));
+      }
+      setError(err instanceof Error ? err.message : 'Failed to revoke descriptive action');
+    } finally {
+      setSavingRolePermission(null);
     }
   };
 
   const handleAddPermission = async (role: RoleItem, permission: string) => {
+    if (savingRolePermission) return;
     if ((role.permissions || []).includes(permission)) return;
-    const nextPerms = [...(role.permissions || []), permission];
+    setSavingRolePermission(permission);
+    const previousPerms = role.permissions || [];
+    const nextPerms = [...previousPerms, permission];
     setRoles(prev => prev.map(r => (r.id === role.id ? { ...r, permissions: nextPerms } : r)));
     if (selectedRole?.id === role.id) {
       setSelectedRole(prev => (prev ? { ...prev, permissions: nextPerms } : null));
@@ -601,10 +799,16 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         permissions: nextPerms,
         status: role.status || 'active',
       });
-      setActionFeedback(`Granted permission '${permission}' to ${role.name} (persisted)`);
+      setActionFeedback(`Granted descriptive action '${permission}' to role definition ${role.name}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to grant permission');
-      await loadData(true);
+      // Rollback to previous permissions on failure
+      setRoles(prev => prev.map(r => (r.id === role.id ? { ...r, permissions: previousPerms } : r)));
+      if (selectedRole?.id === role.id) {
+        setSelectedRole(prev => (prev ? { ...prev, permissions: previousPerms } : null));
+      }
+      setError(err instanceof Error ? err.message : 'Failed to grant descriptive action');
+    } finally {
+      setSavingRolePermission(null);
     }
   };
 
@@ -643,142 +847,118 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
 
   return (
     <div className="view-container iam-page">
-      {/* Hero Banner */}
-      <section className="hero-banner">
-        <div className="hero-main">
-          <h1 className="hero-title">
-            Identity & <span>Access Control</span> (IAM)
-          </h1>
-          <p className="hero-lede">
-            Enterprise RBAC governance, authentic cryptographic RS256 JWT validation, and live
-            server-side role assignments persisted to PostgreSQL across this project deployment.
-          </p>
-          <div className="hero-meta-strip">
-            <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>{loading ? '…' : users.length}</b> Principals
-            </span>
-            <span className="hero-stat-chip">
-              <KeyRound size={13} style={{ color: 'var(--acc)' }} />
-              <b>{loading ? '…' : roles.length}</b> Defined Roles
-            </span>
-            <span className="hero-stat-chip">
-              <Building size={13} style={{ color: 'var(--acc2)' }} />
-              <b>Scope:</b>{' '}
-              {principal?.tenant_id && principal?.project_id
-                ? `${principal.tenant_id} / ${principal.project_id}`
-                : '—'}
-            </span>
-            <span className="hero-stat-chip">
-              <Lock size={13} style={{ color: '#10b981' }} />
-              <b>Auth:</b> RS256 JWT Verified
+      {/* Compact IAM Control Header */}
+      <div className="iam-control-header">
+        <div className="iam-header-main">
+          <div className="iam-title-row">
+            <ShieldCheck size={18} style={{ color: 'var(--acc)' }} />
+            <h1 className="iam-page-title">Users & Access Control</h1>
+            <span className="iam-scope-badge">
+              <Lock size={11} /> RS256 JWT Verified
             </span>
           </div>
+          <div className="iam-header-metrics">
+            <span className="iam-metric-pill">
+              <UsersIcon size={12} style={{ color: 'var(--acc)' }} />
+              <strong>{loading ? '…' : users.length}</strong>
+              <span className="iam-metric-label">Principals</span>
+            </span>
+            <span className="iam-metric-pill">
+              <KeyRound size={12} style={{ color: '#10b981' }} />
+              <strong>{loading ? '…' : roles.length}</strong>
+              <span className="iam-metric-label">Roles</span>
+            </span>
+            <span className="iam-metric-pill">
+              <Layers size={12} style={{ color: '#f59e0b' }} />
+              <strong>{loading ? '…' : capabilities.length}</strong>
+              <span className="iam-metric-label">Capabilities</span>
+            </span>
+            {principal && (
+              <span
+                className="iam-metric-pill user-session"
+                title={`Authenticated as ${principal.subject} (${(principal.roles || []).join(', ')})`}
+              >
+                <span className="iam-metric-label">Session:</span>
+                <strong>{principal.subject}</strong>
+                <span className="iam-session-role">
+                  {principal.roles && principal.roles[0] ? principal.roles[0].replace(/_/g, ' ') : 'USER'}
+                </span>
+              </span>
+            )}
+          </div>
         </div>
-        <div className="hero-actions">
+        <div className="iam-header-actions">
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
             onClick={() => void loadData(true)}
             disabled={loading || refreshing}
+            title="Refresh IAM state"
           >
-            <RefreshCw size={14} className={refreshing ? 'spin' : ''} />
+            <RefreshCw size={13} className={refreshing ? 'spin' : ''} />
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
           {activeTab === 'roles' ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleOpenCreateRole}
-              title="Define custom role"
-            >
-              <Plus size={14} /> Add Role
-            </button>
+            canManageUsers && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleOpenCreateRole}
+                title="Define custom role"
+              >
+                <Plus size={13} /> Add Role
+              </button>
+            )
           ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleOpenCreateUser}
-              title="Register new user membership"
-            >
-              <Plus size={14} /> Add User
-            </button>
+            canManageUsers && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleOpenCreateUser}
+                title="Register new user membership"
+              >
+                <Plus size={13} /> Add User
+              </button>
+            )
           )}
-        </div>
-      </section>
-
-      {/* Notifications */}
-      {error && (
-        <div className="notice-banner red" role="alert">
-          <AlertTriangle size={16} /> {error}
-          <button
-            className="btn btn-outline"
-            style={{ marginLeft: 12 }}
-            onClick={() => void loadData(true)}
-          >
-            Retry
-          </button>
-        </div>
-      )}
-      {actionFeedback && (
-        <div className="notice-banner green">
-          <CheckCircle2 size={16} /> {actionFeedback}
-        </div>
-      )}
-
-      {/* KPI Stat Cards Strip */}
-      <div className="iam-stat-strip">
-        <div className="iam-stat-box">
-          <div className="iam-stat-icon-wrapper indigo">
-            <UsersIcon size={18} />
-          </div>
-          <div className="iam-stat-content">
-            <div className="iam-stat-title">Scoped Principals</div>
-            <div className="iam-stat-number">{loading ? '—' : users.length}</div>
-            <div className="iam-stat-caption">Verified subject identities</div>
-          </div>
-        </div>
-
-        <div className="iam-stat-box">
-          <div className="iam-stat-icon-wrapper emerald">
-            <ShieldCheck size={18} />
-          </div>
-          <div className="iam-stat-content">
-            <div className="iam-stat-title">Configured Roles</div>
-            <div className="iam-stat-number">{loading ? '—' : roles.length}</div>
-            <div className="iam-stat-caption">6 Core Roles + Custom</div>
-          </div>
-        </div>
-
-        <div className="iam-stat-box">
-          <div className="iam-stat-icon-wrapper amber">
-            <Layers size={18} />
-          </div>
-          <div className="iam-stat-content">
-            <div className="iam-stat-title">Authorized Capabilities</div>
-            <div className="iam-stat-number">{loading ? '—' : capabilities.length}</div>
-            <div className="iam-stat-caption">Project investigation tools</div>
-          </div>
-        </div>
-
-        <div className="iam-stat-box">
-          <div className="iam-stat-icon-wrapper purple">
-            <Activity size={18} />
-          </div>
-          <div className="iam-stat-content">
-            <div className="iam-stat-title">Current Session</div>
-            <div className="iam-stat-number">{principal?.subject || '—'}</div>
-            <div className="iam-stat-caption">{(principal?.roles || []).join(', ') || '—'}</div>
-          </div>
         </div>
       </div>
 
+      {/* Notifications */}
+      {error && (
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          action={
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => void loadData(true)}
+            >
+              Retry
+            </button>
+          }
+        />
+      )}
+      {actionFeedback && (
+        <NotificationBanner
+          type="success"
+          message={actionFeedback}
+          onClose={() => setActionFeedback(null)}
+        />
+      )}
+
       {/* Unified Sub-Navigation Strip */}
       <div className="iam-subnav-bar">
-        <div className="iam-tabs-group">
+        <div className="iam-tabs-group" role="tablist" aria-label="Identity and Access Control views">
           <button
             type="button"
+            role="tab"
+            id="iam-tab-directory"
+            aria-selected={activeTab === 'directory'}
+            aria-controls="iam-panel-directory"
             className={`iam-tab-btn ${activeTab === 'directory' ? 'active' : ''}`}
-            onClick={() => setActiveTab('directory')}
+            onClick={() => handleTabClick('directory')}
           >
             <UsersIcon size={15} />
             <span>User Directory</span>
@@ -786,33 +966,49 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
           </button>
           <button
             type="button"
+            role="tab"
+            id="iam-tab-roles"
+            aria-selected={activeTab === 'roles'}
+            aria-controls="iam-panel-roles"
             className={`iam-tab-btn ${activeTab === 'roles' ? 'active' : ''}`}
-            onClick={() => setActiveTab('roles')}
+            onClick={() => handleTabClick('roles')}
           >
             <KeyRound size={15} />
-            <span>Roles & Permissions</span>
+            <span>Roles Catalog</span>
             <span className="iam-tab-pill">{roles.length}</span>
           </button>
           <button
             type="button"
+            role="tab"
+            id="iam-tab-matrix"
+            aria-selected={activeTab === 'matrix'}
+            aria-controls="iam-panel-matrix"
             className={`iam-tab-btn ${activeTab === 'matrix' ? 'active' : ''}`}
-            onClick={() => setActiveTab('matrix')}
+            onClick={() => handleTabClick('matrix')}
           >
             <Layers size={15} />
             <span>Role Assignment Matrix</span>
           </button>
           <button
             type="button"
+            role="tab"
+            id="iam-tab-capabilities"
+            aria-selected={activeTab === 'capabilities'}
+            aria-controls="iam-panel-capabilities"
             className={`iam-tab-btn ${activeTab === 'capabilities' ? 'active' : ''}`}
-            onClick={() => setActiveTab('capabilities')}
+            onClick={() => handleTabClick('capabilities')}
           >
             <ShieldCheck size={15} />
             <span>Capability Access Matrix</span>
           </button>
           <button
             type="button"
+            role="tab"
+            id="iam-tab-security"
+            aria-selected={activeTab === 'security'}
+            aria-controls="iam-panel-security"
             className={`iam-tab-btn ${activeTab === 'security' ? 'active' : ''}`}
-            onClick={() => setActiveTab('security')}
+            onClick={() => handleTabClick('security')}
           >
             <Lock size={15} />
             <span>Security & Scope Policy</span>
@@ -827,6 +1023,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                 className={`iam-view-btn ${viewMode === 'grid' ? 'active' : ''}`}
                 onClick={() => setViewMode('grid')}
                 title="Grid cards view"
+                aria-label="Grid cards view"
               >
                 <LayoutGrid size={15} />
               </button>
@@ -835,6 +1032,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                 className={`iam-view-btn ${viewMode === 'table' ? 'active' : ''}`}
                 onClick={() => setViewMode('table')}
                 title="Table list view"
+                aria-label="Table list view"
               >
                 <List size={15} />
               </button>
@@ -843,14 +1041,15 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
         )}
       </div>
 
+
       {/* ==================================================================== */}
       {/* TAB 1: USER DIRECTORY                                                */}
       {/* ==================================================================== */}
       {activeTab === 'directory' && (
-        <>
+        <div role="tabpanel" id="iam-panel-directory" aria-labelledby="iam-tab-directory" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="iam-toolbar-panel">
             <div className="iam-search-box">
-              <Search size={15} style={{ color: 'var(--muted)' }} />
+              <Search size={14} style={{ color: 'var(--muted)' }} />
               <input
                 type="search"
                 aria-label="Search users"
@@ -858,45 +1057,78 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                 value={search}
                 onChange={e => setSearch(e.target.value)}
               />
+              {search && (
+                <button
+                  type="button"
+                  className="iam-clear-search-btn"
+                  onClick={() => setSearch('')}
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
             </div>
 
-            <div className="iam-filter-group">
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>
-                Role:
-              </span>
-              <button
-                type="button"
-                className={`iam-filter-chip ${selectedRoleFilter === 'ALL' ? 'active' : ''}`}
-                onClick={() => setSelectedRoleFilter('ALL')}
+            <div className="iam-filter-controls">
+              <select
+                className="iam-filter-select"
+                value={selectedRoleFilter}
+                onChange={e => setSelectedRoleFilter(e.target.value)}
+                aria-label="Filter by role"
               >
-                All
-              </button>
-              {distinctRoles.map(role => (
-                <button
-                  type="button"
-                  key={role}
-                  className={`iam-filter-chip ${selectedRoleFilter === role ? 'active' : ''}`}
-                  onClick={() => setSelectedRoleFilter(role)}
-                >
-                  {role.replaceAll('_', ' ')}
-                </button>
-              ))}
-            </div>
+                <option value="ALL">All Roles ({users.length})</option>
+                {distinctRoles.map(role => (
+                  <option key={role} value={role}>
+                    {role.replace(/_/g, ' ')}
+                  </option>
+                ))}
+              </select>
 
-            <div className="iam-filter-group">
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>
-                Status:
-              </span>
-              {['ALL', 'active', 'inactive'].map(st => (
+              <div className="iam-status-segmented" role="radiogroup" aria-label="Filter by status">
                 <button
                   type="button"
-                  key={st}
-                  className={`iam-filter-chip ${selectedStatusFilter === st ? 'active' : ''}`}
-                  onClick={() => setSelectedStatusFilter(st)}
+                  role="radio"
+                  aria-checked={selectedStatusFilter === 'ALL'}
+                  className={`iam-segmented-btn ${selectedStatusFilter === 'ALL' ? 'active' : ''}`}
+                  onClick={() => setSelectedStatusFilter('ALL')}
                 >
-                  {st.charAt(0).toUpperCase() + st.slice(1)}
+                  All
                 </button>
-              ))}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedStatusFilter === 'active'}
+                  className={`iam-segmented-btn ${selectedStatusFilter === 'active' ? 'active' : ''}`}
+                  onClick={() => setSelectedStatusFilter('active')}
+                >
+                  Active
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedStatusFilter === 'inactive'}
+                  className={`iam-segmented-btn ${selectedStatusFilter === 'inactive' ? 'active' : ''}`}
+                  onClick={() => setSelectedStatusFilter('inactive')}
+                >
+                  Inactive
+                </button>
+              </div>
+
+              {(search || selectedRoleFilter !== 'ALL' || selectedStatusFilter !== 'ALL') && (
+                <button
+                  type="button"
+                  className="iam-reset-filters-btn"
+                  onClick={() => {
+                    setSearch('');
+                    setSelectedRoleFilter('ALL');
+                    setSelectedStatusFilter('ALL');
+                  }}
+                  title="Reset all filters"
+                >
+                  Reset
+                </button>
+              )}
             </div>
           </div>
 
@@ -922,20 +1154,30 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                         onClick={() => setInspectedUser(user)}
                       >
                         <div className="iam-user-header">
-                          <div className={`iam-avatar ${getAvatarClass(user)}`}>
-                            {user.name ? user.name.charAt(0).toUpperCase() : user.id.charAt(0).toUpperCase()}
+                          <div style={{ position: 'relative' }}>
+                            <div className={`iam-avatar ${getAvatarClass(user)}`}>
+                              {user.name ? user.name.charAt(0).toUpperCase() : user.id.charAt(0).toUpperCase()}
+                            </div>
+                            <span
+                              className={`iam-avatar-dot ${user.status === 'active' ? 'active' : 'inactive'}`}
+                              title={`Membership: ${user.status}`}
+                            />
                           </div>
                           <div className="iam-user-meta">
                             <div className="iam-user-name-row">
-                              <span className="iam-user-name" title={user.name}>
+                              <span className="iam-user-name" title={user.name || user.id}>
                                 {user.name || user.id}
                               </span>
                               <span
-                                className={`iam-status-dot ${user.status === 'active' ? 'active' : 'suspended'}`}
-                                title={`Status: ${user.status}`}
-                              />
+                                className="iam-auth-badge"
+                                title={`Authentication: ${user.authn_method || 'jwt_rs256'}`}
+                              >
+                                {user.authn_method || 'jwt_rs256'}
+                              </span>
                             </div>
-                            <div className="iam-user-id">{user.id}</div>
+                            <span className="iam-user-id-badge">
+                              <code>{user.id}</code>
+                            </span>
                           </div>
                         </div>
 
@@ -943,30 +1185,66 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                           {user.roles.map(r => (
                             <span key={r} className={`iam-badge-role ${getTierClass(r)}`}>
                               <Shield size={10} />
-                              {r.replaceAll('_', ' ')}
+                              {r.replace(/_/g, ' ')}
                             </span>
                           ))}
                         </div>
 
                         <div className="iam-user-footer">
-                          <span>{user.email || 'No email assigned'}</span>
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={e => handleOpenEditUser(user, e)}
-                              title="Edit user profile"
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={e => handleDeleteUser(user.id, e)}
-                              title="Delete user"
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                          {user.email ? (
+                            <span className="iam-email-text" title={user.email}>
+                              <Mail size={12} style={{ flexShrink: 0 }} />
+                              <span>{user.email}</span>
+                            </span>
+                          ) : (
+                            <span className="iam-email-text iam-no-email">
+                              <Mail size={12} style={{ flexShrink: 0 }} />
+                              <span>No email assigned</span>
+                            </span>
+                          )}
+                          <div className="iam-user-actions">
+                            {canModifyTargetUser(user) && (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={e => handleOpenEditUser(user, e)}
+                                title="Edit user profile"
+                                aria-label={`Edit ${user.name || user.id}`}
+                              >
+                                <Edit2 size={12} />
+                              </button>
+                            )}
+                            {canToggleTargetStatus(user) && (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  void handleToggleUserStatus(user);
+                                }}
+                                disabled={savingUserId === user.id}
+                                title={user.status === 'active' ? 'Suspend membership' : 'Activate membership'}
+                                aria-label={`${user.status === 'active' ? 'Suspend' : 'Activate'} ${user.name || user.id}`}
+                              >
+                                {user.status === 'active' ? (
+                                  <XCircle size={12} style={{ color: '#f43f5e' }} />
+                                ) : (
+                                  <CheckCircle2 size={12} style={{ color: '#10b981' }} />
+                                )}
+                              </button>
+                            )}
+                            {canDeleteTargetUser(user) && (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                onClick={e => handleDeleteUser(user, e)}
+                                disabled={deletingUserId === user.id}
+                                title="Delete user"
+                                aria-label={`Delete ${user.name || user.id}`}
+                              >
+                                <Trash2 size={12} style={{ color: '#f43f5e' }} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -981,6 +1259,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                         <th>User Name</th>
                         <th>Subject ID</th>
                         <th>Assigned Roles</th>
+                        <th>Auth Method</th>
                         <th>Status</th>
                         <th>Actions</th>
                       </tr>
@@ -999,13 +1278,24 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                           >
                             <td>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <div
-                                  className={`iam-avatar ${getAvatarClass(user)}`}
-                                  style={{ width: 28, height: 28, fontSize: 11 }}
-                                >
-                                  {user.name.charAt(0).toUpperCase()}
+                                <div style={{ position: 'relative' }}>
+                                  <div
+                                    className={`iam-avatar ${getAvatarClass(user)}`}
+                                    style={{ width: 28, height: 28, fontSize: 11 }}
+                                  >
+                                    {user.name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <span
+                                    className={`iam-avatar-dot ${user.status === 'active' ? 'active' : 'inactive'}`}
+                                    style={{ width: 8, height: 8, bottom: -1, right: -1 }}
+                                  />
                                 </div>
-                                <span style={{ fontWeight: 600 }}>{user.name}</span>
+                                <div>
+                                  <div style={{ fontWeight: 600 }}>{user.name}</div>
+                                  {user.email && (
+                                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{user.email}</div>
+                                  )}
+                                </div>
                               </div>
                             </td>
                             <td>
@@ -1015,10 +1305,13 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                                 {user.roles.map(r => (
                                   <span key={r} className={`iam-badge-role ${getTierClass(r)}`}>
-                                    {r.replaceAll('_', ' ')}
+                                    {r.replace(/_/g, ' ')}
                                   </span>
                                 ))}
                               </div>
+                            </td>
+                            <td>
+                              <span className="iam-auth-badge">{user.authn_method || 'jwt_rs256'}</span>
                             </td>
                             <td>
                               <span
@@ -1029,22 +1322,48 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                             </td>
                             <td>
                               <div style={{ display: 'flex', gap: 4 }}>
-                                <button
-                                  type="button"
-                                  className="icon-btn"
-                                  onClick={e => handleOpenEditUser(user, e)}
-                                  title="Edit user"
-                                >
-                                  <Edit2 size={12} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="icon-btn"
-                                  onClick={e => handleDeleteUser(user.id, e)}
-                                  title="Delete user"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                {canModifyTargetUser(user) && (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    onClick={e => handleOpenEditUser(user, e)}
+                                    title="Edit user"
+                                    aria-label={`Edit ${user.name}`}
+                                  >
+                                    <Edit2 size={12} />
+                                  </button>
+                                )}
+                                {canToggleTargetStatus(user) && (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      void handleToggleUserStatus(user);
+                                    }}
+                                    disabled={savingUserId === user.id}
+                                    title={user.status === 'active' ? 'Suspend user' : 'Activate user'}
+                                    aria-label={`${user.status === 'active' ? 'Suspend' : 'Activate'} ${user.name}`}
+                                  >
+                                    {user.status === 'active' ? (
+                                      <XCircle size={12} style={{ color: '#f43f5e' }} />
+                                    ) : (
+                                      <CheckCircle2 size={12} style={{ color: '#10b981' }} />
+                                    )}
+                                  </button>
+                                )}
+                                {canDeleteTargetUser(user) && (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    onClick={e => handleDeleteUser(user, e)}
+                                    disabled={deletingUserId === user.id}
+                                    title="Delete user"
+                                    aria-label={`Delete ${user.name}`}
+                                  >
+                                    <Trash2 size={12} style={{ color: '#f43f5e' }} />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -1061,11 +1380,17 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
               {inspectedUser ? (
                 <div className="iam-detail-card">
                   <div className="iam-detail-hero">
-                    <div
-                      className={`iam-avatar ${getAvatarClass(inspectedUser)}`}
-                      style={{ width: 48, height: 48, fontSize: 18 }}
-                    >
-                      {inspectedUser.name.charAt(0).toUpperCase()}
+                    <div style={{ position: 'relative' }}>
+                      <div
+                        className={`iam-avatar ${getAvatarClass(inspectedUser)}`}
+                        style={{ width: 48, height: 48, fontSize: 18 }}
+                      >
+                        {inspectedUser.name.charAt(0).toUpperCase()}
+                      </div>
+                      <span
+                        className={`iam-avatar-dot ${inspectedUser.status === 'active' ? 'active' : 'inactive'}`}
+                        style={{ width: 12, height: 12, bottom: 0, right: 0 }}
+                      />
                     </div>
                     <div className="iam-detail-hero-info">
                       <h3 className="iam-detail-hero-name">{inspectedUser.name}</h3>
@@ -1084,15 +1409,32 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                       >
                         {inspectedUser.status}
                       </span>
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        style={{ fontSize: 11, padding: '3px 8px', height: 'auto' }}
-                        onClick={() => void handleToggleUserStatus(inspectedUser)}
-                        title="Toggle active / inactive membership state"
-                      >
-                        {inspectedUser.status === 'active' ? 'Suspend User' : 'Activate User'}
-                      </button>
+                      {canToggleTargetStatus(inspectedUser) ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ fontSize: 11, padding: '3px 8px', height: 'auto' }}
+                          onClick={() => void handleToggleUserStatus(inspectedUser)}
+                          disabled={savingUserId === inspectedUser.id}
+                          title="Toggle active / inactive membership state"
+                        >
+                          {savingUserId === inspectedUser.id
+                            ? 'Saving…'
+                            : inspectedUser.status === 'active'
+                            ? 'Suspend User'
+                            : 'Activate User'}
+                        </button>
+                      ) : isSelf(inspectedUser.id) && inspectedUser.status === 'active' ? (
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ fontSize: 11, padding: '3px 8px', height: 'auto', opacity: 0.6 }}
+                          disabled
+                          title="Cannot suspend your own authenticated session"
+                        >
+                          Active (Current)
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1103,33 +1445,33 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                       style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                     >
                       <span>
-                        {inspectedUser.email || (
+                        {inspectedUser.email ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <Mail size={12} style={{ color: 'var(--muted)' }} />
+                            {inspectedUser.email}
+                          </span>
+                        ) : (
                           <span style={{ color: 'var(--muted)', fontStyle: 'italic' }}>No email assigned</span>
                         )}
                       </span>
-                      <button
-                        type="button"
-                        className="icon-btn"
-                        onClick={e => handleOpenEditUser(inspectedUser, e)}
-                        title="Edit email"
-                      >
-                        <Edit2 size={11} />
-                      </button>
+                      {canModifyTargetUser(inspectedUser) && (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={e => handleOpenEditUser(inspectedUser, e)}
+                          title="Edit email"
+                          aria-label="Edit email"
+                        >
+                          <Edit2 size={11} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
                   <div className="iam-detail-row">
                     <div className="iam-detail-label">Authentication Method</div>
                     <div className="iam-detail-val">
-                      <code>{inspectedUser.authn_method || principal?.authn_method || 'workforce_identity'}</code>
-                    </div>
-                  </div>
-
-                  <div className="iam-detail-row">
-                    <div className="iam-detail-label">Deployment Scope</div>
-                    <div className="iam-detail-val">
-                      Tenant: <b>{inspectedUser.tenant_id || principal?.tenant_id || '—'}</b> · Project:{' '}
-                      <b>{inspectedUser.project_id || principal?.project_id || '—'}</b>
+                      <code>{inspectedUser.authn_method || principal?.authn_method || 'jwt_rs256'}</code>
                     </div>
                   </div>
 
@@ -1139,58 +1481,84 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                       style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                     >
                       <span>Assigned Roles ({inspectedUser.roles.length})</span>
-                      {assignableRoles.some(r => !inspectedUser.roles.includes(r.id)) && (
-                        <select
-                          className="iam-quick-add-select"
-                          value=""
-                          onChange={e => void handleAddUserRole(inspectedUser, e.target.value)}
-                          aria-label="Quick assign role"
-                        >
-                          <option value="" disabled>
-                            + Assign Role…
-                          </option>
-                          {assignableRoles
-                            .filter(r => !inspectedUser.roles.includes(r.id))
-                            .map(r => (
-                              <option key={r.id} value={r.id}>
-                                {r.name || r.id}
-                              </option>
-                            ))}
-                        </select>
-                      )}
+                      {canModifyTargetUser(inspectedUser) &&
+                        assignableRoles.some(r => !inspectedUser.roles.includes(r.id)) && (
+                          <select
+                            className="iam-quick-add-select"
+                            value=""
+                            onChange={e => void handleAddUserRole(inspectedUser, e.target.value)}
+                            disabled={savingUserId === inspectedUser.id}
+                            aria-label="Quick assign role"
+                          >
+                            <option value="" disabled>
+                              + Assign Role…
+                            </option>
+                            {assignableRoles
+                              .filter(
+                                r =>
+                                  !inspectedUser.roles.includes(r.id) &&
+                                  (r.id !== 'PLATFORM_ADMIN' || isPlatformAdmin)
+                              )
+                              .map(r => (
+                                <option key={r.id} value={r.id}>
+                                  {r.name || r.id}
+                                </option>
+                              ))}
+                          </select>
+                        )}
                     </div>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                      {inspectedUser.roles.map(r => (
-                        <span key={r} className={`iam-badge-role ${getTierClass(r)} iam-badge-editable`}>
-                          <Shield size={11} />
-                          <span
-                            onClick={() => {
-                              const match = roles.find(item => item.id === r);
-                              if (match) setSelectedRole(match);
-                              setActiveTab('roles');
-                            }}
-                            title="Click to view in Roles Catalog"
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {r.replaceAll('_', ' ')}
+                      {inspectedUser.roles.map(r => {
+                        const cannotRemove =
+                          inspectedUser.roles.length <= 1 ||
+                          (isSelf(inspectedUser.id) && MANAGEMENT_ROLES.has(r)) ||
+                          !canModifyTargetUser(inspectedUser) ||
+                          savingUserId === inspectedUser.id;
+                        return (
+                          <span key={r} className={`iam-badge-role ${getTierClass(r)} iam-badge-editable`}>
+                            <Shield size={11} />
+                            <span
+                              onClick={() => {
+                                const match = roles.find(item => item.id === r);
+                                if (match) setSelectedRole(match);
+                                handleTabClick('roles');
+                              }}
+                              title="Click to view in Roles Catalog"
+                              style={{ cursor: 'pointer' }}
+                            >
+                              {r.replace(/_/g, ' ')}
+                            </span>
+                            {canModifyTargetUser(inspectedUser) && (
+                              <button
+                                type="button"
+                                className="iam-pill-remove-btn"
+                                onClick={e => void handleRemoveUserRole(inspectedUser, r, e)}
+                                title={
+                                  inspectedUser.roles.length <= 1
+                                    ? 'User must retain at least one role'
+                                    : isSelf(inspectedUser.id) && MANAGEMENT_ROLES.has(r)
+                                    ? 'Cannot remove your own last management role'
+                                    : `Remove ${r} from ${inspectedUser.name}`
+                                }
+                                disabled={cannotRemove}
+                                aria-label={`Remove role ${r}`}
+                              >
+                                <X size={10} />
+                              </button>
+                            )}
                           </span>
-                          <button
-                            type="button"
-                            className="iam-pill-remove-btn"
-                            onClick={e => void handleRemoveUserRole(inspectedUser, r, e)}
-                            title={`Remove ${r} from ${inspectedUser.name}`}
-                            disabled={inspectedUser.roles.length <= 1}
-                          >
-                            <X size={10} />
-                          </button>
-                        </span>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
                   <div className="iam-detail-row">
                     <div className="iam-detail-label">
-                      Authorized Capabilities ({userAuthorizedCapabilities.length})
+                      Role-Aligned Capabilities ({userAuthorizedCapabilities.length})
+                    </div>
+                    <div className="iam-cap-note">
+                      <Info size={13} style={{ display: 'inline', verticalAlign: 'text-bottom', marginRight: 4 }} />
+                      Role alignment reflects declared role restrictions. Runtime execution enforces minimum role hierarchy, enabled state, project scope, and connector health.
                     </div>
                     <div className="iam-caps-list">
                       {userAuthorizedCapabilities.slice(0, 8).map(c => (
@@ -1200,7 +1568,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                         </div>
                       ))}
                       {userAuthorizedCapabilities.length === 0 && (
-                        <div style={{ color: 'var(--muted)', fontSize: 12 }}>
+                        <div className="iam-caps-empty">
                           No capabilities specifically restricted to these roles.
                         </div>
                       )}
@@ -1213,14 +1581,15 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                       className="btn btn-secondary"
                       style={{ flex: 1 }}
                       onClick={() => handleOpenEditUser(inspectedUser)}
+                      disabled={!canModifyTargetUser(inspectedUser)}
                     >
                       <Edit2 size={13} /> Edit Profile
                     </button>
                     <button
                       type="button"
                       className="btn btn-outline"
-                      onClick={() => setActiveTab('roles')}
-                      title="Inspect Roles & Privileges"
+                      onClick={() => handleTabClick('roles')}
+                      title="Inspect Roles Catalog"
                     >
                       <KeyRound size={13} /> Roles Catalog
                     </button>
@@ -1233,14 +1602,14 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
               )}
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* ==================================================================== */}
       {/* TAB 2: ROLES CATALOG & RESPONSIBILITIES                              */}
       {/* ==================================================================== */}
       {activeTab === 'roles' && (
-        <>
+        <div role="tabpanel" id="iam-panel-roles" aria-labelledby="iam-tab-roles" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="iam-toolbar-panel">
             <div className="iam-search-box">
               <Search size={15} style={{ color: 'var(--muted)' }} />
@@ -1277,13 +1646,14 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
             </div>
           </div>
 
-          <div className="iam-master-detail">
+          <div className="iam-master-detail iam-roles-master-detail">
             {/* Left: Role List Items */}
             <div className="iam-role-list-pane">
               {filteredRoles.map(role => {
                 const isSelected = selectedRole?.id === role.id;
                 const userCount = users.filter(u => u.roles.includes(role.id)).length;
                 const resp = ROLE_RESPONSIBILITIES[role.id];
+                const isSystem = ASSIGNABLE_ROLE_IDS.has(role.id);
 
                 return (
                   <button
@@ -1292,26 +1662,38 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                     className={`iam-role-item-btn ${isSelected ? 'selected' : ''}`}
                     onClick={() => setSelectedRole(role)}
                   >
-                    <div className="iam-role-item-left">
-                      <div className="iam-role-item-title">{role.name}</div>
-                      <div className="iam-role-item-code">{role.id}</div>
+                    <div className="iam-role-card-header">
+                      <span className="iam-role-item-title" title={role.name}>{role.name}</span>
+                      <div className="iam-role-card-header-right">
+                        <span className="iam-role-user-count" title={`${userCount} assigned ${userCount === 1 ? 'user' : 'users'}`}>
+                          <UsersIcon size={11} />
+                          <span>{userCount}</span>
+                        </span>
+                        <ChevronRight size={13} className="iam-role-chevron" />
+                      </div>
+                    </div>
+
+                    <div className="iam-role-card-sub">
+                      <span className="iam-role-item-code">{role.id}</span>
                       {resp && (
-                        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                        <span className="iam-role-item-scope">
                           {resp.governanceScope}
                           {!resp.analysisAllowed && (
-                            <span style={{ color: '#f59e0b', marginLeft: 6 }}>• No Triage</span>
+                            <span className="iam-role-no-triage">• No Triage</span>
                           )}
-                        </div>
+                        </span>
                       )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+
+                    <div className="iam-role-card-badges">
+                      {isSystem ? (
+                        <span className="iam-badge-role tier-admin">System</span>
+                      ) : (
+                        <span className="iam-badge-role tier-gen">Custom</span>
+                      )}
                       <span className={`iam-badge-role ${getTierClass(role.tier || role.id)}`}>
                         {role.tier || 'Operational'}
                       </span>
-                      <span className="iam-tab-pill" title={`${userCount} assigned users`}>
-                        {userCount} {userCount === 1 ? 'user' : 'users'}
-                      </span>
-                      <ChevronRight size={14} style={{ opacity: isSelected ? 1 : 0.4 }} />
                     </div>
                   </button>
                 );
@@ -1322,24 +1704,74 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
             <div className="iam-detail-pane">
               {selectedRole ? (
                 <div className="iam-detail-card">
+                  {/* Hero Header */}
                   <div className="iam-detail-hero">
                     <div className="iam-stat-icon-wrapper purple" style={{ width: 44, height: 44 }}>
                       <ShieldCheck size={22} />
                     </div>
                     <div className="iam-detail-hero-info">
-                      <h3 className="iam-detail-hero-name">{selectedRole.name}</h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <h3 className="iam-detail-hero-name" style={{ margin: 0 }}>{selectedRole.name}</h3>
+                        {ASSIGNABLE_ROLE_IDS.has(selectedRole.id) ? (
+                          <span className="iam-badge-role tier-admin" style={{ fontSize: 11 }}>
+                            <CheckCircle2 size={11} /> Supported System Role
+                          </span>
+                        ) : (
+                          <span className="iam-badge-role tier-gen" style={{ fontSize: 11 }}>
+                            <BookOpen size={11} /> Custom Catalog Role
+                          </span>
+                        )}
+                      </div>
                       <div className="iam-detail-hero-sub">Identifier: {selectedRole.id}</div>
                     </div>
-                    <span className={`iam-badge-role ${getTierClass(selectedRole.tier || selectedRole.id)}`}>
-                      {selectedRole.tier || 'Operational'}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span className={`iam-badge-role ${getTierClass(selectedRole.tier || selectedRole.id)}`}>
+                        {selectedRole.tier || 'Operational'}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ fontSize: 12, padding: '4px 10px' }}
+                        onClick={() => handleOpenEditRole(selectedRole)}
+                        title="Edit role definition"
+                      >
+                        <Edit2 size={12} /> Edit
+                      </button>
+                      {!selectedRole.is_system && !ASSIGNABLE_ROLE_IDS.has(selectedRole.id) && (
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          style={{ color: '#f43f5e', fontSize: 12, padding: '4px 10px' }}
+                          onClick={e => handleDeleteRole(selectedRole.id, e)}
+                          title="Delete custom role definition"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Descriptive Role Catalog Notice */}
+                  <div className="iam-descriptive-notice">
+                    <Info size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--acc)' }} />
+                    <div>
+                      <div>
+                        <b>Descriptive Role Catalog:</b> Permission lists defined in this catalog document intended actions.
+                        Runtime authorization is governed by backend capability policies, minimum roles, and project scope.
+                      </div>
+                      {!ASSIGNABLE_ROLE_IDS.has(selectedRole.id) && (
+                        <div style={{ marginTop: 4, color: 'var(--muted)', fontSize: 11 }}>
+                          Notice: Custom roles cannot be assigned to principals in the backend; user membership requires supported system roles.
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Core Responsibilities Box */}
                   {ROLE_RESPONSIBILITIES[selectedRole.id] ? (
                     <div
                       style={{
-                        padding: 12,
+                        padding: 14,
                         borderRadius: 8,
                         background:
                           selectedRole.id === 'PROJECT_MANAGER'
@@ -1349,7 +1781,6 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                           selectedRole.id === 'PROJECT_MANAGER'
                             ? '1px solid rgba(245, 158, 11, 0.25)'
                             : '1px solid var(--line)',
-                        margin: '10px 0',
                       }}
                     >
                       <div
@@ -1360,32 +1791,39 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                           display: 'flex',
                           alignItems: 'center',
                           gap: 6,
-                          marginBottom: 4,
+                          marginBottom: 6,
                         }}
                       >
-                        <Sparkles size={13} /> Role Responsibilities & Operational Boundary
+                        <Sparkles size={13} /> Role Responsibilities & Governance Scope ({ROLE_RESPONSIBILITIES[selectedRole.id].governanceScope})
                       </div>
-                      <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 8px', lineHeight: 1.5 }}>
+                      <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5 }}>
                         {ROLE_RESPONSIBILITIES[selectedRole.id].summary}
                       </p>
-                      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 11, color: 'var(--text)', lineHeight: 1.6 }}>
+                      <div className="iam-resp-list">
                         {ROLE_RESPONSIBILITIES[selectedRole.id].responsibilities.map((r, i) => (
-                          <li key={i}>{r}</li>
+                          <div key={i} className="iam-resp-item">
+                            <CheckCircle2 size={13} style={{ color: '#10b981', flexShrink: 0, marginTop: 2 }} />
+                            <span>{r}</span>
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                       {!ROLE_RESPONSIBILITIES[selectedRole.id].analysisAllowed && (
                         <div
                           style={{
-                            marginTop: 8,
-                            padding: '4px 8px',
-                            borderRadius: 4,
+                            marginTop: 10,
+                            padding: '6px 10px',
+                            borderRadius: 6,
                             background: 'rgba(239, 68, 68, 0.12)',
                             color: '#f87171',
                             fontSize: 11,
                             fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
                           }}
                         >
-                          ⚠️ Analysis & Triage Prohibited: This role cannot execute incident triage or log correlation.
+                          <AlertTriangle size={13} />
+                          <span>Analysis & Triage Restricted: Principals holding this role alone cannot execute incident triage or diagnostic log correlation.</span>
                         </div>
                       )}
                     </div>
@@ -1396,140 +1834,140 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                     </div>
                   )}
 
-                  <div className="iam-detail-row">
-                    <div className="iam-detail-label">Assigned Principals ({roleAssignedUsers.length})</div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                      {roleAssignedUsers.map(u => (
-                        <span
-                          key={u.id}
-                          className="meta-pill"
-                          style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          onClick={() => {
-                            setInspectedUser(u);
-                            setActiveTab('directory');
-                          }}
-                          title="Click to view in User Directory"
+                  {/* Multi-Column Dossier Workspace */}
+                  <div className="iam-dossier-grid">
+                    {/* Column 1: Descriptive Permissions & Actions */}
+                    <div className="iam-dossier-col">
+                      <div className="iam-detail-row">
+                        <div
+                          className="iam-detail-label"
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                         >
-                          <UsersIcon size={11} />
-                          <b>{u.name}</b> ({u.id})
-                        </span>
-                      ))}
-                      {roleAssignedUsers.length === 0 && (
-                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                          No users in this project currently hold this role.
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Permissions & Actions with 1-click add/remove */}
-                  <div className="iam-detail-row">
-                    <div
-                      className="iam-detail-label"
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                    >
-                      <span>Permissions & Actions ({(selectedRole.permissions || []).length})</span>
-                      <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400 }}>
-                        Click × to revoke or + to grant
-                      </span>
-                    </div>
-
-                    <div className="iam-permissions-container" style={{ marginTop: 6 }}>
-                      {/* Active Granted Permissions */}
-                      <div className="iam-permissions-list">
-                        {(selectedRole.permissions || []).map(p => (
-                          <span key={p} className="iam-permission-pill active">
-                            <span>{p}</span>
-                            <button
-                              type="button"
-                              className="iam-pill-remove-btn"
-                              onClick={() => void handleRemovePermission(selectedRole, p)}
-                              title={`Revoke action '${p}' from ${selectedRole.name}`}
-                            >
-                              <X size={10} />
-                            </button>
+                          <span>Descriptive Actions ({(selectedRole.permissions || []).length})</span>
+                          <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 400 }}>
+                            Click × to revoke or + to grant
                           </span>
-                        ))}
-                        {(!selectedRole.permissions || selectedRole.permissions.length === 0) && (
-                          <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                            No granular actions assigned. Governed by capability policy.
-                          </span>
-                        )}
-                      </div>
+                        </div>
 
-                      {/* Available Unassigned Platform Actions */}
-                      {availableActions.some(action => !(selectedRole.permissions || []).includes(action)) && (
-                        <div style={{ marginTop: 8 }}>
-                          <div
-                            style={{
-                              fontSize: 11,
-                              color: 'var(--muted)',
-                              marginBottom: 4,
-                              textTransform: 'uppercase',
-                              fontWeight: 600,
-                            }}
-                          >
-                            Available Actions to Grant:
+                        {savingRolePermission && (
+                          <div style={{ fontSize: 11, color: 'var(--acc)', display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                            <RefreshCw size={11} className="spin" /> Updating role definition...
                           </div>
+                        )}
+
+                        <div className="iam-permissions-container" style={{ marginTop: 6 }}>
+                          {/* Active Granted Permissions */}
                           <div className="iam-permissions-list">
-                            {availableActions
-                              .filter(action => !(selectedRole.permissions || []).includes(action))
-                              .map(action => (
+                            {(selectedRole.permissions || []).map(p => (
+                              <span key={p} className="iam-permission-pill active">
+                                <span>{p}</span>
                                 <button
                                   type="button"
-                                  key={action}
-                                  className="iam-permission-pill add-pill"
-                                  onClick={() => void handleAddPermission(selectedRole, action)}
-                                  title={`Grant action '${action}' to ${selectedRole.name}`}
+                                  className="iam-pill-remove-btn"
+                                  disabled={Boolean(savingRolePermission)}
+                                  onClick={() => void handleRemovePermission(selectedRole, p)}
+                                  title={`Revoke descriptive action '${p}' from role definition`}
+                                  aria-label={`Revoke action ${p}`}
                                 >
-                                  <Plus size={10} />
-                                  <span>{action}</span>
+                                  <X size={10} />
                                 </button>
-                              ))}
+                              </span>
+                            ))}
+                            {(!selectedRole.permissions || selectedRole.permissions.length === 0) && (
+                              <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                                No granular actions cataloged for this role.
+                              </span>
+                            )}
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
 
-                  <div className="iam-detail-row">
-                    <div className="iam-detail-label">
-                      Authorized Capabilities ({roleAuthorizedCapabilities.length})
-                    </div>
-                    <div className="iam-caps-list">
-                      {roleAuthorizedCapabilities.map(c => (
-                        <div key={c.id} className="iam-cap-row">
-                          <span className="iam-cap-name">{c.name}</span>
-                          <span className="iam-cap-cat">{c.category}</span>
+                          {/* Available Unassigned Platform Actions */}
+                          {availableActions.some(action => !(selectedRole.permissions || []).includes(action)) && (
+                            <div style={{ marginTop: 10 }}>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: 'var(--muted)',
+                                  marginBottom: 4,
+                                  textTransform: 'uppercase',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Available Actions to Catalog:
+                              </div>
+                              <div className="iam-permissions-list">
+                                {availableActions
+                                  .filter(action => !(selectedRole.permissions || []).includes(action))
+                                  .map(action => (
+                                    <button
+                                      type="button"
+                                      key={action}
+                                      disabled={Boolean(savingRolePermission)}
+                                      className="iam-permission-pill add-pill"
+                                      onClick={() => void handleAddPermission(selectedRole, action)}
+                                      title={`Add action '${action}' to role definition`}
+                                      aria-label={`Add action ${action}`}
+                                    >
+                                      <Plus size={10} />
+                                      <span>{action}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      ))}
-                      {roleAuthorizedCapabilities.length === 0 && (
-                        <div style={{ color: 'var(--muted)', fontSize: 12 }}>
-                          No investigation capabilities specifically granted to this role.
-                        </div>
-                      )}
+                      </div>
                     </div>
-                  </div>
 
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ flex: 1 }}
-                      onClick={() => handleOpenEditRole(selectedRole)}
-                    >
-                      <Edit2 size={13} /> Edit Role
-                    </button>
-                    {!selectedRole.is_system && (
-                      <button
-                        type="button"
-                        className="btn btn-outline"
-                        style={{ color: '#f43f5e' }}
-                        onClick={e => handleDeleteRole(selectedRole.id, e)}
-                      >
-                        <Trash2 size={13} /> Delete
-                      </button>
-                    )}
+                    {/* Column 2: Assigned Principals & Permitted Capabilities */}
+                    <div className="iam-dossier-col">
+                      <div className="iam-detail-row">
+                        <div className="iam-detail-label">Assigned Principals ({roleAssignedUsers.length})</div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {roleAssignedUsers.map(u => (
+                            <span
+                              key={u.id}
+                              className="meta-pill"
+                              style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                              onClick={() => {
+                                setInspectedUser(u);
+                                handleTabClick('directory');
+                              }}
+                              title="Click to view in User Directory"
+                            >
+                              <UsersIcon size={11} />
+                              <b>{u.name}</b> <span style={{ opacity: 0.7, fontSize: 10 }}>({u.id})</span>
+                            </span>
+                          ))}
+                          {roleAssignedUsers.length === 0 && (
+                            <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                              No principals in this project currently hold this role.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="iam-detail-row">
+                        <div className="iam-detail-label">
+                          Explicitly Permitted Capabilities ({roleAuthorizedCapabilities.length})
+                        </div>
+                        <div className="iam-caps-list">
+                          {roleAuthorizedCapabilities.map(c => (
+                            <div key={c.id} className="iam-cap-row">
+                              <div>
+                                <div className="iam-cap-name">{c.name}</div>
+                                <div style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--mono)' }}>{c.id}</div>
+                              </div>
+                              <span className="iam-cap-cat">{c.category}</span>
+                            </div>
+                          ))}
+                          {roleAuthorizedCapabilities.length === 0 && (
+                            <div style={{ color: 'var(--muted)', fontSize: 12 }}>
+                              No capabilities explicitly list this role in allowed_roles.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -1539,14 +1977,14 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
               )}
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* ==================================================================== */}
       {/* TAB 3: ROLE ASSIGNMENT MATRIX                                        */}
       {/* ==================================================================== */}
       {activeTab === 'matrix' && (
-        <div className="iam-matrix-card">
+        <div className="iam-matrix-card" role="tabpanel" id="iam-panel-matrix" aria-labelledby="iam-tab-matrix">
           <div
             style={{
               padding: '16px 20px',
@@ -1560,10 +1998,10 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
           >
             <div>
               <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px', color: 'var(--text)' }}>
-                Cross-Tenant Role Assignment Matrix
+                System Role Assignment Matrix
               </h3>
               <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
-                Click any cell to immediately grant or revoke role membership with real-time PostgreSQL persistence.
+                Manage project role membership across supported system roles. User assignments are persisted in real time to PostgreSQL.
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, color: 'var(--muted)' }}>
@@ -1577,56 +2015,99 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                 <span className="iam-matrix-toggle-btn inactive" style={{ width: 20, height: 20 }}>
                   <XCircle size={13} />
                 </span>
-                Unassigned (Click to grant)
+                Unassigned (Click to toggle)
               </span>
             </div>
           </div>
+
+          <div className="iam-matrix-toolbar">
+            <div className="iam-matrix-search">
+              <Search size={14} style={{ color: 'var(--muted)' }} />
+              <input
+                type="search"
+                placeholder="Search principals by name or ID..."
+                value={matrixUserSearch}
+                onChange={e => setMatrixUserSearch(e.target.value)}
+                aria-label="Search principals in role matrix"
+              />
+            </div>
+            <div className="iam-matrix-meta-summary">
+              <span><b>{filteredMatrixUsers.length}</b> of <b>{users.length}</b> Principals</span>
+              <span>•</span>
+              <span><b>{totalRoleAssignments}</b> Active Role Grants</span>
+            </div>
+          </div>
+
           <div className="iam-matrix-table-wrap">
             <table className="iam-matrix-table">
               <thead>
                 <tr>
                   <th style={{ minWidth: 200 }}>Principal</th>
                   <th style={{ minWidth: 120 }}>Subject ID</th>
-                  {roles.map(r => (
+                  {assignableRoles.map(r => (
                     <th key={r.id} style={{ textAlign: 'center', minWidth: 110 }}>
                       <span className={`iam-badge-role ${getTierClass(r.id)}`} style={{ fontSize: 10 }}>
-                        {r.id.replaceAll('_', ' ')}
+                        {r.name || r.id.replaceAll('_', ' ')}
                       </span>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {users.map(u => (
-                  <tr key={u.id}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div className={`iam-avatar ${getAvatarClass(u)}`} style={{ width: 24, height: 24, fontSize: 10 }}>
-                          {u.name.charAt(0).toUpperCase()}
-                        </div>
-                        <span style={{ fontWeight: 600 }}>{u.name}</span>
-                      </div>
+                {filteredMatrixUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={assignableRoles.length + 2} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                      No principals found matching &quot;{matrixUserSearch}&quot;.
                     </td>
-                    <td>
-                      <code>{u.id}</code>
-                    </td>
-                    {roles.map(r => {
-                      const hasRole = u.roles.includes(r.id);
-                      return (
-                        <td key={r.id} style={{ textAlign: 'center' }}>
-                          <button
-                            type="button"
-                            className={`iam-matrix-toggle-btn ${hasRole ? 'active' : 'inactive'}`}
-                            onClick={() => void handleToggleUserRole(u, r.id)}
-                            title={`Click to ${hasRole ? 'revoke' : 'grant'} role ${r.name || r.id} for ${u.name}`}
-                          >
-                            {hasRole ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-                          </button>
-                        </td>
-                      );
-                    })}
                   </tr>
-                ))}
+                ) : (
+                  filteredMatrixUsers.map(u => (
+                    <tr key={u.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div className={`iam-avatar ${getAvatarClass(u)}`} style={{ width: 24, height: 24, fontSize: 10 }}>
+                            {u.name.charAt(0).toUpperCase()}
+                          </div>
+                          <span style={{ fontWeight: 600 }}>{u.name}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <code>{u.id}</code>
+                      </td>
+                      {assignableRoles.map(r => {
+                        const hasRole = u.roles.includes(r.id);
+                        const disabled =
+                          !canModifyTargetUser(u) ||
+                          (r.id === 'PLATFORM_ADMIN' && !isPlatformAdmin) ||
+                          savingUserId === u.id ||
+                          (hasRole && u.roles.length <= 1) ||
+                          (hasRole &&
+                            isSelf(u.id) &&
+                            MANAGEMENT_ROLES.has(r.id) &&
+                            u.roles.filter(role => role !== r.id && MANAGEMENT_ROLES.has(role)).length === 0);
+                        return (
+                          <td key={r.id} style={{ textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              className={`iam-matrix-toggle-btn ${hasRole ? 'active' : 'inactive'}`}
+                              onClick={() => void handleToggleUserRole(u, r.id)}
+                              aria-pressed={hasRole}
+                              disabled={disabled}
+                              aria-label={`${hasRole ? 'Revoke' : 'Grant'} role ${r.name || r.id} for ${u.name}`}
+                              title={
+                                disabled
+                                  ? 'Role assignment change restricted by governance policy'
+                                  : `Click to ${hasRole ? 'revoke' : 'grant'} role ${r.name || r.id} for ${u.name}`
+                              }
+                            >
+                              {hasRole ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -1637,22 +2118,62 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
       {/* TAB 4: CAPABILITY ACCESS MATRIX                                      */}
       {/* ==================================================================== */}
       {activeTab === 'capabilities' && (
-        <div className="iam-matrix-card">
+        <div className="iam-matrix-card" role="tabpanel" id="iam-panel-capabilities" aria-labelledby="iam-tab-capabilities">
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)' }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px', color: 'var(--text)' }}>
               Capability RBAC Access Matrix
             </h3>
             <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>
-              Cross-tabulation mapping investigation capabilities to server-authorized roles. Notice that
-              <b> Project Managers</b> are restricted from analysis and triage capabilities, while
-              <b> Project Analysts</b> and <b>Project Owners</b> hold investigation execution rights.
+              Cross-tabulation mapping investigation capabilities to server-authorized roles. Capabilities with no explicit role restriction
+              still require minimum role thresholds, connector availability, and authenticated tenant/project scope.
             </p>
           </div>
+
+          <div className="iam-matrix-toolbar">
+            <div className="iam-matrix-search">
+              <Search size={14} style={{ color: 'var(--muted)' }} />
+              <input
+                type="search"
+                placeholder="Search capabilities by name, ID, or description..."
+                value={capMatrixSearch}
+                onChange={e => setCapMatrixSearch(e.target.value)}
+                aria-label="Search capabilities"
+              />
+            </div>
+
+            <div className="iam-filter-group">
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>
+                Category:
+              </span>
+              <button
+                type="button"
+                className={`iam-filter-chip ${capMatrixCategory === 'ALL' ? 'active' : ''}`}
+                onClick={() => setCapMatrixCategory('ALL')}
+              >
+                All
+              </button>
+              {distinctCapCategories.map(cat => (
+                <button
+                  type="button"
+                  key={cat}
+                  className={`iam-filter-chip ${capMatrixCategory === cat ? 'active' : ''}`}
+                  onClick={() => setCapMatrixCategory(cat)}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+
+            <div className="iam-matrix-meta-summary">
+              <span><b>{filteredMatrixCaps.length}</b> of <b>{capabilities.length}</b> Capabilities</span>
+            </div>
+          </div>
+
           <div className="iam-matrix-table-wrap">
             <table className="iam-matrix-table">
               <thead>
                 <tr>
-                  <th style={{ minWidth: 240 }}>Capability</th>
+                  <th style={{ minWidth: 260 }}>Capability</th>
                   <th style={{ minWidth: 110 }}>Category</th>
                   {roles.map(r => (
                     <th key={r.id} style={{ textAlign: 'center', minWidth: 110 }}>
@@ -1664,37 +2185,67 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
                 </tr>
               </thead>
               <tbody>
-                {capabilities.map(cap => {
-                  const allowed = cap.permissions?.allowed_roles || [];
-                  const isPublic = allowed.length === 0;
-                  return (
-                    <tr key={cap.id}>
-                      <td>
-                        <div style={{ fontWeight: 600 }}>{cap.name}</div>
-                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>{cap.id}</div>
-                      </td>
-                      <td>
-                        <span className="iam-cap-cat">{cap.category}</span>
-                      </td>
-                      {roles.map(r => {
-                        const permitted = isPublic || allowed.includes(r.id);
-                        return (
-                          <td key={r.id} style={{ textAlign: 'center' }}>
-                            {permitted ? (
-                              <span className="iam-matrix-check" title={`${r.name} authorized for ${cap.name}`}>
-                                <CheckCircle2 size={14} />
-                              </span>
-                            ) : (
-                              <span className="iam-matrix-cross" title={`${r.name} not permitted for ${cap.name}`}>
-                                <XCircle size={14} />
+                {filteredMatrixCaps.length === 0 ? (
+                  <tr>
+                    <td colSpan={roles.length + 2} style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+                      No capabilities found matching the active filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredMatrixCaps.map(cap => {
+                    const allowed = cap.permissions?.allowed_roles || [];
+                    const hasExplicitRestriction = allowed.length > 0;
+                    return (
+                      <tr key={cap.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 600 }}>{cap.name}</span>
+                            {!hasExplicitRestriction && (
+                              <span className="badge badge-neutral" style={{ fontSize: 9, padding: '1px 5px' }}>
+                                No explicit role restriction
                               </span>
                             )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            {cap.id}
+                            {!hasExplicitRestriction && (
+                              <span style={{ opacity: 0.7, marginLeft: 4 }}>(subject to minimum role & scope)</span>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <span className="iam-cap-cat">{cap.category}</span>
+                        </td>
+                        {roles.map(r => {
+                          const permitted = !hasExplicitRestriction || allowed.includes(r.id);
+                          return (
+                            <td key={r.id} style={{ textAlign: 'center' }}>
+                              {permitted ? (
+                                <span
+                                  className="iam-matrix-check"
+                                  title={
+                                    hasExplicitRestriction
+                                      ? `${r.name} explicitly authorized for ${cap.name}`
+                                      : `No explicit role restriction for ${cap.name} (requires minimum role & project scope)`
+                                  }
+                                >
+                                  <CheckCircle2 size={14} />
+                                </span>
+                              ) : (
+                                <span
+                                  className="iam-matrix-cross"
+                                  title={`${r.name} not permitted for ${cap.name}`}
+                                >
+                                  <XCircle size={14} />
+                                </span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1705,7 +2256,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
       {/* TAB 5: SECURITY & SCOPING POLICY                                     */}
       {/* ==================================================================== */}
       {activeTab === 'security' && (
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div style={{ display: 'grid', gap: 16 }} role="tabpanel" id="iam-panel-security" aria-labelledby="iam-tab-security">
           <div className="notice-banner blue">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               <Building size={18} style={{ color: 'var(--acc)' }} />
@@ -1722,23 +2273,45 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
           </div>
 
           <div className="card" style={{ padding: 20 }}>
-            <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Terminal size={16} style={{ color: 'var(--acc)' }} />
-              Issuing Scoped Development Tokens
+            <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Lock size={16} style={{ color: 'var(--acc)' }} />
+              Security Hardening Guardrails
             </h4>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
-              In demo environments, tokens for configured server principals can be generated using the offline script:
-            </p>
-            <pre style={{ padding: 12, borderRadius: 8, background: 'var(--code-bg)', fontSize: 12, overflowX: 'auto' }}>
-              <code>uv run python -m scripts.issue_dev_token admin --expires-in 86400</code>
-            </pre>
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-              {users.map(u => (
-                <span key={u.id} className="meta-pill">
-                  Subject: <b>{u.id}</b> ({u.roles.join(', ')})
-                </span>
-              ))}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10, marginTop: 12 }}>
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Local Diagnostic Files Only</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>Zero remote URL fetching. Bounded parsing and OCR-only image text extraction.</div>
+              </div>
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>No Arbitrary Code Execution</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>Zero arbitrary macros or code execution. ADK agent execution paths are strictly typed.</div>
+              </div>
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>UTC Request Deadlines</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>Enforced execution deadlines and timeouts prevent unbounded investigation loops.</div>
+              </div>
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>Read-Only Live Connectors</div>
+                <div style={{ fontSize: 11, color: 'var(--muted)' }}>Jira and Splunk connectors operate in strictly read-only query mode.</div>
+              </div>
             </div>
+          </div>
+
+          <div className="card" style={{ padding: 20 }}>
+            <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Terminal size={16} style={{ color: 'var(--acc)' }} />
+              Development Utility: Scoped JWT Token Issuer
+            </h4>
+            <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5 }}>
+              For offline development and smoke testing in <code>RCA_MODE=demo</code> deployments, signed RS256 JWT tokens
+              can be issued for configured server principals (configured in <code>RCA_PRINCIPALS_JSON</code>) using the offline script:
+            </p>
+            <pre style={{ padding: 12, borderRadius: 8, background: 'var(--code-bg)', fontSize: 12, overflowX: 'auto', margin: 0 }}>
+              <code>uv run python -m scripts.issue_dev_token &lt;principal_subject&gt; --expires-in 86400</code>
+            </pre>
+            <p style={{ fontSize: 11, color: 'var(--muted)', margin: '8px 0 0', fontStyle: 'italic' }}>
+              Note: This script requires a local private key file, is restricted to demo mode, and only accepts subjects explicitly defined in server configuration.
+            </p>
           </div>
         </div>
       )}

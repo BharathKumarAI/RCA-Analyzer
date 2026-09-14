@@ -80,16 +80,12 @@ export const SessionModal: React.FC<SessionModalProps> = ({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <p id="session-description" style={{ color: 'var(--muted)', fontSize: '12px' }}>{authenticated ? 'Your authenticated scope and roles are shown below.' : 'Paste a deployment token to access your scoped RCA workspace.'}</p>
+          <p id="session-description" style={{ color: 'var(--muted)', fontSize: '12px' }}>{authenticated ? 'Your authenticated identity and assigned roles are shown below.' : 'Paste a session token to access RCA Analyzer.'}</p>
           {(error || sessionError) && <div role="alert" style={{ color: 'var(--acc-rose)', fontSize: '12px' }}>{error || sessionError}</div>}
           {authenticated && <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--card-subtle)', border: '1px solid var(--line)', fontSize: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
               <span style={{ color: 'var(--muted)' }}>Subject</span>
               <span style={{ fontWeight: 600 }}>{principal.subject}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-              <span style={{ color: 'var(--muted)' }}>Tenant / Project Scope</span>
-              <span style={{ fontWeight: 600 }}>{principal.tenant_id} / {principal.project_id}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: 'var(--muted)' }}>Assigned Roles</span>

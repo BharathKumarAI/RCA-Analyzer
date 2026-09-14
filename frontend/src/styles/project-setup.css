@@ -260,42 +260,65 @@
   border-color: var(--ps-primary-hover) !important;
 }
 
-/* ---------------- Main 3-Column Layout (Generous Main Content Breathing Room) ---------------- */
+/* ---------------- Fluid workspace layout with an inline preview panel ---------------- */
 .ps-wizard-grid {
   display: grid;
-  grid-template-columns: 215px minmax(0, 1fr) 265px;
-  gap: 20px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 24px;
   align-items: start;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  width: 100%;
 }
 
-@media (min-width: 1680px) {
+.ps-wizard-grid.with-sidebar {
+  grid-template-columns: 240px minmax(0, 1fr) 340px;
+}
+
+@media (min-width: 1750px) {
   .ps-wizard-grid {
-    grid-template-columns: 225px minmax(0, 1fr) 280px;
-    gap: 24px;
+    grid-template-columns: 250px minmax(0, 1fr);
+    gap: 28px;
+  }
+  .ps-wizard-grid.with-sidebar {
+    grid-template-columns: 250px minmax(0, 1fr) 360px;
   }
 }
 
-@media (max-width: 1366px) {
-  .ps-wizard-grid {
-    grid-template-columns: 205px minmax(0, 1fr) 250px;
-    gap: 16px;
+@media (max-width: 1599px) {
+  .ps-wizard-grid.with-sidebar {
+    grid-template-columns: 240px minmax(0, 1fr);
   }
-}
-
-@media (max-width: 1180px) {
-  .ps-wizard-grid {
-    grid-template-columns: 205px minmax(0, 1fr);
-    gap: 16px;
-  }
-  .ps-sidebar-col {
+  .ps-wizard-grid.with-sidebar .ps-sidebar-col {
+    position: static;
     grid-column: 1 / -1;
+    width: auto;
+    max-height: none;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    animation: none;
   }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 900px) {
   .ps-wizard-grid {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 16px;
+  }
+  .ps-wizard-grid.with-sidebar .ps-sidebar-col {
+    width: 100%;
+  }
+}
+
+@keyframes psSlideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
   }
 }
 
@@ -1046,7 +1069,36 @@
   color: var(--ps-danger);
 }
 
-/* ---------------- Right Sidebar Column ---------------- */
+/* ---------------- Inline configuration preview panel ---------------- */
+.ps-sidebar-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--ps-card-subtle);
+  border: 1px solid var(--ps-border-subtle);
+  border-radius: var(--radius-md, 8px);
+  margin-bottom: 2px;
+}
+
+.ps-panel-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--ps-text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.ps-panel-close-btn:hover {
+  background: var(--ps-card-hover);
+  color: var(--ps-text-title);
+}
+
 .ps-sidebar-col {
   display: flex;
   flex-direction: column;
@@ -1056,6 +1108,158 @@
   max-height: calc(100vh - 90px);
   overflow-y: auto;
   scrollbar-width: thin;
+}
+
+/* Advanced values stay out of the main configuration flow until requested. */
+.ps-advanced-overrides {
+  background: var(--ps-card-bg);
+  border: 1px solid var(--ps-border-subtle);
+  border-radius: var(--radius-lg, 10px);
+  overflow: hidden;
+}
+
+.ps-advanced-overrides summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  color: var(--ps-text-title);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ps-advanced-overrides summary::-webkit-details-marker {
+  display: none;
+}
+
+.ps-advanced-overrides summary:focus-visible {
+  outline: 2px solid var(--ps-primary);
+  outline-offset: -2px;
+}
+
+.ps-advanced-overrides summary > svg {
+  color: var(--ps-text-muted);
+  transition: transform 0.15s ease;
+}
+
+.ps-advanced-overrides[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.ps-advanced-overrides-summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ps-primary);
+}
+
+.ps-advanced-overrides-summary > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ps-advanced-overrides-summary strong {
+  color: var(--ps-text-title);
+  font-size: 13px;
+}
+
+.ps-advanced-overrides-summary small {
+  color: var(--ps-text-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.ps-advanced-overrides-body {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--ps-border-subtle);
+}
+
+.ps-advanced-overrides-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--ps-border-subtle);
+}
+
+.ps-advanced-overrides-intro p {
+  margin: 0;
+  color: var(--ps-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ps-advanced-overrides-intro .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+
+@media (max-width: 600px) {
+  .ps-advanced-overrides-intro {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* ---------------- Connector Focus Canvas & Breadcrumbs ---------------- */
+.ps-connector-focus-canvas {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: psFadeIn 0.2s ease-out;
+}
+
+.ps-connector-breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--ps-card-subtle);
+  border: 1px solid var(--ps-border-subtle);
+  border-radius: var(--radius-md, 8px);
+}
+
+.ps-breadcrumb-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ps-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.ps-breadcrumb-back-btn:hover {
+  background: var(--ps-primary-subtle);
+  color: var(--ps-primary-hover);
+}
+
+.ps-connector-editing-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ps-text-muted);
+}
+
+.ps-connector-editing-badge code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  background: var(--ps-card-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--ps-border-subtle);
+  color: var(--ps-text-title);
+  font-weight: 700;
 }
 
 /* Sleek Dark Editor Preview Card */
@@ -1249,8 +1453,8 @@
   gap: 6px;
   padding: 8px 14px;
   border-radius: var(--radius-md, 6px);
-  background: var(--ps-primary);
-  color: #ffffff;
+  background: transparent;
+  color: var(--ps-primary);
   font-size: 12.5px;
   font-weight: 650;
   border: 1px solid var(--ps-primary);
@@ -1261,6 +1465,7 @@
 .ps-next-step-btn:hover {
   background: var(--ps-primary-hover);
   border-color: var(--ps-primary-hover);
+  color: #ffffff;
 }
 
 /* Guidelines Callout Card */
@@ -1696,3 +1901,147 @@
 .project-settings-yaml { min-height: 520px; font-family: var(--font-mono, monospace); line-height: 1.5; resize: vertical; }
 .brand-title, .brand-badge, .sidebar-heading, .nav-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-header .brand-badge { min-width: 0; }
+.ps-redaction-panel {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.ps-redaction-header,
+.ps-redaction-meta,
+.ps-redaction-rule,
+.ps-redaction-limitations {
+  display: flex;
+  align-items: flex-start;
+}
+
+.ps-redaction-header {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ps-redaction-header h2 {
+  margin: 0;
+  color: var(--tx);
+  font-size: 15px;
+}
+
+.ps-redaction-header p,
+.ps-redaction-rule span,
+.ps-redaction-muted,
+.ps-redaction-limitations span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ps-redaction-header p { margin: 4px 0 0; }
+
+.ps-redaction-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ps-redaction-summary > span:first-child { color: var(--tx); font-weight: 600; }
+.ps-redaction-summary code { color: var(--tx); }
+.ps-redaction-details { flex: 1 1 100%; margin-top: 2px; }
+.ps-redaction-details summary { color: var(--acc); cursor: pointer; font-size: 11px; font-weight: 600; }
+.ps-redaction-details summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+
+.ps-redaction-meta {
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ps-redaction-meta code { color: var(--tx); }
+
+.ps-redaction-rules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ps-redaction-rule {
+  gap: 8px;
+  padding: 9px 10px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.ps-redaction-rule strong,
+.ps-redaction-rule span { display: block; }
+
+.ps-redaction-rule strong { color: var(--tx); font-size: 12px; margin-bottom: 2px; }
+
+.ps-redaction-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex: 0 0 auto;
+}
+
+.ps-redaction-dot.enabled { background: var(--acc3); }
+
+.ps-redaction-limitations {
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.ps-redaction-limitations strong { color: var(--acc4); font-size: 11px; }
+
+.ps-redaction-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.ps-redaction-preview > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.ps-redaction-preview strong { color: var(--tx); font-size: 12px; }
+.ps-redaction-preview span { color: var(--muted); font-size: 11px; }
+.ps-redaction-preview textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 72px;
+  padding: 9px 10px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--tx);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font: 12px/1.45 var(--font-mono, monospace);
+}
+.ps-redaction-preview textarea:focus { outline: 2px solid var(--acc); outline-offset: 1px; }
+.ps-redaction-preview-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ps-redaction-preview-error { color: var(--acc4) !important; }
+.ps-redaction-preview-result {
+  margin: 0;
+  padding: 10px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--tx);
+  border-radius: 4px;
+  font: 12px/1.45 var(--font-mono, monospace);
+}

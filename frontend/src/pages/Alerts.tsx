@@ -25,6 +25,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   fetchAlerts,
   fetchNotifications,
@@ -144,7 +145,6 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
       const updated = await updateAlertConfig(alertConfig);
       setAlertConfig(updated);
       setSuccessMsg('Alert evaluation thresholds updated and persisted!');
-      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save alert thresholds');
     } finally {
@@ -173,7 +173,6 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
       setBroadcastSummary('');
       setBroadcastMessage('');
       setSuccessMsg('Platform operational alert successfully broadcasted to feed!');
-      setTimeout(() => setSuccessMsg(null), 4000);
       void load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to broadcast alert');
@@ -186,7 +185,6 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
     try {
       await updateAlertStatus(alertId, 'acknowledged');
       setSuccessMsg('Alert marked as acknowledged.');
-      setTimeout(() => setSuccessMsg(null), 3000);
       void load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to acknowledge alert');
@@ -202,7 +200,6 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
       setResolvingAlertId(null);
       setResolutionNotes('');
       setSuccessMsg('Alert successfully resolved and closed.');
-      setTimeout(() => setSuccessMsg(null), 3000);
       void load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to resolve alert');
@@ -236,7 +233,6 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
         return { ...prev, items: nextItems, unread_count: 0 };
       });
       setSuccessMsg('All notifications marked as read.');
-      setTimeout(() => setSuccessMsg(null), 3000);
       onNotificationsUpdated?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to mark all as read');
@@ -509,20 +505,19 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
 
       {/* Feedback Banners */}
       {error && (
-        <div className="notice-banner red" role="alert">
-          <AlertTriangle size={16} />
-          <span style={{ flex: 1 }}>{error}</span>
-          <button className="btn btn-outline btn-sm" onClick={() => setError(null)}>
-            Dismiss
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+        />
       )}
 
       {successMsg && (
-        <div className="notice-banner green" role="status">
-          <CheckCircle2 size={16} />
-          <span>{successMsg}</span>
-        </div>
+        <NotificationBanner
+          type="success"
+          message={successMsg}
+          onClose={() => setSuccessMsg(null)}
+        />
       )}
 
       {/* Metric Cards Grid */}

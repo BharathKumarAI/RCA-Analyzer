@@ -32,7 +32,7 @@ class ApiTests(unittest.TestCase):
             )
             self.assertEqual(
                 client.post(
-                    "/api/v1/runs",
+                    "/api/v1/knowledge",
                     headers=self.token("viewer"),
                     json={"prompt": "DNS?"},
                 ).status_code,
@@ -44,7 +44,7 @@ class ApiTests(unittest.TestCase):
             # Token-provided administrator roles cannot change server membership.
             self.assertEqual(
                 client.post(
-                    "/api/v1/runs",
+                    "/api/v1/knowledge",
                     headers=self.token("viewer", roles=["PLATFORM_ADMIN"]),
                     json={"prompt": "DNS?"},
                 ).status_code,

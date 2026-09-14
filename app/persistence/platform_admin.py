@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import json
 import uuid
 from typing import Any, Dict, List, Optional
 from sqlalchemy.dialects.postgresql import JSONB
@@ -18,6 +19,7 @@ from sqlalchemy import (
     delete,
     insert,
     select,
+    text,
     update,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -111,6 +113,7 @@ platform_knowledge = Table(
     Column("tags", JSON().with_variant(JSONB, "postgresql"), nullable=False),
     Column("content", String, nullable=False),
     Column("media_type", String(64), nullable=False, default="text/markdown"),
+    Column("upload", JSON().with_variant(JSONB, "postgresql"), nullable=True),
     Column("size_bytes", Integer, nullable=False, default=0),
     Column("status", String(32), nullable=False, default="active"),
     Column("created_at", Float, nullable=False),
@@ -214,6 +217,74 @@ project_editor_drafts = Table(
     Column("version", Integer, nullable=False, default=1), Column("updated_at", Float, nullable=False),
 )
 
+connector_templates_table = Table(
+    "connector_templates",
+    metadata,
+    Column("template_id", String(64), primary_key=True),
+    Column("version", String(32), primary_key=True),
+    Column("status", String(32), nullable=False, default="published"),
+    Column("definition_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("checksum", String(64), nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+    Column("created_by", String(256), nullable=False, default="system"),
+    Column("updated_by", String(256), nullable=False, default="system"),
+)
+
+project_connector_instances_table = Table(
+    "project_connector_instances",
+    metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("instance_id", String(64), primary_key=True),
+    Column("template_id", String(64), nullable=False),
+    Column("template_version", String(32), nullable=False),
+    Column("system_name", String(128), nullable=False),
+    Column("enabled", Boolean, nullable=False, default=False),
+    Column("status", String(32), nullable=False, default="draft"),
+    Column("definition_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("revision", Integer, nullable=False, default=1),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+    Column("created_by", String(256), nullable=False, default="admin"),
+    Column("updated_by", String(256), nullable=False, default="admin"),
+)
+
+project_environment_bindings_table = Table(
+    "project_environment_bindings",
+    metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("instance_id", String(64), primary_key=True),
+    Column("project_env_id", String(64), primary_key=True),
+    Column("tool_env_id", String(64), nullable=False),
+    Column("external_resource", String(256), nullable=False),
+    Column("credential_binding_id", String(128), nullable=True),
+    Column("narrowing_filters_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("status", String(32), nullable=False, default="active"),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+
+connector_candidate_test_results_table = Table(
+    "connector_candidate_test_results",
+    metadata,
+    Column("candidate_hash", String(64), primary_key=True),
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("environment_id", String(64), primary_key=True, default="default"),
+    Column("instance_id", String(64), nullable=False),
+    Column("template_id", String(64), nullable=False),
+    Column("template_version", String(32), nullable=False),
+    Column("operation", String(64), nullable=False, default="test_connection"),
+    Column("overall_result", String(32), nullable=False),
+    Column("stage_results_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("latency_ms", Float, nullable=False, default=0.0),
+    Column("evidence_summary", String(4096), nullable=False, default=""),
+    Column("error_message", String(4096), nullable=False, default=""),
+    Column("tested_at", Float, nullable=False),
+)
+
 
 DEFAULT_PERMISSIONS = [
     "view_runs",
@@ -231,29 +302,29 @@ DEFAULT_PERMISSIONS = [
 ]
 
 DEFAULT_UI_NAVIGATION = [
-    {"page": page, "label": label, "description": description, "group": group, "visible": True}
-    for page, label, description, group in (
-        ("overview", "Overview", "Health and recent investigations", "Admin console"),
-        ("runs", "Investigations", "Review grounded incident reports", "Monitoring"),
-        ("capabilities", "Capabilities", "Manage investigation capabilities", "Configuration"),
-        ("skills", "Skills", "Manage reusable agent guidance", "Configuration"),
-        ("runtime", "Runtime", "Tune execution stages", "Monitoring"),
-        ("parameters", "Parameters", "Manage tool parameters", "Configuration"),
-        ("optimization", "Optimization", "Review evaluation workflows", "Monitoring"),
-        ("agents", "Agents", "Review specialist agents", "Configuration"),
-        ("tools", "Tools & connectors", "Manage data access", "Configuration"),
-        ("alerts", "Alerts", "Track operational alerts", "Monitoring"),
-        ("health-checks", "Health checks", "Inspect connector health", "Monitoring"),
-        ("project-setup", "Project setup", "Configure project behavior", "Admin console"),
-        ("persistence", "Persistence", "Manage storage and retention", "Monitoring"),
-        ("policy", "Policy", "Manage security guardrails", "Configuration"),
-        ("roles", "Roles", "Manage access roles", "Admin console"),
-        ("governance", "Audit", "Review configuration history", "Monitoring"),
-        ("knowledge", "Knowledge", "Manage runbooks and evidence", "Workspace"),
-        ("users", "Users", "Manage project membership", "Admin console"),
-        ("billing", "Billing", "Manage budgets and quotas", "Monitoring"),
-        ("settings", "Platform settings", "Configure the workspace", "Admin console"),
-        ("harness-library", "Harness library", "Manage workflow templates", "Configuration"),
+    {"page": page, "label": label, "description": description, "group": group, "visible": visible}
+    for page, label, description, group, visible in (
+        ("overview", "Overview", "Health and recent investigations", "Admin console", True),
+        ("runs", "Investigations", "Review grounded incident reports", "Monitoring", True),
+        ("capabilities", "Capabilities", "Manage investigation capabilities", "Configuration", True),
+        ("skills", "Skills", "Manage reusable agent guidance", "Configuration", True),
+        ("runtime", "Runtime", "Tune execution stages", "Monitoring", True),
+        ("parameters", "Parameters", "Manage tool parameters", "Configuration", True),
+        ("optimization", "Optimization", "Review evaluation workflows", "Monitoring", True),
+        ("agents", "Agents", "Review specialist agents", "Configuration", True),
+        ("tools", "Tools & connectors", "Manage data access", "Configuration", True),
+        ("alerts", "Alerts", "Track operational alerts", "Monitoring", True),
+        ("health-checks", "Health checks", "Inspect connector health", "Monitoring", True),
+        ("project-setup", "Project setup", "Configure project behavior", "Admin console", True),
+        ("persistence", "Persistence", "Manage storage and retention", "Monitoring", True),
+        ("policy", "Policy", "Manage security guardrails", "Configuration", True),
+        ("roles", "Users & Roles", "Manage user membership, access roles, and permissions", "Admin console", True),
+        ("governance", "Audit", "Review configuration history", "Monitoring", True),
+        ("knowledge", "Knowledge", "Manage runbooks and evidence", "Workspace", True),
+        ("users", "Users", "Manage project membership", "Admin console", False),
+        ("billing", "Billing", "Manage budgets and quotas", "Monitoring", True),
+        ("settings", "Platform settings", "Configure the workspace", "Admin console", True),
+        ("harness-library", "Harness library", "Manage workflow templates", "Configuration", True),
     )
 ]
 
@@ -285,17 +356,8 @@ DEFAULT_SYSTEM_ROLES = [
     {
         "role_id": "PROJECT_MANAGER",
         "name": "Project Manager",
-        "description": "Governs team resource allocation, SLA metrics, parameter governance, user membership, and budget monitoring across the project. Not authorized for incident triage or active log analysis.",
-        "permissions": [
-            "view_runs",
-            "approve_agents",
-            "manage_parameters",
-            "manage_users",
-            "manage_billing",
-            "view_docs",
-            "view_status",
-            "view_audit",
-        ],
+        "description": "Starts read-only project triage and views live investigations, metrics, and feedback. Cannot modify project configuration, membership, feedback, or external systems.",
+        "permissions": ["view_runs", "create_runs", "view_docs", "view_status", "view_audit"],
         "is_system": True,
     },
     {
@@ -308,15 +370,15 @@ DEFAULT_SYSTEM_ROLES = [
     {
         "role_id": "PROJECT_VIEWER",
         "name": "Project Viewer",
-        "description": "Read-only access to view completed investigation reports, root cause syntheses, evidence citations, and health dashboards.",
-        "permissions": ["view_runs", "view_docs", "view_status"],
+        "description": "Starts read-only project triage and views live investigations, metrics, feedback, reports, and evidence. Cannot modify project configuration, membership, feedback, or external systems.",
+        "permissions": ["view_runs", "create_runs", "view_docs", "view_status", "view_audit"],
         "is_system": True,
     },
     {
         "role_id": "GENERIC_USER",
         "name": "Generic User",
-        "description": "Standard authenticated platform member with access to system documentation, runbooks, and self-service profile review.",
-        "permissions": ["view_docs", "view_status"],
+        "description": "Uses personal platform experiments and local text tools without access to any project data or connectors.",
+        "permissions": [],
         "is_system": True,
     },
 ]
@@ -1014,6 +1076,7 @@ class PlatformAdminStore:
         content: str,
         media_type: str = "text/markdown",
         status: str = "active",
+        upload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         now = time.time()
         final_id = doc_id or f"kb_{uuid.uuid4().hex[:8]}"
@@ -1030,6 +1093,8 @@ class PlatformAdminStore:
             ).first()
 
             if existing:
+                if upload is None:
+                    upload = existing._mapping["upload"]
                 await conn.execute(
                     update(platform_knowledge)
                     .where(
@@ -1043,6 +1108,7 @@ class PlatformAdminStore:
                         tags=tags,
                         content=content,
                         media_type=media_type,
+                        upload=upload,
                         size_bytes=size_bytes,
                         status=status,
                         updated_at=now,
@@ -1059,6 +1125,7 @@ class PlatformAdminStore:
                         tags=tags,
                         content=content,
                         media_type=media_type,
+                        upload=upload,
                         size_bytes=size_bytes,
                         status=status,
                         created_at=now,
@@ -1074,6 +1141,7 @@ class PlatformAdminStore:
             "tags": tags,
             "content": content,
             "media_type": media_type,
+            "upload": upload,
             "size_bytes": size_bytes,
             "status": status,
             "updated_at": now,
@@ -1537,3 +1605,371 @@ class PlatformAdminStore:
                 "tenant_id": tenant_id, "project_id": project_id,
                 **values, "version": expected_version + 1,
             }
+
+    # -------------------------------------------------------------------------
+    # CONNECTOR TEMPLATES & INSTANCES LIFECYCLE
+    # -------------------------------------------------------------------------
+    async def list_connector_templates(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            query = select(connector_templates_table)
+            if status:
+                query = query.where(connector_templates_table.c.status == status)
+            rows = (await conn.execute(query.order_by(connector_templates_table.c.template_id, connector_templates_table.c.version.desc()))).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def get_connector_template(self, template_id: str, version: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            query = select(connector_templates_table).where(connector_templates_table.c.template_id == template_id)
+            if version:
+                query = query.where(connector_templates_table.c.version == version)
+            else:
+                query = query.order_by(connector_templates_table.c.version.desc())
+            row = (await conn.execute(query)).mappings().first()
+        return dict(row) if row else None
+
+    async def save_connector_template(
+        self, template_id: str, version: str, status: str, definition_json: Dict[str, Any], checksum: str, author: str
+    ) -> Dict[str, Any]:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(select(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ))).mappings().first()
+            if existing:
+                if existing["status"] == "published":
+                    raise ValueError(f"Published template {template_id}@{version} is immutable. Create a new version.")
+                await conn.execute(update(connector_templates_table).where(
+                    connector_templates_table.c.template_id == template_id,
+                    connector_templates_table.c.version == version,
+                ).values(
+                    status=status, definition_json=definition_json, checksum=checksum,
+                    updated_at=now, updated_by=author
+                ))
+            else:
+                await conn.execute(insert(connector_templates_table).values(
+                    template_id=template_id, version=version, status=status,
+                    definition_json=definition_json, checksum=checksum,
+                    created_at=now, updated_at=now, created_by=author, updated_by=author
+                ))
+        return {
+            "template_id": template_id, "version": version, "status": status,
+            "definition_json": definition_json, "checksum": checksum,
+            "created_at": existing["created_at"] if existing else now, "updated_at": now,
+            "created_by": existing["created_by"] if existing else author, "updated_by": author
+        }
+
+    async def publish_connector_template(self, template_id: str, version: str, author: str) -> Dict[str, Any]:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(select(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ))).mappings().first()
+            if not existing:
+                raise ValueError(f"Template {template_id}@{version} not found")
+            await conn.execute(update(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ).values(status="published", updated_at=now, updated_by=author))
+            row = (await conn.execute(select(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ))).mappings().first()
+        return dict(row)
+
+    async def deprecate_connector_template(self, template_id: str, version: str, author: str) -> Dict[str, Any]:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(select(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ))).mappings().first()
+            if not existing:
+                raise ValueError(f"Template {template_id}@{version} not found")
+            await conn.execute(update(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ).values(status="deprecated", updated_at=now, updated_by=author))
+            row = (await conn.execute(select(connector_templates_table).where(
+                connector_templates_table.c.template_id == template_id,
+                connector_templates_table.c.version == version,
+            ))).mappings().first()
+        return dict(row)
+
+    async def list_project_connector_instances(self, tenant_id: str, project_id: str) -> List[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            instances = (await conn.execute(select(project_connector_instances_table).where(
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.status != "archived",
+            ).order_by(project_connector_instances_table.c.instance_id))).mappings().all()
+
+            bindings = (await conn.execute(select(project_environment_bindings_table).where(
+                project_environment_bindings_table.c.tenant_id == tenant_id,
+                project_environment_bindings_table.c.project_id == project_id,
+            ))).mappings().all()
+
+        bindings_by_instance: Dict[str, List[Dict[str, Any]]] = {}
+        for b in bindings:
+            bindings_by_instance.setdefault(b["instance_id"], []).append(dict(b))
+
+        results = []
+        for inst in instances:
+            d = dict(inst)
+            d["bindings"] = bindings_by_instance.get(inst["instance_id"], [])
+            results.append(d)
+        return results
+
+    async def get_project_connector_instance(self, tenant_id: str, project_id: str, instance_id: str) -> Optional[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            instance = (await conn.execute(select(project_connector_instances_table).where(
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.instance_id == instance_id,
+            ))).mappings().first()
+            if not instance:
+                return None
+            bindings = (await conn.execute(select(project_environment_bindings_table).where(
+                project_environment_bindings_table.c.tenant_id == tenant_id,
+                project_environment_bindings_table.c.project_id == project_id,
+                project_environment_bindings_table.c.instance_id == instance_id,
+            ))).mappings().all()
+        d = dict(instance)
+        d["bindings"] = [dict(b) for b in bindings]
+        return d
+
+    async def save_project_connector_instance(
+        self,
+        tenant_id: str,
+        project_id: str,
+        instance_id: str,
+        template_id: str,
+        template_version: str,
+        system_name: str,
+        definition_json: Dict[str, Any],
+        expected_revision: int,
+        author: str,
+        bindings: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            if self.engine.dialect.name == "postgresql":
+                await conn.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {
+                    "key": json.dumps([tenant_id, project_id, "connector-system-names"]),
+                })
+            other_names = (await conn.execute(select(project_connector_instances_table.c.system_name).where(
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.instance_id != instance_id,
+                project_connector_instances_table.c.status != "archived",
+            ))).scalars().all()
+            if system_name.strip().casefold() in {name.strip().casefold() for name in other_names}:
+                raise ValueError("Choose a unique system name within this project")
+            existing = (await conn.execute(select(project_connector_instances_table).where(
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.instance_id == instance_id,
+            ).with_for_update())).mappings().first()
+
+            current_rev = existing["revision"] if existing else 0
+            if current_rev != expected_revision:
+                raise ValueError(f"Project connector instance {instance_id} was modified concurrently; reload before saving.")
+
+            new_revision = current_rev + 1
+            if existing:
+                await conn.execute(update(project_connector_instances_table).where(
+                    project_connector_instances_table.c.tenant_id == tenant_id,
+                    project_connector_instances_table.c.project_id == project_id,
+                    project_connector_instances_table.c.instance_id == instance_id,
+                ).values(
+                    template_id=template_id,
+                    template_version=template_version,
+                    system_name=system_name,
+                    definition_json=definition_json,
+                    enabled=False,
+                    status="draft",
+                    revision=new_revision,
+                    updated_at=now,
+                    updated_by=author,
+                ))
+            else:
+                await conn.execute(insert(project_connector_instances_table).values(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    instance_id=instance_id,
+                    template_id=template_id,
+                    template_version=template_version,
+                    system_name=system_name,
+                    enabled=False,
+                    status="draft",
+                    definition_json=definition_json,
+                    revision=new_revision,
+                    created_at=now,
+                    updated_at=now,
+                    created_by=author,
+                    updated_by=author,
+                ))
+
+            if bindings is not None:
+                await conn.execute(delete(project_environment_bindings_table).where(
+                    project_environment_bindings_table.c.tenant_id == tenant_id,
+                    project_environment_bindings_table.c.project_id == project_id,
+                    project_environment_bindings_table.c.instance_id == instance_id,
+                ))
+                for b in bindings:
+                    await conn.execute(insert(project_environment_bindings_table).values(
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                        instance_id=instance_id,
+                        project_env_id=b["project_env_id"],
+                        tool_env_id=b.get("tool_env_id", b["project_env_id"]),
+                        external_resource=b["external_resource"],
+                        credential_binding_id=b.get("credential_binding_id"),
+                        narrowing_filters_json=b.get("narrowing_filters_json", {}),
+                        status=b.get("status", "active"),
+                        created_at=now,
+                        updated_at=now,
+                    ))
+
+        return await self.get_project_connector_instance(tenant_id, project_id, instance_id)
+
+    async def set_project_connector_instance_enabled(
+        self, tenant_id: str, project_id: str, instance_id: str, enabled: bool, author: str = "admin",
+        expected_revision: int | None = None,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        status = "enabled" if enabled else "disabled"
+        conditions = []
+        if expected_revision is not None:
+            conditions.append(project_connector_instances_table.c.revision == expected_revision)
+        if enabled:
+            conditions.append(project_connector_instances_table.c.status != "archived")
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(project_connector_instances_table).where(
+                *conditions,
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.instance_id == instance_id,
+            ).values(enabled=enabled, status=status, updated_at=now, updated_by=author))
+            if result.rowcount == 0:
+                raise ValueError(f"Project connector instance {instance_id} changed or is unavailable; reload before enabling.")
+        return await self.get_project_connector_instance(tenant_id, project_id, instance_id)
+
+    async def delete_project_connector_instance(self, tenant_id: str, project_id: str, instance_id: str) -> bool:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(project_connector_instances_table).where(
+                project_connector_instances_table.c.tenant_id == tenant_id,
+                project_connector_instances_table.c.project_id == project_id,
+                project_connector_instances_table.c.instance_id == instance_id,
+            ).values(enabled=False, status="archived", updated_at=now))
+        return result.rowcount > 0
+
+    async def save_candidate_test_result(
+        self,
+        candidate_hash: str,
+        tenant_id: str,
+        project_id: str,
+        instance_id: str,
+        template_id: str,
+        template_version: str,
+        environment_id: str,
+        operation: str,
+        overall_result: str,
+        stage_results: Dict[str, Any],
+        latency_ms: float,
+        evidence_summary: str,
+        error_message: str,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(select(connector_candidate_test_results_table).where(
+                connector_candidate_test_results_table.c.candidate_hash == candidate_hash,
+                connector_candidate_test_results_table.c.tenant_id == tenant_id,
+                connector_candidate_test_results_table.c.project_id == project_id,
+                connector_candidate_test_results_table.c.environment_id == environment_id,
+            ))).mappings().first()
+            if existing:
+                await conn.execute(update(connector_candidate_test_results_table).where(
+                    connector_candidate_test_results_table.c.candidate_hash == candidate_hash,
+                    connector_candidate_test_results_table.c.tenant_id == tenant_id,
+                    connector_candidate_test_results_table.c.project_id == project_id,
+                    connector_candidate_test_results_table.c.environment_id == environment_id,
+                ).values(
+                    instance_id=instance_id,
+                    template_id=template_id,
+                    template_version=template_version,
+                    operation=operation,
+                    overall_result=overall_result,
+                    stage_results_json=stage_results,
+                    latency_ms=latency_ms,
+                    evidence_summary=evidence_summary,
+                    error_message=error_message,
+                    tested_at=now,
+                ))
+            else:
+                await conn.execute(insert(connector_candidate_test_results_table).values(
+                    candidate_hash=candidate_hash,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    instance_id=instance_id,
+                    template_id=template_id,
+                    template_version=template_version,
+                    environment_id=environment_id,
+                    operation=operation,
+                    overall_result=overall_result,
+                    stage_results_json=stage_results,
+                    latency_ms=latency_ms,
+                    evidence_summary=evidence_summary,
+                    error_message=error_message,
+                    tested_at=now,
+                ))
+        return {
+            "candidate_hash": candidate_hash,
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "environment_id": environment_id,
+            "overall_result": overall_result,
+            "stage_results": stage_results,
+            "latency_ms": latency_ms,
+            "tested_at": now,
+        }
+
+    async def get_latest_candidate_test_result(
+        self, candidate_hash: str, tenant_id: str, project_id: str, environment_id: str = "default"
+    ) -> Optional[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(connector_candidate_test_results_table).where(
+                connector_candidate_test_results_table.c.candidate_hash == candidate_hash,
+                connector_candidate_test_results_table.c.tenant_id == tenant_id,
+                connector_candidate_test_results_table.c.project_id == project_id,
+                connector_candidate_test_results_table.c.environment_id == environment_id,
+            ))).mappings().first()
+        return dict(row) if row else None
+
+    async def has_valid_passing_candidate_test(
+        self, candidate_hash: str, tenant_id: str, project_id: str,
+        max_age_seconds: float = 900.0, *, template_id: str | None = None,
+        template_version: str | None = None, instance_id: str | None = None,
+        environment_id: str | None = None,
+    ) -> bool:
+        min_tested_at = time.time() - max_age_seconds
+        async with self.engine.connect() as conn:
+            query = select(connector_candidate_test_results_table).where(
+                connector_candidate_test_results_table.c.candidate_hash == candidate_hash,
+                connector_candidate_test_results_table.c.tenant_id == tenant_id,
+                connector_candidate_test_results_table.c.project_id == project_id,
+                connector_candidate_test_results_table.c.overall_result == "PASSED",
+                connector_candidate_test_results_table.c.tested_at >= min_tested_at,
+            )
+            if template_id is not None:
+                query = query.where(connector_candidate_test_results_table.c.template_id == template_id)
+            if template_version is not None:
+                query = query.where(connector_candidate_test_results_table.c.template_version == template_version)
+            if instance_id is not None:
+                query = query.where(connector_candidate_test_results_table.c.instance_id == instance_id)
+            if environment_id is not None:
+                query = query.where(connector_candidate_test_results_table.c.environment_id == environment_id)
+            row = (await conn.execute(query)).first()
+        return row is not None

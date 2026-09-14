@@ -25,6 +25,7 @@ import {
   Layers,
   Terminal,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   createOptimization,
   fetchConfig,
@@ -448,33 +449,21 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
 
         {/* Feedback notices */}
         {error && (
-          <div className="opt-feedback-banner error" role="alert">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AlertTriangle size={16} />
-              <span>{error}</span>
-            </div>
-            <button
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
-              onClick={() => setError(null)}
-            >
-              <X size={14} />
-            </button>
-          </div>
+          <NotificationBanner
+            type="error"
+            message={error}
+            onClose={() => setError(null)}
+            style={{ marginBottom: 16 }}
+          />
         )}
 
         {message && (
-          <div className="opt-feedback-banner success" role="status">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CheckCircle2 size={16} />
-              <span>{message}</span>
-            </div>
-            <button
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
-              onClick={() => setMessage(null)}
-            >
-              <X size={14} />
-            </button>
-          </div>
+          <NotificationBanner
+            type="success"
+            message={message}
+            onClose={() => setMessage(null)}
+            style={{ marginBottom: 16 }}
+          />
         )}
 
         {/* Live KPI Metric Cards */}

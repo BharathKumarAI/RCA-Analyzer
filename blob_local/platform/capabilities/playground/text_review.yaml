@@ -1,0 +1,15 @@
+id: text_review
+version: 1.0.0
+name: Personal Text Review
+description: Explain and inspect text or JSON supplied by the user, without project data or external access.
+category: playground
+agent_stages: [file]
+permissions:
+  minimum_role: GENERIC_USER
+  allowed_roles: [PLATFORM_ADMIN, PROJECT_OWNER, PROJECT_MANAGER, PROJECT_ANALYST, PROJECT_VIEWER, GENERIC_USER]
+  allowed_actions: [generic.text_metrics, generic.inspect_json]
+safety_profile:
+  tool_mutations: forbidden
+  pii_access: redacted
+  raw_payload_access: restricted
+model_profile: fast-investigation

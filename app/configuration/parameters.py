@@ -212,14 +212,8 @@ def _normalize_category_metadata(category: str, subcategory: str | None) -> tupl
     if subcategory is None:
         return value, None
     normalized_subcategory = subcategory.strip().lower()
-    if (
-        normalized_subcategory
-        and normalized_subcategory not in KNOWN_PARAMETER_CATEGORIES[value]
-        and KNOWN_PARAMETER_CATEGORIES[value] != ("general",)
-    ):
-        raise ValueError(
-            f"Invalid subcategory '{subcategory}' for category '{category}'"
-        )
+    if not normalized_subcategory:
+        raise ValueError("Subcategory cannot be empty when provided")
     return value, normalized_subcategory
 
 
@@ -352,7 +346,11 @@ def _connector_parameter_rows(template: ConnectorTemplate, connector_options) ->
                 "variable_name": secret_variable,
                 "description": f"Secret reference for {template.system_name}",
                 "value_type": "secret_ref",
-                "default_value": f"env://{template.default_secret}",
+                "default_value": (
+                    template.default_secret
+                    if str(template.default_secret).startswith("env://")
+                    else f"env://{template.default_secret}"
+                ),
                 "allow_project_override": False,
                 "visible_in_project": False,
                 "icon": "key",
@@ -503,6 +501,9 @@ class ParameterDefinition(BaseModel):
         values = dict(values)
         scope = values.get("scope")
         allow = values.get("allow_project_override", False)
+        if "allow_project_override" in values and not values["allow_project_override"] and scope == "project":
+            values["scope"] = "platform"
+            scope = "platform"
         if scope is None:
             values["scope"] = "project" if allow else "platform"
         elif scope == "project":
@@ -643,14 +644,9 @@ class ParameterStore:
                         )
                     )
                 ).all()
-                if existing and definition.scope != "project":
-                    await c.execute(
-                        delete(overrides).where(
-                            *self.key(overrides, p.tenant_id, tool, name)
-                        )
-                    )
-                    await self.record(
-                        c, p, tool, name, "scope_reset", revision, p.project_id
+                if existing and not definition.allow_project_override:
+                    raise ParameterConflict(
+                        "Existing project overrides prevent disabling overrides"
                     )
                 for override in existing:
                     self.validate_definition_values(definition, override.value)
@@ -818,7 +814,6 @@ class ParameterStore:
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
             Role.PROJECT_OWNER,
-            Role.PROJECT_MANAGER,
         }:
             raise PermissionError("Project owner or administrator required")
         body = ParameterOverride.model_validate(body.model_dump())
@@ -902,7 +897,6 @@ class ParameterStore:
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
             Role.PROJECT_OWNER,
-            Role.PROJECT_MANAGER,
         }:
             raise PermissionError("Project owner or administrator required")
         async with self.engine.begin() as c:
@@ -1007,6 +1001,7 @@ class ParameterStore:
             resolved.append(
                 dict(row)
                 | {
+                    "main": row["tool"],
                     "effective_value": effective_value,
                     "effective_state": effective_state,
                     "source": "project" if has_override else "platform",
@@ -1024,6 +1019,7 @@ class ParameterStore:
             self.runtime_value(row["tool"], row["variable_name"], row["default_value"])
             resolved.append(
                 {
+                    "main": row["tool"],
                     "tenant_id": tenant,
                     "tool": row["tool"],
                     "variable_name": row["variable_name"],

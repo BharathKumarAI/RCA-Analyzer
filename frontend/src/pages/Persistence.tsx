@@ -11,6 +11,7 @@ import {
   FileCode,
   Sliders,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   ApiError,
   fetchPrincipal,
@@ -143,7 +144,6 @@ export const Persistence: React.FC = () => {
       const updatedValues = ('values' in updated ? updated.values : updated) as unknown as FileLimitsConfig;
       setLimits(updatedValues);
       setSuccessMsg('Storage bounds & retention limits successfully saved and applied!');
-      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save limits');
     } finally {
@@ -231,18 +231,21 @@ export const Persistence: React.FC = () => {
       </section>
 
       {error && (
-        <div className="notice-banner red" role="alert" style={{ marginBottom: 16 }}>
-          <AlertTriangle size={15} /> {error}
-          <button className="btn btn-outline btn-sm" onClick={() => setError(null)} style={{ marginLeft: 'auto' }}>
-            Dismiss
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {successMsg && (
-        <div className="notice-banner green" role="status" style={{ marginBottom: 16 }}>
-          <CheckCircle2 size={15} /> {successMsg}
-        </div>
+        <NotificationBanner
+          type="success"
+          message={successMsg}
+          onClose={() => setSuccessMsg(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Metrics Row */}

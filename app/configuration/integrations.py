@@ -26,6 +26,10 @@ registrations = Table(
 class IntegrationDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=120)
+    system_name: str | None = Field(default=None, min_length=1, max_length=128)
+    environment_dependency: Literal["dependent", "independent"] | None = None
+    tool_environment: str | None = Field(default=None, min_length=1, max_length=128)
+    project_environment_ids: tuple[Annotated[str, Field(min_length=1, max_length=128)], ...] = Field(default=(), max_length=64)
     kind: Literal["mcp", "a2a"]
     endpoint: str = Field(default="", max_length=2048)
     command: str = Field(default="", max_length=2048)
@@ -91,7 +95,7 @@ class IntegrationStore:
     @staticmethod
     def authorize(principal, scope):
         roles = {Role.PLATFORM_ADMIN} if scope == "platform" else {
-            Role.PLATFORM_ADMIN, Role.PROJECT_OWNER, Role.PROJECT_MANAGER,
+            Role.PLATFORM_ADMIN, Role.PROJECT_OWNER,
         }
         if not set(principal.roles) & roles:
             raise PermissionError("Your role cannot configure integrations at this scope")
@@ -123,12 +127,30 @@ class IntegrationStore:
 
     async def save(self, principal, scope, integration_id, body):
         self.authorize(principal, scope)
+        definition = body.definition
+        if scope == "platform":
+            if any(value is not None for value in (
+                definition.system_name, definition.environment_dependency, definition.tool_environment,
+            )) or definition.project_environment_ids:
+                raise ValueError("System name and environment identity belong to project setup")
+        else:
+            if not definition.environment_dependency or not definition.tool_environment:
+                raise ValueError("Choose environment dependency and provide a tool environment in project setup")
+            if definition.environment_dependency == "dependent" and not definition.project_environment_ids:
+                raise ValueError("Map this tool environment to at least one project environment")
+            if definition.environment_dependency == "independent" and definition.project_environment_ids:
+                raise ValueError("Independent systems cannot have project environment mappings")
+            if len(set(definition.project_environment_ids)) != len(definition.project_environment_ids):
+                raise ValueError("Project environment mappings must be unique")
         target = "" if scope == "platform" else principal.project_id
         table = registrations.c
         key = (table.tenant_id == principal.tenant_id, table.integration_id == integration_id)
         try:
             async with self.engine.begin() as connection:
                 if self.engine.dialect.name == "postgresql":
+                    await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {
+                        "key": json.dumps([principal.tenant_id, target, "integration-system-names"]),
+                    })
                     await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {
                         "key": json.dumps([principal.tenant_id, integration_id]),
                     })
@@ -159,6 +181,20 @@ class IntegrationStore:
                 ))).mappings().first()
                 if current and json.loads(current["definition_json"])["kind"] != body.definition.kind:
                     raise ValueError("Create a new integration ID to change integration type")
+                if scope == "project" and not body.definition.system_name:
+                    previous = json.loads(current["definition_json"]) if current else {}
+                    body = body.model_copy(update={"definition": body.definition.model_copy(update={
+                        "system_name": previous.get("system_name") or body.definition.name,
+                    })})
+                if scope == "project":
+                    other_definitions = (await connection.execute(select(table.definition_json).where(
+                        table.tenant_id == principal.tenant_id,
+                        table.project_id == target,
+                        table.integration_id != integration_id,
+                    ))).scalars().all()
+                    name = body.definition.system_name.casefold()
+                    if any((json.loads(value).get("system_name") or json.loads(value)["name"]).casefold() == name for value in other_definitions):
+                        raise ValueError("Choose a unique system name within this project")
                 values = {"definition_json": body.definition.model_dump_json(), "revision": uuid.uuid4().hex}
                 if body.expected_revision:
                     changed = await connection.execute(update(registrations).where(

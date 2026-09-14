@@ -15,7 +15,6 @@ import {
   Play,
   RefreshCw,
   Settings,
-  Shield,
   ShieldCheck,
   Sliders,
   Users,
@@ -122,10 +121,6 @@ export const Overview: React.FC<OverviewProps> = ({
             {settings.welcome_description}
           </p>
           <div className="hero-meta-strip">
-            <span className="hero-stat-chip">
-              <Shield size={12} color="var(--acc)" />
-              <b>Scope:</b> {health.tenant_id && health.project_id ? `${health.tenant_id} / ${health.project_id}` : '—'}
-            </span>
             <span className="hero-stat-chip">
               <span className={`dot ${health.mode === 'demo' ? '' : 'pulse'}`} />
               <b>Mode:</b> {health.mode === 'demo' ? 'Demo (Simulated)' : 'Live'}
@@ -553,7 +548,7 @@ export const Overview: React.FC<OverviewProps> = ({
 
       {/* Demo Mode Notice */}
       {health.mode === 'demo' && (
-        <div className="notice-banner" style={{ marginTop: 4 }}>
+        <div className="notice-banner amber" style={{ marginTop: 4 }}>
           <CircleAlert size={15} style={{ color: 'var(--acc-amber)', flexShrink: 0 }} />
           <span>
             <strong>Demo Simulation Active:</strong> RCA Analyzer is running with simulated telemetry data and local fixtures. Connect live Splunk and Jira credentials in Project Setup for production RCA.

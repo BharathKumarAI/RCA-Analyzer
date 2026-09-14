@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Sparkles,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   fetchRoles,
   fetchUsers,
@@ -343,17 +344,23 @@ export const Roles: React.FC<RolesProps> = ({ onSelectPage }) => {
 
       {/* Notifications */}
       {error && (
-        <div className="notice-banner red" role="alert">
-          {error}
-          <button className="btn btn-outline" style={{ marginLeft: 12 }} onClick={() => void loadData(true)}>
-            Retry
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          action={
+            <button className="btn btn-outline btn-sm" onClick={() => void loadData(true)}>
+              Retry
+            </button>
+          }
+        />
       )}
       {actionFeedback && (
-        <div className="notice-banner green">
-          <CheckCircle2 size={16} /> {actionFeedback}
-        </div>
+        <NotificationBanner
+          type="success"
+          message={actionFeedback}
+          onClose={() => setActionFeedback(null)}
+        />
       )}
 
       {/* Sub-Navigation Strip */}

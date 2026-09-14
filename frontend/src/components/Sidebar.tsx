@@ -1,10 +1,10 @@
 import React from 'react';
 import type { UiSettingsConfig } from '../types/api';
 import {
-  Activity, AlertTriangle, BookOpen, Bot, Cpu, CreditCard, FileCog, FlaskConical,
-  HardDrive, HeartPulse, KeyRound, LayoutDashboard, PanelLeft, PanelLeftClose,
-  PlayCircle, Settings, ShieldAlert, ShieldCheck, Sliders, Sparkles, Users, Wrench, Zap,
-  type LucideIcon,
+  Activity, AlertTriangle, BookOpen, Bot, Cpu, CreditCard,
+  FileCog, FlaskConical, HardDrive, HeartPulse, KeyRound, LayoutDashboard,
+  PanelLeftClose, PanelLeftOpen, PlayCircle, Settings, ShieldAlert, ShieldCheck,
+  Sliders, Sparkles, Users, Wrench, Zap, type LucideIcon,
 } from 'lucide-react';
 
 export type ActivePage =
@@ -34,31 +34,51 @@ export const isActivePage = (page: string): page is ActivePage => Object.hasOwn(
 
 export const Sidebar: React.FC<SidebarProps> = ({ settings, activePage, onSelectPage, collapsed, onToggleCollapse }) => {
   const groups = [...new Set(settings.navigation.filter(item => item.visible).map(item => item.group))];
-  return <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Workspace navigation">
-    <div className="sidebar-header">
-      {!collapsed && <span className="brand-badge" title={settings.workspace_label}>{settings.workspace_label}</span>}
-      <button type="button" className="icon-btn" onClick={onToggleCollapse} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-        {collapsed ? <PanelLeft size={16} /> : <PanelLeftClose size={16} />}
-      </button>
-    </div>
-    {groups.map(group => (
-      <div key={group} className="sidebar-group">
-        <div className="sidebar-heading" title={group}>
-          <span className="sidebar-heading-indicator" aria-hidden="true" />
-          <span className="sidebar-heading-text">{group}</span>
-        </div>
-        <div className="sidebar-group-items">
-          {settings.navigation.filter(item => item.visible && item.group === group).map(item => {
-            if (!isActivePage(item.page)) return null;
-            const page = item.page;
-            const Icon = PAGE_ICONS[page];
-            return <button type="button" key={page} className={`nav-item ${activePage === page ? 'active' : ''}`}
-              onClick={() => onSelectPage(page)} aria-label={item.label} title={item.description || item.label}
-              aria-current={activePage === page ? 'page' : undefined}
-            ><Icon size={16} /><span>{item.label}</span></button>;
-          })}
-        </div>
+  return (
+    <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Workspace navigation">
+      <div className="sidebar-top">
+        <button
+          type="button"
+          className="sidebar-toggle-btn"
+          onClick={onToggleCollapse}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
       </div>
-    ))}
-  </nav>;
+      {groups.map(group => (
+        <div key={group} className="sidebar-group">
+          {!collapsed && (
+            <div className="sidebar-heading" title={group}>
+              <span className="sidebar-heading-indicator" aria-hidden="true" />
+              <span className="sidebar-heading-text">{group}</span>
+            </div>
+          )}
+          <div className="sidebar-group-items">
+            {settings.navigation.filter(item => item.visible && item.group === group).map(item => {
+              if (!isActivePage(item.page)) return null;
+              const page = item.page;
+              const Icon = page === 'roles' ? Users : PAGE_ICONS[page];
+              const isItemActive = activePage === page || (page === 'roles' && activePage === 'users');
+              return (
+                <button
+                  type="button"
+                  key={page}
+                  className={`nav-item ${isItemActive ? 'active' : ''}`}
+                  onClick={() => onSelectPage(page)}
+                  aria-label={item.label}
+                  title={item.description || item.label}
+                  aria-current={isItemActive ? 'page' : undefined}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
 };

@@ -335,10 +335,6 @@ export const Capabilities: React.FC<CapabilitiesProps> = ({ onNewInvestigation }
               Skills: <b>{skills.length}</b>
             </span>
             <span className="capabilities-stat-chip">
-              <ShieldCheck size={12} />
-              Scope: <b>{principal ? `${principal.tenant_id} / ${principal.project_id}` : 'Local Scope'}</b>
-            </span>
-            <span className="capabilities-stat-chip">
               Mode: <b>{config?.mode || 'demo'}</b>
             </span>
             <button

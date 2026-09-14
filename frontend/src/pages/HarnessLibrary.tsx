@@ -19,6 +19,7 @@ import {
 } from '../types/api';
 import type { ActivePage } from '../components/Sidebar';
 import { HarnessStudioPage } from '../features/harness-studio/HarnessStudioPage';
+import { NotificationBanner } from '../components/NotificationBanner';
 import '../styles/harness-library.css';
 
 const kinds: Array<{ id: HarnessResourceKind; label: string; icon: React.ReactNode }> = [
@@ -741,32 +742,26 @@ export const HarnessLibrary: React.FC<HarnessLibraryProps> = ({ principal, onNav
 
       {/* Notifications & Error Alerts */}
       {notice && (
-        <div className="notice-banner" role="status">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CheckCircle2 size={15} style={{ color: 'var(--acc3)' }} />
-            <span>{notice}</span>
-          </div>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            style={{ padding: '2px 8px', fontSize: 11 }}
-            onClick={() => setNotice(null)}
-          >
-            Dismiss
-          </button>
-        </div>
+        <NotificationBanner
+          type="success"
+          message={notice}
+          onClose={() => setNotice(null)}
+          style={{ marginBottom: 14 }}
+        />
       )}
 
       {error && (
-        <div className="notice-banner red" role="alert">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <AlertTriangle size={15} />
-            <span>{error}</span>
-          </div>
-          <button type="button" className="btn btn-secondary" onClick={() => void load()}>
-            Retry
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          action={
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void load()}>
+              Retry
+            </button>
+          }
+          style={{ marginBottom: 14 }}
+        />
       )}
 
       {/* Unsaved Changes Banner */}

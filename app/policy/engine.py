@@ -25,6 +25,8 @@ class PolicyEngine:
     """Evaluates multi-attribute authorization decisions for agent tool calls."""
 
     def evaluate(self, ctx: AuthorizationContext) -> PolicyDecision:
+        if not set(ctx.principal.roles) - {Role.GENERIC_USER}:
+            return PolicyDecision(decision=PolicyDecisionType.DENY, reason="Project membership role required.")
         if ctx.principal.tenant_id != ctx.tenant_id:
             return PolicyDecision(
                 decision=PolicyDecisionType.DENY, reason="Tenant boundary violation."

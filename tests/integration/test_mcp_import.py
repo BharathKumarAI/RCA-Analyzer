@@ -55,7 +55,7 @@ def test_preview_then_existing_save_persists_stdio_connection(tmp_path):
         assert response.status_code == 200
         connection = response.json()['connections'][0]
         assert client.get('/api/v1/integrations', headers=token('owner')).json() == []
-        saved = client.put('/api/v1/integrations/project/local-reader', headers=token('owner'), json={'definition': connection['definition']})
+        saved = client.put('/api/v1/integrations/project/local-reader', headers=token('owner'), json={'definition': {**connection['definition'], 'environment_dependency': 'independent', 'tool_environment': 'Shared'}})
         assert saved.status_code == 200
         assert saved.json()[0]['definition']['env'] == {'TOKEN': 'env://MCP_TOKEN'}
         test = client.post('/api/v1/integrations/local-reader/test', headers=token('owner'))

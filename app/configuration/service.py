@@ -29,7 +29,7 @@ from app.identity.principals import Role, UserPrincipal
 from app.tools.catalog import ALLOWED_ACTIONS as ALLOWED_TOOLS
 
 ADMIN_ROLES = frozenset({Role.PLATFORM_ADMIN, Role.PROJECT_OWNER})
-AUTHOR_ROLES = ADMIN_ROLES | frozenset({Role.PROJECT_MANAGER})
+AUTHOR_ROLES = ADMIN_ROLES
 metadata = MetaData(schema="governance")
 drafts = Table(
     "agent_config_drafts",

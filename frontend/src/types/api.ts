@@ -9,6 +9,32 @@ export interface Principal {
   authn_method?: string;
 }
 
+export interface ProjectRedactionRule {
+  id: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface ProjectRedactionPolicy {
+  policy_id: string;
+  enabled: boolean;
+  editable: boolean;
+  project_id: string;
+  source: string;
+  rules: ProjectRedactionRule[];
+  limitations: string[];
+  configured_custom_rule_count?: number;
+  custom_rules_enforced?: boolean;
+}
+
+export interface RedactionPreviewResponse {
+  policy_id: string;
+  redacted_text: string;
+  changed: boolean;
+  truncated: boolean;
+}
+
 export interface AgentConfiguration {
   id: string;
   name: string;
@@ -48,7 +74,19 @@ export interface RuntimeModelProfiles {
   profiles: Record<string, Record<string, string | number>>;
 }
 
+export interface ConnectorAuthProfileItem {
+  id: string;
+  name: string;
+  status: 'active' | 'planned' | 'disabled_by_policy';
+  transport_compatibility?: string;
+  required_fields: string[];
+  optional_fields?: string[];
+  hidden_fields?: string[];
+}
+
 export interface ConnectorTemplateItem {
+  template_id?: string;
+  status?: 'draft' | 'published' | 'deprecated' | 'retired';
   type: string;
   name: string;
   system_name: string;
@@ -57,6 +95,14 @@ export interface ConnectorTemplateItem {
   integration_kind: 'native' | 'mcp' | 'a2a' | 'parser';
   protocol: string;
   auth_method: string;
+  version?: string;
+  availability?: 'draft' | 'published' | 'deprecated' | 'retired' | 'active' | 'planned' | 'disabled_by_policy';
+  platform_enabled?: boolean;
+  is_enabled_by_policy?: boolean;
+  provider_adapter_id?: string;
+  supported_operations?: string[];
+  known_limitations?: string[];
+  auth_profiles?: ConnectorAuthProfileItem[];
   default_endpoint: string;
   default_ui_base_url?: string;
   default_secret: string;
@@ -74,15 +120,111 @@ export interface ConnectorTemplateItem {
   default_a2a?: Record<string, any>;
 }
 
+export interface EnvironmentBindingItem {
+  project_env_id: string;
+  tool_env_id?: string;
+  external_resource: string;
+  credential_binding_id?: string;
+  narrowing_filters_json?: Record<string, any>;
+  status?: 'active' | 'inactive';
+}
+
+export interface ProjectConnectorInstanceItem {
+  tenant_id?: string;
+  project_id?: string;
+  instance_id: string;
+  template_id: string;
+  template_version: string;
+  system_name: string;
+  environment_dependency?: 'dependent' | 'independent';
+  tool_environment?: string;
+  owner?: string;
+  description?: string;
+  tags?: string[];
+  usage?: string[];
+  author?: string;
+  enabled: boolean;
+  status: 'draft' | 'enabled' | 'disabled' | 'archived';
+  definition_json: {
+    system_name?: string;
+    environment_dependency?: 'dependent' | 'independent';
+    tool_environment?: string;
+    owner?: string;
+    description?: string;
+    tags?: string[];
+    usage?: string[];
+    environment_mappings?: Array<{
+      project_env_id: string;
+      external_resource: string;
+      tool_environment: string;
+      credential_binding?: string;
+    }>;
+    endpoint?: string;
+    auth_type?: string;
+    credentials?: Record<string, string>;
+    timeout_seconds?: number;
+    max_results?: number;
+    custom_fields?: Array<{ id: string; name: string; type: string }>;
+    data_monitoring?: {
+      use_as_data_source?: boolean;
+      query?: string;
+      queue_name?: string;
+      trigger_type?: string;
+      cron?: string;
+      capability?: string;
+    };
+    [key: string]: any;
+  };
+  revision: number;
+  created_at?: number;
+  updated_at?: number;
+  bindings?: EnvironmentBindingItem[];
+}
+
+export interface CandidateTestStageResult {
+  status: 'PASSED' | 'FAILED' | 'NOT_RUN' | 'NOT_APPLICABLE' | 'NOT_INDEPENDENTLY_VERIFIED';
+  detail?: string;
+}
+
+export interface CandidateTestResponse {
+  results?: CandidateTestResponse[];
+  candidate_hash: string;
+  overall_result: 'PASSED' | 'FAILED' | 'PARTIAL' | 'NOT_RUN';
+  stage_results: Record<string, CandidateTestStageResult>;
+  latency_ms: number;
+  evidence_summary: string;
+  error_message: string;
+  tested_at: number;
+}
+
 export interface ConnectorTemplateField {
   variable_name: string;
+  label?: string;
   description: string;
   value_type: ConnectorValueType;
   default_value: any;
+  default_source?: 'static' | 'discovered' | 'computed' | 'none';
+  required?: boolean;
+  required_when?: string;
+  visibility_condition?: { field: string; equals: unknown };
+  allowed_values?: string[];
   allow_project_override: boolean;
   visible_in_project: boolean;
+  ownership?: 'platform_locked' | 'project_override_allowed' | 'project_only' | 'derived' | 'secret_reference';
+  category?: string;
+  subcategory?: string;
+  runtime_binding?: string;
   icon: string;
 }
+
+export type GovernanceTier = 'platform_only' | 'project_locked' | 'project_editable';
+
+export const getFieldGovernanceTier = (field?: Partial<ConnectorTemplateField> | null): GovernanceTier => {
+  if (!field) return 'project_editable';
+  if (field.visible_in_project === false) return 'platform_only';
+  if (field.allow_project_override === false || field.ownership === 'platform_locked') return 'project_locked';
+  return 'project_editable';
+};
 
 export type ConnectorValueType =
   | 'string'
@@ -92,21 +234,50 @@ export type ConnectorValueType =
   | 'json'
   | 'secret_ref';
 
+export const KNOWN_PARAMETER_CATEGORIES = {
+  connectivity: [
+    'authentication',
+    'endpoint',
+    'protocol',
+    'rate_limit',
+    'retry',
+    'service_account',
+    'timeouts',
+  ],
+  identity: ['service_account', 'authentication'],
+  performance: ['rate_limit', 'retry', 'timeouts'],
+  query: ['index_selection', 'pagination'],
+  schedules: ['environment', 'schedule', 'window', 'polling_frequency', 'max_window_seconds'],
+  security: ['auth', 'oauth', 'secret'],
+  runtime: ['operation', 'deployment'],
+  operational: ['general'],
+} as const;
+
+export type ParameterCategory = keyof typeof KNOWN_PARAMETER_CATEGORIES;
+export type ParameterEffectiveState = 'SET' | 'INHERIT' | 'DISABLED';
+export type ParameterScope = 'platform' | 'project' | 'platform_only';
+
 export interface ParameterDefinitionRow {
   active_value?: unknown;
   restart_required?: boolean;
+  main?: string;
+  enabled?: boolean;
   tool: string;
   variable_name: string;
   value_type: ConnectorValueType;
   description: string;
   default_value: unknown;
   effective_value: unknown;
+  effective_state?: ParameterEffectiveState;
   revision: number;
   override_revision: number | null;
   allow_project_override: boolean;
+  category?: string;
+  subcategory?: string | null;
+  allowed_values?: unknown[] | null;
   project_visible: boolean;
   source: 'platform' | 'project';
-  scope?: 'platform' | 'project' | 'platform_only';
+  scope?: ParameterScope;
   icon?: string;
 }
 
@@ -665,6 +836,10 @@ export interface HarnessLibraryItem {
 
 export interface IntegrationDefinition {
   name: string;
+  system_name?: string;
+  environment_dependency?: 'dependent' | 'independent';
+  tool_environment?: string;
+  project_environment_ids?: string[];
   kind: 'mcp' | 'a2a';
   endpoint: string;
   description: string;
@@ -848,6 +1023,13 @@ export interface KnowledgeItem {
   status: string;
   created_at?: number;
   updated_at?: number;
+  upload?: {
+    filename: string;
+    sha256: string;
+    size_bytes: number;
+    warnings: string[];
+    original_retained: boolean;
+  };
 }
 
 export interface KnowledgePayload {

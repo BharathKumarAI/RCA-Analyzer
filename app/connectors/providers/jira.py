@@ -27,12 +27,23 @@ class JiraConnector(BaseConnector):
         max_connections: int = 10,
         max_keepalive_connections: int = 5,
         max_response_bytes: int = 1_048_576,
+        custom_field_mapping: Optional[Dict[str, str]] = None,
     ):
         super().__init__(connector_id="itsm", max_response_bytes=max_response_bytes)
         self.base_url = base_url or os.getenv("JIRA_BASE_URL")
         self.project_key = project_key or os.getenv("JIRA_PROJECT_KEY")
         self.user_email = user_email or os.getenv("JIRA_USER_EMAIL")
         self.api_token = api_token or os.getenv("JIRA_API_TOKEN")
+        mapping = custom_field_mapping or {}
+        if not isinstance(mapping, dict) or len(mapping) > 100 or any(
+            not isinstance(key, str) or not re.fullmatch(r"customfield_[0-9]{1,12}", key)
+            or not isinstance(label, str) or not label.strip() or len(label) > 128
+            for key, label in mapping.items()
+        ):
+            raise ValueError("Custom field mappings require canonical Jira field IDs and display names (maximum 100)")
+        self.custom_field_mapping = {key: label.strip() for key, label in mapping.items()}
+        if len({label.casefold() for label in self.custom_field_mapping.values()}) != len(mapping):
+            raise ValueError("Custom field display names must be unique")
         if (
             not self.base_url
             or not self.project_key
@@ -206,9 +217,45 @@ class JiraConnector(BaseConnector):
                 if isinstance(c, dict)
             ],
             "custom_fields": custom_fields,
+            "mapped_custom_fields": {
+                label: custom_fields[field_id]
+                for field_id, label in self.custom_field_mapping.items()
+                if field_id in custom_fields
+            },
+            "unavailable_mapped_fields": [
+                field_id for field_id in self.custom_field_mapping if field_id not in custom_fields
+            ],
             "comments_count": comments_count,
             "attachments_count": attachments_count,
         }
+
+    async def discover_fields(self) -> list[dict[str, str]]:
+        """Read accessible field metadata after verifying the configured project.
+
+        Field visibility does not establish that a field is present on every issue.
+        """
+        health = await self.probe_health()
+        if health.overall != CheckStatus.HEALTHY:
+            raise ConnectorError("Verify Jira project access before discovering fields")
+        try:
+            async with self._client.stream("GET", "/rest/api/2/field") as response:
+                if not 200 <= response.status_code < 300:
+                    raise ConnectorError(f"Jira field discovery failed with HTTP {response.status_code}")
+                payload = json.loads(await self.read_limited(response))
+        except (httpx2.TimeoutException, httpx2.RequestError) as exc:
+            raise ConnectorError(f"Jira field discovery failed: {type(exc).__name__}") from None
+        if not isinstance(payload, list) or len(payload) > 10000:
+            raise ConnectorError("Jira field discovery exceeded the supported schema or field limit")
+        result = []
+        for field in payload:
+            if not isinstance(field, dict):
+                raise ConnectorError("Jira field discovery returned an invalid field")
+            field_id, name = field.get("id"), field.get("name")
+            if isinstance(field_id, str) and re.fullmatch(r"customfield_[0-9]{1,12}", field_id):
+                if not isinstance(name, str) or not name.strip() or len(name) > 256:
+                    raise ConnectorError("Jira field discovery returned an invalid field name")
+                result.append({"id": field_id, "name": name})
+        return result
 
     async def post_comment(
         self, ticket_id: str, comment: str, dry_run: bool = False

@@ -34,6 +34,8 @@ class PolicyCapabilityTests(unittest.TestCase):
                 Role.PLATFORM_ADMIN,
                 Role.PROJECT_OWNER,
                 Role.PROJECT_ANALYST,
+                Role.PROJECT_MANAGER,
+                Role.PROJECT_VIEWER,
             ),
         )
         self.assertTrue(self.registry.content_hash.startswith("sha256:"))
@@ -53,7 +55,7 @@ class PolicyCapabilityTests(unittest.TestCase):
             .resolve("incident_triage", principal())
             .is_authorized
         )
-        self.assertFalse(
+        self.assertTrue(
             resolver.resolve(
                 "incident_triage", principal(roles=[Role.PROJECT_MANAGER])
             ).is_authorized

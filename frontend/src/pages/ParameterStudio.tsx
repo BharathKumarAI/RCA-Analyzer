@@ -37,22 +37,39 @@ import {
   Copy,
   Boxes,
   Plus,
-  Trash2
+  Trash2,
+  Filter,
+  Tag,
+  HelpCircle
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   defineParameter,
   deleteParameterDefinition,
   fetchParameters,
+  fetchParameterTaxonomy,
   fetchPrincipal,
   resetParameterOverride,
   setParameterOverride,
   ApiError
 } from '../services/api';
-import type { ParameterDefinitionRow, Principal, ConnectorValueType } from '../types/api';
-import { parseNumericValue } from '../utils/parameterValues';
+import {
+  KNOWN_PARAMETER_CATEGORIES,
+  type ParameterDefinitionRow,
+  type ParameterEffectiveState,
+  type ParameterScope,
+  type Principal,
+  type ConnectorValueType
+} from '../types/api';
+import {
+  parseNumericValue,
+  parseTypedValue,
+  valuesMatch,
+  areAllowedValuesScalar
+} from '../utils/parameterValues';
 import '../styles/parameters.css';
 
-// Format helper
+// Format helpers
 const parameterKey = (item: ParameterDefinitionRow) => `${item.tool}.${item.variable_name}`;
 
 const displayValue = (value: unknown): string => {
@@ -70,10 +87,10 @@ const displayValue = (value: unknown): string => {
 const formatValueType = (valueType: ParameterDefinitionRow['value_type']) =>
   valueType.replace(/_/g, ' ');
 
-// Known tools metadata registry
+// Known tools metadata registry (toolCategory distinguishes from parameter taxonomy category)
 interface ToolMeta {
   displayName: string;
-  category: string;
+  toolCategory: string;
   description: string;
   icon: React.ReactNode;
 }
@@ -81,79 +98,79 @@ interface ToolMeta {
 const TOOL_REGISTRY: Record<string, ToolMeta> = {
   runtime: {
     displayName: 'Runtime Engine',
-    category: 'System & Execution',
+    toolCategory: 'System & Execution',
     description: 'Execution concurrency limits, evidence ceilings, timeouts, and operational thresholds.',
     icon: <Cpu size={16} />,
   },
   itsm: {
     displayName: 'ITSM / Jira Service',
-    category: 'Incident & Ticketing',
+    toolCategory: 'Incident & Ticketing',
     description: 'Issue tracker connector parameters, transition endpoints, timeout, and authentication.',
     icon: <Layers size={16} />,
   },
   log_search: {
     displayName: 'Log Search / Splunk',
-    category: 'Observability & Logs',
+    toolCategory: 'Observability & Logs',
     description: 'Search query windows, result caps, log analytics transport, and endpoints.',
     icon: <Search size={16} />,
   },
   confluence: {
     displayName: 'Confluence Knowledge',
-    category: 'Documentation & Wiki',
+    toolCategory: 'Documentation & Wiki',
     description: 'Atlassian wiki connector, documentation spaces, and runbook ingestion settings.',
     icon: <BookOpen size={16} />,
   },
   kubernetes: {
     displayName: 'Kubernetes Cluster',
-    category: 'Containers & Clusters',
+    toolCategory: 'Containers & Clusters',
     description: 'Cluster API endpoints, namespace selectors, pod event correlation thresholds.',
     icon: <Server size={16} />,
   },
   kafka: {
     displayName: 'Apache Kafka Stream',
-    category: 'Messaging & Events',
+    toolCategory: 'Messaging & Events',
     description: 'Broker cluster bootstrap addresses, consumer group offsets, and lag tolerances.',
     icon: <Radio size={16} />,
   },
   oracle: {
     displayName: 'Oracle Database',
-    category: 'Data & Storage',
+    toolCategory: 'Data & Storage',
     description: 'Enterprise relational database connector, connection pools, and query timeouts.',
     icon: <Database size={16} />,
   },
   gitlab: {
     displayName: 'GitLab DevSecOps',
-    category: 'Code & CI/CD',
+    toolCategory: 'Code & CI/CD',
     description: 'Repository commit lineage, deployment pipeline hooks, and MR review settings.',
     icon: <GitBranch size={16} />,
   },
   signalfx: {
     displayName: 'SignalFx Telemetry',
-    category: 'Metrics & APM',
+    toolCategory: 'Metrics & APM',
     description: 'Real-time metrics streaming, detector query resolution, and chart thresholds.',
     icon: <Activity size={16} />,
   },
   qtest: {
     displayName: 'qTest QA Platform',
-    category: 'Quality & Testing',
+    toolCategory: 'Quality & Testing',
     description: 'Test run results, execution suite mappings, and release cycle validation.',
     icon: <CheckSquare size={16} />,
   },
   unix: {
     displayName: 'Unix / Linux Host',
-    category: 'Infrastructure & OS',
+    toolCategory: 'Infrastructure & OS',
     description: 'System diagnostics, remote SSH connection limits, and shell telemetry limits.',
     icon: <Terminal size={16} />,
   },
   jira: {
     displayName: 'Jira Native Provider',
-    category: 'Incident & Ticketing',
+    toolCategory: 'Incident & Ticketing',
     description: 'Native Jira REST API connectivity parameters and operational bounds.',
     icon: <Layers size={16} />,
   },
   splunk: {
     displayName: 'Splunk Native Provider',
-    category: 'Observability & Logs',
+    toolCategory: 'Observability & Logs',
     description: 'Native Splunk search jobs, REST API credentials, and dispatch settings.',
     icon: <Search size={16} />,
   },
@@ -163,13 +180,12 @@ function getToolMeta(toolName: string): ToolMeta {
   if (TOOL_REGISTRY[toolName.toLowerCase()]) {
     return TOOL_REGISTRY[toolName.toLowerCase()];
   }
-  // Generic fallback for custom services / tools defined by users
   const formatted = toolName
     .replace(/[_-]/g, ' ')
     .replace(/\b\w/g, char => char.toUpperCase());
   return {
     displayName: formatted,
-    category: 'Custom Service',
+    toolCategory: 'Custom Service',
     description: `Configured parameters and operational settings for ${formatted}.`,
     icon: <Sliders size={16} />,
   };
@@ -182,6 +198,11 @@ export function ParameterStudio() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
+  // Dynamic taxonomy from backend
+  const [taxonomyMap, setTaxonomyMap] = useState<Record<string, string[]>>(() => ({
+    ...KNOWN_PARAMETER_CATEGORIES as unknown as Record<string, string[]>,
+  }));
+
   // User Principal & Roles
   const [principal, setPrincipal] = useState<Principal | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -190,14 +211,18 @@ export function ParameterStudio() {
   // View Mode: Table (default) vs Cards
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
-  // Filters & Navigation
+  // Filters & Taxonomy Navigation
   const [selectedTool, setSelectedTool] = useState<string>('ALL');
   const [providerSearch, setProviderSearch] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [scopeFilter, setScopeFilter] = useState<'ALL' | 'PLATFORM' | 'PROJECT'>('ALL');
+  const [scopeFilter, setScopeFilter] = useState<'ALL' | ParameterScope>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
+  const [subcategoryFilter, setSubcategoryFilter] = useState<string>('ALL');
+  const [effectiveStateFilter, setEffectiveStateFilter] = useState<'ALL' | ParameterEffectiveState>('ALL');
   const [collapsedTools, setCollapsedTools] = useState<Record<string, boolean>>({});
+  const [showTaxonomyGuide, setShowTaxonomyGuide] = useState(false);
 
   // Copy feedback state
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -212,11 +237,15 @@ export function ParameterStudio() {
   const [newCustomTool, setNewCustomTool] = useState('');
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ConnectorValueType>('string');
+  const [newCategory, setNewCategory] = useState<string>('connectivity');
+  const [newSubcategory, setNewSubcategory] = useState<string>('endpoint');
+  const [newAllowedValues, setNewAllowedValues] = useState<string[]>([]);
+  const [newAllowedValueInput, setNewAllowedValueInput] = useState<string>('');
   const [newDefaultValue, setNewDefaultValue] = useState('');
   const [newDefaultBool, setNewDefaultBool] = useState(false);
   const [newDefaultNumber, setNewDefaultNumber] = useState(0);
   const [newDescription, setNewDescription] = useState('');
-  const [newScope, setNewScope] = useState<'platform' | 'project' | 'platform_only'>('project');
+  const [newScope, setNewScope] = useState<ParameterScope>('project');
   const [addError, setAddError] = useState<string | null>(null);
 
   // Edit fields for Project Override
@@ -231,8 +260,63 @@ export function ParameterStudio() {
   const [editDefaultNumber, setEditDefaultNumber] = useState<number>(0);
   const [editDescription, setEditDescription] = useState<string>('');
   const [editAllowOverride, setEditAllowOverride] = useState<boolean>(false);
-  const [editScope, setEditScope] = useState<'platform' | 'project' | 'platform_only'>('platform_only');
+  const [editScope, setEditScope] = useState<ParameterScope>('platform_only');
+  const [editCategory, setEditCategory] = useState<string>('connectivity');
+  const [editSubcategory, setEditSubcategory] = useState<string>('');
+  const [editAllowedValues, setEditAllowedValues] = useState<string[]>([]);
+  const [editAllowedValueInput, setEditAllowedValueInput] = useState<string>('');
+  const [editEnabled, setEditEnabled] = useState<boolean>(true);
   const [defaultJsonError, setDefaultJsonError] = useState<string | null>(null);
+
+  const getSubcategories = useCallback((cat: string, includeSubcategory?: string): string[] => {
+    const options = new Set<string>(taxonomyMap[cat] ?? []);
+    for (const item of parameters) {
+      if (item.category === cat && item.subcategory) {
+        options.add(item.subcategory);
+      }
+    }
+    if (includeSubcategory && !options.has(includeSubcategory)) {
+      options.add(includeSubcategory);
+    }
+    return Array.from(options).sort();
+  }, [taxonomyMap, parameters]);
+
+  const getInitialSubcategory = (category: string): string => {
+    const list = getSubcategories(category);
+    return list[0] || '';
+  };
+
+  const setNewTypeDefaults = (type: ConnectorValueType) => {
+    setNewDefaultBool(false);
+    setNewDefaultNumber(0);
+    if (type === 'boolean') {
+      setNewDefaultBool(false);
+      setNewDefaultValue('false');
+    } else if (type === 'json') {
+      setNewDefaultValue('{}');
+    } else if (type === 'secret_ref') {
+      setNewDefaultValue('env://');
+    } else {
+      setNewDefaultValue('');
+    }
+  };
+
+  const resetNewParameterForm = (overrides: { tool?: string } = {}) => {
+    setAddError(null);
+    setNewTool(overrides.tool || 'runtime');
+    setNewCustomTool('');
+    setNewName('');
+    setNewType('string');
+    setNewCategory('connectivity');
+    setNewSubcategory(getInitialSubcategory('connectivity'));
+    setNewAllowedValues([]);
+    setNewAllowedValueInput('');
+    setNewDescription('');
+    setNewScope('project');
+    setNewDefaultBool(false);
+    setNewDefaultNumber(0);
+    setNewDefaultValue('');
+  };
 
   // Load Data
   const load = useCallback(async () => {
@@ -260,19 +344,28 @@ export function ParameterStudio() {
         const roles = p.roles || [];
         const isAdm = roles.includes('PLATFORM_ADMIN');
         setIsPlatformAdmin(isAdm);
-        setCanOverride(isAdm || roles.includes('PROJECT_OWNER') || roles.includes('PROJECT_MANAGER'));
+        setCanOverride(isAdm || roles.includes('PROJECT_OWNER'));
       })
       .catch(() => {
         setIsPlatformAdmin(false);
         setCanOverride(false);
       });
+
+    fetchParameterTaxonomy()
+      .then(taxMap => {
+        if (taxMap && Object.keys(taxMap).length > 0) {
+          setTaxonomyMap(taxMap);
+        }
+      })
+      .catch(() => null);
   }, []);
 
-  // Keyboard shortcut listener for ESC (close modal)
+  // Keyboard shortcut listener for ESC (close modal or drawer)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (isAddOpen) {
+          resetNewParameterForm();
           setIsAddOpen(false);
         } else if (activeParam) {
           setActiveParam(null);
@@ -291,7 +384,9 @@ export function ParameterStudio() {
 
     // Populate Override fields
     if (activeParam.value_type === 'boolean') {
-      setEditOverrideBool(Boolean(activeParam.effective_value));
+      const boolValue = Boolean(activeParam.effective_value);
+      setEditOverrideBool(boolValue);
+      setEditOverrideValue(boolValue ? 'true' : 'false');
     } else if (activeParam.value_type === 'integer' || activeParam.value_type === 'number') {
       setEditOverrideNumber(Number(activeParam.effective_value) || 0);
       setEditOverrideValue(String(activeParam.effective_value ?? '0'));
@@ -301,8 +396,19 @@ export function ParameterStudio() {
 
     // Populate Platform Default fields
     setEditDescription(activeParam.description || '');
-    setEditAllowOverride(Boolean(activeParam.allow_project_override));
-    setEditScope(activeParam.allow_project_override ? (activeParam.project_visible ? 'project' : 'platform') : 'platform_only');
+    const currentScope = activeParam.scope || (activeParam.allow_project_override ? 'project' : 'platform_only');
+    setEditScope(currentScope);
+    setEditAllowOverride(currentScope === 'project');
+    setEditCategory(activeParam.category || 'connectivity');
+    setEditSubcategory(activeParam.subcategory || '');
+    setEditEnabled(activeParam.enabled !== false);
+
+    const allowedStrs = Array.isArray(activeParam.allowed_values)
+      ? activeParam.allowed_values.map(v => (typeof v === 'string' ? v : JSON.stringify(v)))
+      : [];
+    setEditAllowedValues(allowedStrs);
+    setEditAllowedValueInput('');
+
     if (activeParam.value_type === 'boolean') {
       setEditDefaultBool(Boolean(activeParam.default_value));
     } else if (activeParam.value_type === 'integer' || activeParam.value_type === 'number') {
@@ -313,7 +419,7 @@ export function ParameterStudio() {
     }
 
     // Default tab based on permissions
-    if (activeParam.allow_project_override) {
+    if (activeParam.allow_project_override && activeParam.enabled !== false && activeParam.effective_state !== 'DISABLED') {
       setDrawerTab('override');
     } else if (isPlatformAdmin) {
       setDrawerTab('platform_default');
@@ -337,6 +443,27 @@ export function ParameterStudio() {
     return Array.from(toolsMap.keys()).sort();
   }, [toolsMap]);
 
+  // Unique categories across loaded parameters and backend taxonomy
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>(Object.keys(taxonomyMap));
+    for (const p of parameters) {
+      if (p.category) cats.add(p.category);
+    }
+    return Array.from(cats).sort();
+  }, [parameters, taxonomyMap]);
+
+  // Contextual subcategories for categoryFilter
+  const availableSubcategories = useMemo(() => {
+    if (categoryFilter === 'ALL') {
+      const subcats = new Set<string>();
+      for (const p of parameters) {
+        if (p.subcategory) subcats.add(p.subcategory);
+      }
+      return Array.from(subcats).sort();
+    }
+    return getSubcategories(categoryFilter);
+  }, [parameters, categoryFilter, getSubcategories]);
+
   // Filtered providers for sidebar search
   const filteredSidebarTools = useMemo(() => {
     if (!providerSearch.trim()) return uniqueTools;
@@ -352,8 +479,13 @@ export function ParameterStudio() {
     const total = parameters.length;
     const toolsCount = uniqueTools.length;
     const overridden = parameters.filter(p => p.override_revision !== null && p.override_revision > 0).length;
-    const platformEnforced = parameters.filter(p => !p.allow_project_override).length;
-    return { total, toolsCount, overridden, platformEnforced };
+    const platformEnforced = parameters.filter(
+      p => !p.allow_project_override || p.scope === 'platform_only' || p.enabled === false
+    ).length;
+    const set = parameters.filter(p => p.effective_state === 'SET').length;
+    const inherit = parameters.filter(p => p.effective_state === 'INHERIT').length;
+    const disabled = parameters.filter(p => p.effective_state === 'DISABLED' || p.enabled === false).length;
+    return { total, toolsCount, overridden, platformEnforced, set, inherit, disabled };
   }, [parameters, uniqueTools]);
 
   // Filtered parameters
@@ -374,36 +506,87 @@ export function ParameterStudio() {
       if (statusFilter === 'DEFAULT' && item.override_revision && item.override_revision > 0) {
         return false;
       }
-      if (statusFilter === 'CAN_OVERRIDE' && !item.allow_project_override) {
+      if (
+        statusFilter === 'CAN_OVERRIDE' &&
+        (!item.allow_project_override || item.enabled === false || item.effective_state === 'DISABLED')
+      ) {
         return false;
       }
-      if (statusFilter === 'LOCKED' && item.allow_project_override) {
+      if (
+        statusFilter === 'LOCKED' &&
+        item.allow_project_override &&
+        item.enabled !== false &&
+        item.effective_state !== 'DISABLED'
+      ) {
         return false;
       }
-      if (scopeFilter === 'PLATFORM' && item.project_visible) return false;
-      if (scopeFilter === 'PROJECT' && !item.project_visible) return false;
-      // Search query
+      // Scope filter
+      if (scopeFilter !== 'ALL' && item.scope !== scopeFilter) {
+        return false;
+      }
+      // Category filter
+      if (categoryFilter !== 'ALL' && item.category !== categoryFilter) {
+        return false;
+      }
+      // Subcategory filter
+      if (subcategoryFilter !== 'ALL' && item.subcategory !== subcategoryFilter) {
+        return false;
+      }
+      // Effective State filter
+      if (effectiveStateFilter !== 'ALL') {
+        const itemState = item.effective_state || (item.enabled === false ? 'DISABLED' : 'SET');
+        if (itemState !== effectiveStateFilter) {
+          return false;
+        }
+      }
+      // Search query across variable_name, description, main, tool, category, subcategory, effective_value
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const key = parameterKey(item).toLowerCase();
         const desc = (item.description || '').toLowerCase();
         const toolName = getToolMeta(item.tool).displayName.toLowerCase();
+        const main = (item.main || item.tool).toLowerCase();
+        const cat = (item.category || '').toLowerCase();
+        const subcat = (item.subcategory || '').toLowerCase();
         const effVal = displayValue(item.effective_value).toLowerCase();
-        if (!key.includes(q) && !desc.includes(q) && !toolName.includes(q) && !effVal.includes(q)) {
+        const defVal = displayValue(item.default_value).toLowerCase();
+        if (
+          !key.includes(q) &&
+          !desc.includes(q) &&
+          !toolName.includes(q) &&
+          !main.includes(q) &&
+          !cat.includes(q) &&
+          !subcat.includes(q) &&
+          !effVal.includes(q) &&
+          !defVal.includes(q)
+        ) {
           return false;
         }
       }
       return true;
     });
-  }, [parameters, selectedTool, typeFilter, statusFilter, scopeFilter, searchQuery]);
+  }, [
+    parameters,
+    selectedTool,
+    typeFilter,
+    statusFilter,
+    scopeFilter,
+    categoryFilter,
+    subcategoryFilter,
+    effectiveStateFilter,
+    searchQuery,
+  ]);
 
-  // Filtered grouped by tool
+  // Group filtered parameters by tool -> category
   const filteredToolsMap = useMemo(() => {
-    const map = new Map<string, ParameterDefinitionRow[]>();
+    const map = new Map<string, Map<string, ParameterDefinitionRow[]>>();
     for (const item of filteredParameters) {
-      const list = map.get(item.tool) || [];
+      const toolCatMap = map.get(item.tool) || new Map<string, ParameterDefinitionRow[]>();
+      const catKey = item.category || 'operational';
+      const list = toolCatMap.get(catKey) || [];
       list.push(item);
-      map.set(item.tool, list);
+      toolCatMap.set(catKey, list);
+      map.set(item.tool, toolCatMap);
     }
     return map;
   }, [filteredParameters]);
@@ -431,18 +614,10 @@ export function ParameterStudio() {
     }
     if (type === 'string') return rawString;
     if (type === 'secret_ref') {
-      const trimmed = rawString.trim();
-      if (!/^env:\/\/[A-Z][A-Z0-9_]{0,127}$/.test(trimmed)) {
-        throw new Error('Secret reference must follow the format env://VARIABLE_NAME');
-      }
-      return trimmed;
+      return parseTypedValue(rawString, 'secret_ref');
     }
     if (type === 'json') {
-      try {
-        return JSON.parse(rawString);
-      } catch {
-        throw new Error('Invalid JSON syntax.');
-      }
+      return parseTypedValue(rawString, 'json');
     }
     return rawString;
   };
@@ -450,10 +625,13 @@ export function ParameterStudio() {
   // Copy to clipboard helper
   const handleCopyValue = (key: string, val: unknown) => {
     const str = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');
-    navigator.clipboard.writeText(str).then(() => {
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1800);
-    }).catch(() => null);
+    navigator.clipboard
+      .writeText(str)
+      .then(() => {
+        setCopiedKey(key);
+        setTimeout(() => setCopiedKey(null), 1800);
+      })
+      .catch(() => null);
   };
 
   // Create Parameter Action
@@ -476,14 +654,44 @@ export function ParameterStudio() {
       return;
     }
 
+    // Taxonomy validation
+    const newSubcategoryValue = newSubcategory.trim();
+    if (!newCategory.trim()) {
+      setAddError('Operational category is required.');
+      return;
+    }
+
     setBusy(true);
     try {
       const parsedVal = parseInputValue(newType, newDefaultValue, newDefaultBool, newDefaultNumber);
+
+      // Parse allowed values strictly to target type
+      const typedAllowedValues = newAllowedValues.map(strVal => {
+        try {
+          return parseTypedValue(strVal, newType);
+        } catch (err: unknown) {
+          throw new Error(`Allowed value "${strVal}" is not valid for type ${newType}: ${err instanceof Error ? err.message : ''}`);
+        }
+      });
+
+      // Validate default value against typed allowed values
+      if (typedAllowedValues.length > 0) {
+        const matches = typedAllowedValues.some(item => valuesMatch(item, parsedVal));
+        if (!matches) {
+          throw new Error(`Default value (${displayValue(parsedVal)}) must match one of the allowed values: ${newAllowedValues.join(', ')}`);
+        }
+      }
+
       await defineParameter(finalTool, finalName, {
         value_type: newType,
         default_value: parsedVal,
         description: newDescription.trim(),
-        allow_project_override: newScope !== 'platform_only',
+        allow_project_override: newScope === 'project',
+        scope: newScope,
+        category: newCategory,
+        subcategory: newSubcategoryValue || null,
+        allowed_values: typedAllowedValues.length > 0 ? typedAllowedValues : null,
+        enabled: true,
         icon: 'sliders',
         expected_revision: 0,
       });
@@ -492,11 +700,13 @@ export function ParameterStudio() {
       setNewName('');
       setNewDescription('');
       setNewDefaultValue('');
+      setNewAllowedValues([]);
+      setNewAllowedValueInput('');
       await load();
       setSelectedTool(finalTool);
       setNotice({
         type: 'success',
-        message: `Created parameter ${finalTool}.${finalName}. Persisted to PostgreSQL runtime database.`,
+        message: `Created parameter ${finalTool}.${finalName} with taxonomy ${newCategory}/${newSubcategoryValue}. Persisted to runtime database.`,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unable to create parameter.';
@@ -540,6 +750,12 @@ export function ParameterStudio() {
   const handleSaveOverride = async (targetParam?: ParameterDefinitionRow, directVal?: unknown) => {
     const item = targetParam || activeParam;
     if (!item) return;
+
+    if (item.enabled === false || item.effective_state === 'DISABLED') {
+      setError('Cannot save override on a disabled parameter.');
+      return;
+    }
+
     setBusy(true);
     setNotice(null);
     setError(null);
@@ -551,6 +767,14 @@ export function ParameterStudio() {
         finalValue = parseInputValue(item.value_type, editOverrideValue, editOverrideBool, editOverrideNumber);
       }
 
+      // Check allowed values with typed equality
+      if (Array.isArray(item.allowed_values) && item.allowed_values.length > 0) {
+        const matches = item.allowed_values.some(v => valuesMatch(v, finalValue));
+        if (!matches) {
+          throw new Error(`Value must be one of allowed values: ${item.allowed_values.map(v => displayValue(v)).join(', ')}`);
+        }
+      }
+
       await setParameterOverride(item.tool, item.variable_name, {
         value: finalValue,
         expected_revision: item.override_revision ?? 0,
@@ -560,7 +784,7 @@ export function ParameterStudio() {
       await load();
       setNotice({
         type: 'success',
-        message: `Saved override for ${item.tool}.${item.variable_name}.`,
+        message: `Saved project override for ${item.tool}.${item.variable_name}.`,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unable to save project override.';
@@ -611,21 +835,47 @@ export function ParameterStudio() {
       if (!editDescription.trim()) {
         throw new Error('Description cannot be empty.');
       }
+      const editSubcategoryValue = editSubcategory.trim();
+      if (!editCategory.trim()) {
+        throw new Error('Operational category is required.');
+      }
 
-      await defineParameter(activeParam.tool, activeParam.variable_name, {
+      // Parse allowed values strictly to activeParam.value_type
+      const typedAllowedValues = editAllowedValues.map(strVal => {
+        try {
+          return parseTypedValue(strVal, activeParam.value_type);
+        } catch (err: unknown) {
+          throw new Error(`Allowed value "${strVal}" is not valid for type ${activeParam.value_type}: ${err instanceof Error ? err.message : ''}`);
+        }
+      });
+
+      // Check allowed values against typed default value
+      if (typedAllowedValues.length > 0) {
+        const matches = typedAllowedValues.some(item => valuesMatch(item, finalDefault));
+        if (!matches) {
+          throw new Error(`Default value (${displayValue(finalDefault)}) must match one of the allowed values: ${editAllowedValues.join(', ')}`);
+        }
+      }
+
+      const result = await defineParameter(activeParam.tool, activeParam.variable_name, {
         value_type: activeParam.value_type,
         description: editDescription.trim(),
         default_value: finalDefault,
-        allow_project_override: editAllowOverride,
+        allow_project_override: editScope === 'project',
         scope: editScope,
-        icon: (activeParam as any).icon || 'sliders',
+        category: editCategory,
+        subcategory: editSubcategoryValue || null,
+        allowed_values: typedAllowedValues.length > 0 ? typedAllowedValues : null,
+        enabled: editEnabled,
+        icon: activeParam.icon || 'sliders',
         expected_revision: activeParam.revision,
       });
 
       await load();
+      const restartNote = result?.restart_required ? ' Note: Runtime engine changes require an API restart to take full effect.' : '';
       setNotice({
         type: 'success',
-        message: `Saved platform default definition for ${activeParam.tool}.${activeParam.variable_name}.`,
+        message: `Saved platform default definition for ${activeParam.tool}.${activeParam.variable_name}.${restartNote}`,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unable to save platform default definition.';
@@ -636,12 +886,54 @@ export function ParameterStudio() {
     }
   };
 
+  // Helper for adding an allowed value tag pill with type checking
+  const handleAddAllowedValue = (
+    val: string,
+    targetType: ConnectorValueType,
+    list: string[],
+    setList: (l: string[]) => void,
+    setInput: (s: string) => void,
+    setErrorMsg?: (s: string | null) => void
+  ) => {
+    const trimmed = val.trim();
+    if (!trimmed) return;
+    try {
+      parseTypedValue(trimmed, targetType);
+    } catch (err: unknown) {
+      if (setErrorMsg) {
+        setErrorMsg(err instanceof Error ? err.message : 'Invalid value for this type.');
+      }
+      return;
+    }
+    if (setErrorMsg) setErrorMsg(null);
+    if (!list.includes(trimmed)) {
+      setList([...list, trimmed]);
+      setInput('');
+    }
+  };
+
+  // Helper for removing an allowed value tag pill
+  const handleRemoveAllowedValue = (
+    index: number,
+    list: string[],
+    setList: (l: string[]) => void
+  ) => {
+    setList(list.filter((_, i) => i !== index));
+  };
+
   // Active provider metadata if single provider selected
   const activeSelectedMeta = selectedTool !== 'ALL' ? getToolMeta(selectedTool) : null;
+  const normalizedNewSubcategory = newSubcategory.trim();
+  const normalizedEditSubcategory = editSubcategory.trim();
+  const newSubcategoryOptions = getSubcategories(newCategory, normalizedNewSubcategory);
+  const editSubcategoryOptions = getSubcategories(editCategory, normalizedEditSubcategory);
 
   // Add Parameter Dialog Modal (Portaled)
   const addParameterModal = isAddOpen && createPortal(
-    <div className="param-modal-overlay" onClick={() => setIsAddOpen(false)}>
+    <div className="param-modal-overlay" onClick={() => {
+      resetNewParameterForm();
+      setIsAddOpen(false);
+    }}>
       <div className="param-modal-card" onClick={e => e.stopPropagation()}>
         <div className="param-modal-header">
           <h3>
@@ -652,7 +944,10 @@ export function ParameterStudio() {
             type="button"
             className="btn btn-secondary"
             style={{ padding: '4px 6px' }}
-            onClick={() => setIsAddOpen(false)}
+            onClick={() => {
+              resetNewParameterForm();
+              setIsAddOpen(false);
+            }}
           >
             <X size={15} />
           </button>
@@ -668,7 +963,7 @@ export function ParameterStudio() {
 
             {/* Target Tool / Provider */}
             <div className="param-form-group">
-              <label>Target Provider / Service *</label>
+              <label>Target Provider / Tool Family *</label>
               <select
                 value={newTool}
                 onChange={e => setNewTool(e.target.value)}
@@ -696,7 +991,7 @@ export function ParameterStudio() {
               </div>
             )}
 
-            {/* Parameter Variable Name */}
+            {/* Variable Name */}
             <div className="param-form-group">
               <label>Variable Name *</label>
               <input
@@ -709,12 +1004,66 @@ export function ParameterStudio() {
               <span className="param-form-help">Unique operational variable identifier.</span>
             </div>
 
+            {/* Taxonomy: Category & Contextual Subcategory */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div className="param-form-group">
+                <label>Operational Category *</label>
+                <select
+                  value={newCategory}
+                  onChange={e => {
+                    const cat = e.target.value;
+                    setNewCategory(cat);
+                    const subcats = getSubcategories(cat);
+                    setNewSubcategory(subcats[0] || '');
+                  }}
+                >
+                  {availableCategories.map(cat => (
+                    <option key={cat} value={cat}>
+                      {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                    </option>
+                  ))}
+                </select>
+                <span className="param-form-help">Operational discipline.</span>
+              </div>
+
+              <div className="param-form-group">
+                <label>Subcategory</label>
+                {newSubcategoryOptions.length > 0 ? (
+                  <select
+                    value={normalizedNewSubcategory}
+                    onChange={e => setNewSubcategory(e.target.value)}
+                  >
+                    {newSubcategoryOptions.map(subcat => (
+                      <option key={subcat} value={subcat}>
+                        {subcat}
+                      </option>
+                    ))}
+                    <option value="">No subcategory</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={newSubcategory}
+                    onChange={e => setNewSubcategory(e.target.value)}
+                    placeholder="Type a descriptive subcategory"
+                  />
+                )}
+                <span className="param-form-help">Configuration facet.</span>
+              </div>
+            </div>
+
             {/* Value Type */}
             <div className="param-form-group">
               <label>Value Type *</label>
               <select
                 value={newType}
-                onChange={e => setNewType(e.target.value as ConnectorValueType)}
+                onChange={e => {
+                  const type = e.target.value as ConnectorValueType;
+                  setNewType(type);
+                  setNewAllowedValues([]);
+                  setNewAllowedValueInput('');
+                  setNewTypeDefaults(type);
+                }}
               >
                 <option value="string">String</option>
                 <option value="integer">Integer</option>
@@ -723,6 +1072,48 @@ export function ParameterStudio() {
                 <option value="json">JSON Object / Array</option>
                 <option value="secret_ref">Secret Reference (env://VAR)</option>
               </select>
+            </div>
+
+            {/* Allowed Values (Optional constrained values) */}
+            <div className="param-form-group">
+              <label>Allowed Values (Constrained Inputs)</label>
+              <div className="param-tag-container">
+                {newAllowedValues.map((val, idx) => (
+                  <span key={idx} className="param-tag-pill">
+                    {val}
+                    <button
+                      type="button"
+                      className="param-tag-remove"
+                      onClick={() => handleRemoveAllowedValue(idx, newAllowedValues, setNewAllowedValues)}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  type="text"
+                  placeholder={newAllowedValues.length === 0 ? `Type ${newType} value and press Enter…` : 'Add more…'}
+                  className="param-tag-input"
+                  value={newAllowedValueInput}
+                  onChange={e => setNewAllowedValueInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddAllowedValue(
+                        newAllowedValueInput,
+                        newType,
+                        newAllowedValues,
+                        setNewAllowedValues,
+                        setNewAllowedValueInput,
+                        setAddError
+                      );
+                    }
+                  }}
+                />
+              </div>
+              <span className="param-form-help">
+                Validated strictly against {newType} syntax. Projects can only choose among these values.
+              </span>
             </div>
 
             {/* Default Value Input based on Type */}
@@ -771,7 +1162,7 @@ export function ParameterStudio() {
 
               {newType === 'json' && (
                 <textarea
-                  rows={4}
+                  rows={3}
                   placeholder='{"key": "value"}'
                   value={newDefaultValue}
                   onChange={e => setNewDefaultValue(e.target.value)}
@@ -804,12 +1195,12 @@ export function ParameterStudio() {
 
             <div className="param-form-group">
               <label>Parameter Scope *</label>
-              <select value={newScope} onChange={e => setNewScope(e.target.value as typeof newScope)}>
-                <option value="platform">Platform default</option>
-                <option value="project">Project workspace</option>
-                <option value="platform_only">Platform only (locked)</option>
+              <select value={newScope} onChange={e => setNewScope(e.target.value as ParameterScope)}>
+                <option value="project">Project Workspace (Overrides permitted)</option>
+                <option value="platform">Platform Policy Baseline (Global baseline)</option>
+                <option value="platform_only">Platform Only (Locked policy)</option>
               </select>
-              <span className="param-form-help">Scope maps to the persisted platform default and project override policy.</span>
+              <span className="param-form-help">Scope maps strictly to the persisted platform default and project override policy.</span>
             </div>
           </div>
 
@@ -817,7 +1208,10 @@ export function ParameterStudio() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => setIsAddOpen(false)}
+              onClick={() => {
+                resetNewParameterForm();
+                setIsAddOpen(false);
+              }}
             >
               Cancel
             </button>
@@ -843,6 +1237,17 @@ export function ParameterStudio() {
         {/* Drawer Header */}
         <div className="param-drawer-header">
           <div>
+            <div className="param-taxonomy-crumb-row">
+              <span className="param-crumb-main">{activeParam.main || activeParam.tool}</span>
+              <span className="param-crumb-sep">/</span>
+              <span className="param-crumb-cat">{activeParam.category || 'operational'}</span>
+              {activeParam.subcategory && (
+                <>
+                  <span className="param-crumb-sep">/</span>
+                  <span className="param-crumb-subcat">{activeParam.subcategory}</span>
+                </>
+              )}
+            </div>
             <div className="param-drawer-title-row">
               <span className="param-tool-avatar" style={{ width: 28, height: 28 }}>
                 {getToolMeta(activeParam.tool).icon}
@@ -858,6 +1263,9 @@ export function ParameterStudio() {
                 <span className="param-pill-badge overridden">
                   Override Rev {activeParam.override_revision}
                 </span>
+              )}
+              {activeParam.enabled === false && (
+                <span className="param-pill-badge disabled">Disabled</span>
               )}
             </div>
           </div>
@@ -904,11 +1312,21 @@ export function ParameterStudio() {
                 {activeParam.description}
               </p>
 
-              {!activeParam.allow_project_override ? (
+              {activeParam.enabled === false || activeParam.effective_state === 'DISABLED' ? (
+                <div className="notice-banner" style={{ borderColor: 'var(--acc-rose)', background: 'rgba(244, 63, 94, 0.08)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--acc-rose)', fontWeight: 600 }}>
+                    <Lock size={16} />
+                    <strong>Disabled by Platform Policy</strong>
+                  </div>
+                  <p style={{ margin: '6px 0 0', fontSize: 12 }}>
+                    This parameter is currently disabled by deployment governance and cannot receive project overrides.
+                  </p>
+                </div>
+              ) : !activeParam.allow_project_override ? (
                 <div className="notice-banner" style={{ borderColor: 'rgba(148, 163, 184, 0.3)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#94a3b8' }}>
                     <Lock size={16} />
-                    <strong>Platform Managed Setting</strong>
+                    <strong>Platform Policy Enforced</strong>
                   </div>
                   <p style={{ margin: '6px 0 0', fontSize: 12 }}>
                     Project overrides are disabled for this parameter by platform governance. Platform administrators can enable overrides in the Platform Default tab.
@@ -917,7 +1335,7 @@ export function ParameterStudio() {
               ) : !canOverride ? (
                 <div className="notice-banner">
                   <p style={{ margin: 0, fontSize: 12 }}>
-                    Saving project overrides requires the <code>PLATFORM_ADMIN</code>, <code>PROJECT_OWNER</code>, or <code>PROJECT_MANAGER</code> role.
+                    Saving project overrides requires the <code>PLATFORM_ADMIN</code> or <code>PROJECT_OWNER</code> role.
                   </p>
                 </div>
               ) : (
@@ -928,8 +1346,44 @@ export function ParameterStudio() {
                       Project Value Override · {formatValueType(activeParam.value_type)}
                     </label>
 
-                    {/* Boolean Input */}
-                    {activeParam.value_type === 'boolean' && (
+                    {/* Constrained Dropdown if scalar allowed_values exist */}
+                    {areAllowedValuesScalar(activeParam.allowed_values) ? (
+                      <div>
+                        <select
+                          value={editOverrideValue}
+                          onChange={e => {
+                            const selected = e.target.value;
+                            setEditOverrideValue(selected);
+                            if (activeParam.value_type === 'boolean') {
+                              setEditOverrideBool(selected.toLowerCase() === 'true');
+                            }
+                            if (activeParam.value_type === 'integer' || activeParam.value_type === 'number') {
+                              setEditOverrideNumber(Number(selected));
+                            }
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: 10,
+                            background: 'var(--card-subtle)',
+                            border: '1px solid var(--line)',
+                            borderRadius: 8,
+                            color: 'var(--tx)',
+                          }}
+                        >
+                          {activeParam.allowed_values!.map((opt, i) => {
+                            const str = typeof opt === 'string' ? opt : JSON.stringify(opt);
+                            return (
+                              <option key={i} value={str}>
+                                {str}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <p className="metric-meta" style={{ marginTop: 4 }}>
+                          Constrained strictly to platform-approved values.
+                        </p>
+                      </div>
+                    ) : activeParam.value_type === 'boolean' ? (
                       <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
                         <button
                           type="button"
@@ -948,10 +1402,7 @@ export function ParameterStudio() {
                           <X size={14} /> FALSE (Disabled)
                         </button>
                       </div>
-                    )}
-
-                    {/* Numeric Input */}
-                    {(activeParam.value_type === 'integer' || activeParam.value_type === 'number') && (
+                    ) : (activeParam.value_type === 'integer' || activeParam.value_type === 'number') ? (
                       <input
                         type="number"
                         step={activeParam.value_type === 'integer' ? '1' : 'any'}
@@ -969,10 +1420,7 @@ export function ParameterStudio() {
                           fontFamily: 'var(--font-mono)',
                         }}
                       />
-                    )}
-
-                    {/* Secret Reference Input */}
-                    {activeParam.value_type === 'secret_ref' && (
+                    ) : activeParam.value_type === 'secret_ref' ? (
                       <div>
                         <input
                           type="text"
@@ -990,16 +1438,13 @@ export function ParameterStudio() {
                           }}
                         />
                         <p className="metric-meta" style={{ marginTop: 4 }}>
-                          Enter an <code>env://VARIABLE_NAME</code> reference. Raw tokens are rejected by server validation.
+                          Enter an <code>env://VARIABLE_NAME</code> reference. Raw credentials are rejected.
                         </p>
                       </div>
-                    )}
-
-                    {/* JSON Input */}
-                    {activeParam.value_type === 'json' && (
+                    ) : activeParam.value_type === 'json' ? (
                       <div>
                         <textarea
-                          rows={8}
+                          rows={7}
                           value={editOverrideValue}
                           onChange={e => {
                             setEditOverrideValue(e.target.value);
@@ -1043,12 +1488,9 @@ export function ParameterStudio() {
                           <Code size={12} /> Format JSON
                         </button>
                       </div>
-                    )}
-
-                    {/* String / Default Textarea */}
-                    {activeParam.value_type === 'string' && (
+                    ) : (
                       <textarea
-                        rows={5}
+                        rows={4}
                         value={editOverrideValue}
                         onChange={e => setEditOverrideValue(e.target.value)}
                         style={{
@@ -1068,7 +1510,7 @@ export function ParameterStudio() {
                   {/* Side-by-side Diff Table */}
                   <div>
                     <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>
-                      Value Comparison
+                      Value Comparison & Effective State
                     </span>
                     <table className="param-diff-table">
                       <tbody>
@@ -1080,6 +1522,16 @@ export function ParameterStudio() {
                           <th>Current Effective</th>
                           <td style={{ color: activeParam.override_revision ? '#22c55e' : 'var(--tx)', fontWeight: 600 }}>
                             {displayValue(activeParam.effective_value)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>Effective State</th>
+                          <td>
+                            {activeParam.effective_state === 'INHERIT'
+                              ? 'Inheriting platform default'
+                              : activeParam.effective_state === 'SET'
+                              ? 'Project override active'
+                              : 'Disabled by policy'}
                           </td>
                         </tr>
                         <tr>
@@ -1128,8 +1580,78 @@ export function ParameterStudio() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="notice-banner" style={{ background: 'rgba(56, 189, 248, 0.05)', borderColor: 'rgba(56, 189, 248, 0.2)' }}>
                 <p style={{ margin: 0, fontSize: 12, color: 'var(--tx)' }}>
-                  Platform administrators can update the base default value, description, and toggle project override permissions.
+                  Platform administrators can manage baseline defaults, operational taxonomy, allowed value constraints, and project override permissions.
                 </p>
+              </div>
+
+              {/* Taxonomy Controls: Category & Subcategory */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--tx)' }}>
+                    Operational Category
+                  </label>
+                  <select
+                    value={editCategory}
+                    onChange={e => {
+                      const cat = e.target.value;
+                      setEditCategory(cat);
+                      const subcats = getSubcategories(cat);
+                      setEditSubcategory(subcats[0] || '');
+                    }}
+                    style={{
+                      padding: 8,
+                      background: 'var(--card-subtle)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 6,
+                      color: 'var(--tx)',
+                    }}
+                  >
+                    {availableCategories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--tx)' }}>
+                    Subcategory Facet
+                  </label>
+                  {editSubcategoryOptions.length > 0 ? (
+                    <select
+                      value={normalizedEditSubcategory}
+                      onChange={e => setEditSubcategory(e.target.value)}
+                      style={{
+                        padding: 8,
+                        background: 'var(--card-subtle)',
+                        border: '1px solid var(--line)',
+                        borderRadius: 6,
+                        color: 'var(--tx)',
+                      }}
+                    >
+                      {editSubcategoryOptions.map(subcat => (
+                        <option key={subcat} value={subcat}>
+                          {subcat}
+                        </option>
+                      ))}
+                      <option value="">No subcategory</option>
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={editSubcategory}
+                      onChange={e => setEditSubcategory(e.target.value)}
+                      style={{
+                        padding: 8,
+                        background: 'var(--card-subtle)',
+                        border: '1px solid var(--line)',
+                        borderRadius: 6,
+                        color: 'var(--tx)',
+                      }}
+                    />
+                  )}
+                </div>
               </div>
 
               {/* Description Input */}
@@ -1151,6 +1673,47 @@ export function ParameterStudio() {
                     fontSize: 12,
                   }}
                 />
+              </div>
+
+              {/* Allowed Values Tag Editor */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--tx)' }}>
+                  Allowed Value Constraints ({activeParam.value_type})
+                </label>
+                <div className="param-tag-container">
+                  {editAllowedValues.map((val, idx) => (
+                    <span key={idx} className="param-tag-pill">
+                      {val}
+                      <button
+                        type="button"
+                        className="param-tag-remove"
+                        onClick={() => handleRemoveAllowedValue(idx, editAllowedValues, setEditAllowedValues)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="text"
+                    placeholder={`Type ${activeParam.value_type} and press Enter…`}
+                    className="param-tag-input"
+                    value={editAllowedValueInput}
+                    onChange={e => setEditAllowedValueInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddAllowedValue(
+                          editAllowedValueInput,
+                          activeParam.value_type,
+                          editAllowedValues,
+                          setEditAllowedValues,
+                          setEditAllowedValueInput,
+                          setDefaultJsonError
+                        );
+                      }
+                    }}
+                  />
+                </div>
               </div>
 
               {/* Platform Default Value */}
@@ -1220,7 +1783,7 @@ export function ParameterStudio() {
                 {activeParam.value_type === 'json' && (
                   <div>
                     <textarea
-                      rows={6}
+                      rows={5}
                       value={editDefaultValue}
                       onChange={e => {
                         setEditDefaultValue(e.target.value);
@@ -1252,7 +1815,7 @@ export function ParameterStudio() {
 
                 {activeParam.value_type === 'string' && (
                   <textarea
-                    rows={4}
+                    rows={3}
                     value={editDefaultValue}
                     onChange={e => setEditDefaultValue(e.target.value)}
                     style={{
@@ -1268,13 +1831,34 @@ export function ParameterStudio() {
                 )}
               </div>
 
+              {/* Scope and Governance Controls */}
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, color: 'var(--tx)' }}>
                 <span style={{ fontSize: 12, fontWeight: 600 }}>Parameter Scope</span>
-                <select value={editScope} onChange={e => { const value = e.target.value as typeof editScope; setEditScope(value); setEditAllowOverride(value !== 'platform_only'); }} style={{ padding: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)', borderRadius: 6, color: 'var(--tx)' }}>
-                  <option value="platform">Platform default</option>
-                  <option value="project">Project workspace</option>
-                  <option value="platform_only">Platform only (locked)</option>
+                  <select
+                    value={editScope}
+                    onChange={e => {
+                      const value = e.target.value as ParameterScope;
+                      setEditScope(value);
+                      setEditAllowOverride(value === 'project');
+                    }}
+                  style={{ padding: 8, background: 'var(--card-subtle)', border: '1px solid var(--line)', borderRadius: 6, color: 'var(--tx)' }}
+                >
+                  <option value="project">Project Workspace Override Permitted</option>
+                  <option value="platform">Platform Policy Baseline (Global baseline)</option>
+                  <option value="platform_only">Platform Only (Locked)</option>
                 </select>
+              </label>
+
+              {/* Enabled Switch */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={editEnabled}
+                  onChange={e => setEditEnabled(e.target.checked)}
+                />
+                <span style={{ fontSize: 13, color: 'var(--tx)', fontWeight: 500 }}>
+                  Enable parameter in runtime environment
+                </span>
               </label>
 
               {/* Allow Project Override Checkbox */}
@@ -1282,7 +1866,10 @@ export function ParameterStudio() {
                 <input
                   type="checkbox"
                   checked={editAllowOverride}
-                  onChange={e => { setEditAllowOverride(e.target.checked); setEditScope(e.target.checked ? 'project' : 'platform_only'); }}
+                  onChange={e => {
+                    setEditAllowOverride(e.target.checked);
+                    setEditScope(e.target.checked ? 'project' : 'platform_only');
+                  }}
                 />
                 <span style={{ fontSize: 13, color: 'var(--tx)' }}>
                   Allow project workspaces to override this parameter
@@ -1293,7 +1880,7 @@ export function ParameterStudio() {
               <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
                 <button
                   className="btn btn-primary"
-                  disabled={busy || !editDescription.trim()}
+                  disabled={busy || !editDescription.trim() || Boolean(defaultJsonError)}
                   onClick={() => handleSavePlatformDefault()}
                   style={{ flex: 1 }}
                 >
@@ -1320,11 +1907,19 @@ export function ParameterStudio() {
               <table className="param-diff-table">
                 <tbody>
                   <tr>
-                    <th style={{ width: '40%' }}>Tool Identifier</th>
-                    <td>{activeParam.tool}</td>
+                    <th style={{ width: '40%' }}>Main System Family</th>
+                    <td>{activeParam.main || activeParam.tool}</td>
                   </tr>
                   <tr>
-                    <th>Variable Name</th>
+                    <th>Operational Category</th>
+                    <td>{activeParam.category || 'operational'}</td>
+                  </tr>
+                  <tr>
+                    <th>Subcategory Facet</th>
+                    <td>{activeParam.subcategory || 'None'}</td>
+                  </tr>
+                  <tr>
+                    <th>Variable Identifier</th>
                     <td>{activeParam.variable_name}</td>
                   </tr>
                   <tr>
@@ -1332,22 +1927,24 @@ export function ParameterStudio() {
                     <td>{activeParam.value_type}</td>
                   </tr>
                   <tr>
+                    <th>Effective State</th>
+                    <td>
+                      {activeParam.effective_state || (activeParam.enabled === false ? 'DISABLED' : 'SET')}
+                    </td>
+                  </tr>
+                  <tr>
                     <th>Definition Revision</th>
                     <td>{activeParam.revision}</td>
                   </tr>
                   <tr>
                     <th>Override Revision</th>
-                    <td>{activeParam.override_revision ?? 'None (Platform Default)'}</td>
+                    <td>{activeParam.override_revision ?? 'None (Platform Baseline)'}</td>
                   </tr>
                   <tr>
                     <th>Project Override Allowed</th>
                     <td style={{ color: activeParam.allow_project_override ? 'var(--acc)' : 'var(--muted)' }}>
                       {activeParam.allow_project_override ? 'Yes (Permitted)' : 'No (Locked by Platform)'}
                     </td>
-                  </tr>
-                  <tr>
-                    <th>Project Visible</th>
-                    <td>{activeParam.project_visible ? 'Yes' : 'Platform Only'}</td>
                   </tr>
                   <tr>
                     <th>Current Value Source</th>
@@ -1358,10 +1955,10 @@ export function ParameterStudio() {
 
               <div className="notice-banner" style={{ fontSize: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, marginBottom: 4 }}>
-                  <Clock size={14} /> Persistence & Lifecycle Contract
+                  <Clock size={14} /> Persistence & Lineage Contract
                 </div>
                 <p style={{ margin: 0, color: 'var(--muted)', lineHeight: 1.5 }}>
-                  Saved parameter definitions and project overrides are persisted to the PostgreSQL database with row-level revision locks to prevent concurrent race conditions. All updates are logged in the immutable audit lineage.
+                  Saved parameter definitions and project overrides are persisted to the PostgreSQL database with row-level revision locks. All updates are logged in the immutable audit lineage.
                 </p>
               </div>
             </div>
@@ -1377,19 +1974,40 @@ export function ParameterStudio() {
     const isOverridden = Boolean(param.override_revision && param.override_revision > 0);
     const key = parameterKey(param);
     const isCopied = copiedKey === key;
+    const isRowDisabled = param.enabled === false || param.effective_state === 'DISABLED';
+    const stateClass = isRowDisabled
+      ? 'is-state-disabled'
+      : isOverridden
+      ? 'is-state-set'
+      : 'is-state-inherit';
 
     return (
-      <tr key={key} className={isOverridden ? 'is-overridden' : ''}>
-        {/* Name & Tool */}
+      <tr key={key} className={`${isOverridden ? 'is-overridden' : ''} ${stateClass}`}>
+        {/* Name & Taxonomy Breadcrumb */}
         <td>
           <div className="param-cell-name">
+            <div className="param-taxonomy-crumb-row">
+              <span className="param-crumb-main">{param.main || param.tool}</span>
+              <span className="param-crumb-sep">/</span>
+              <span className="param-crumb-cat">{param.category || 'operational'}</span>
+              {param.subcategory && (
+                <>
+                  <span className="param-crumb-sep">/</span>
+                  <span className="param-crumb-subcat">{param.subcategory}</span>
+                </>
+              )}
+            </div>
             <span className="param-key-text">
-              {selectedTool === 'ALL' && <span className="param-tool-prefix">{param.tool} / </span>}
               {param.variable_name}
             </span>
             <span className="param-desc-subtext" title={param.description}>
               {param.description}
             </span>
+            {param.allowed_values && param.allowed_values.length > 0 && (
+              <span className="param-allowed-preview">
+                Allowed: {param.allowed_values.map(v => displayValue(v)).join(', ')}
+              </span>
+            )}
           </div>
         </td>
 
@@ -1403,7 +2021,7 @@ export function ParameterStudio() {
         {/* Effective Value & Inline Toggle */}
         <td>
           <div className="param-cell-value">
-            {param.value_type === 'boolean' && param.allow_project_override && canOverride ? (
+            {param.value_type === 'boolean' && param.allow_project_override && canOverride && !isRowDisabled ? (
               <button
                 type="button"
                 className={`param-inline-toggle ${param.effective_value ? 'is-true' : 'is-false'}`}
@@ -1448,19 +2066,32 @@ export function ParameterStudio() {
 
         {/* Status / Governance */}
         <td>
-          {isOverridden ? (
-            <span className="param-pill-badge overridden" title={`Custom project override (rev ${param.override_revision})`}>
-              <Sparkles size={11} /> Override (r{param.override_revision})
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+            {isRowDisabled ? (
+              <span className="param-pill-badge disabled" title="Disabled by policy">
+                <Lock size={10} /> Disabled
+              </span>
+            ) : isOverridden ? (
+              <span className="param-pill-badge overridden" title={`Custom project override (rev ${param.override_revision})`}>
+                <Sparkles size={11} /> Override (r{param.override_revision})
+              </span>
+            ) : param.effective_state === 'INHERIT' ? (
+              <span className="param-pill-badge inherit" title="Inherits deployment default">
+                <GitBranch size={10} /> Inherits Default
+              </span>
+            ) : (
+              <span className="param-pill-badge default" title="Platform baseline setting">
+                Platform Default
+              </span>
+            )}
+            <span style={{ fontSize: 10, color: 'var(--muted)' }}>
+              {param.scope === 'platform_only'
+                ? 'Platform Policy'
+                : param.scope === 'project'
+                ? 'Project Override'
+                : 'Runtime Profile'}
             </span>
-          ) : param.allow_project_override ? (
-            <span className="param-pill-badge default" title="Using platform base default">
-              Platform Default
-            </span>
-          ) : (
-            <span className="param-pill-badge locked" title="Platform enforced parameter">
-              <Lock size={10} /> Enforced
-            </span>
-          )}
+          </div>
         </td>
 
         {/* Row Actions */}
@@ -1509,33 +2140,51 @@ export function ParameterStudio() {
     const isOverridden = Boolean(param.override_revision && param.override_revision > 0);
     const key = parameterKey(param);
     const isCopied = copiedKey === key;
+    const isRowDisabled = param.enabled === false || param.effective_state === 'DISABLED';
+    const stateClass = isRowDisabled
+      ? 'is-state-disabled'
+      : isOverridden
+      ? 'is-state-set'
+      : 'is-state-inherit';
 
     return (
-      <div key={key} className={`param-card ${isOverridden ? 'is-overridden' : ''}`}>
+      <div key={key} className={`param-card ${isOverridden ? 'is-overridden' : ''} ${stateClass}`}>
         <div>
-          {/* Card Top: Name & Badges */}
+          {/* Card Top: Taxonomy & Badges */}
           <div className="param-card-header">
             <div className="param-name-wrapper">
-              <span className="param-name">
-                {selectedTool === 'ALL' && <span className="param-tool-prefix">{param.tool} / </span>}
-                {param.variable_name}
-              </span>
+              <div className="param-taxonomy-crumb-row">
+                <span className="param-crumb-main">{param.main || param.tool}</span>
+                <span className="param-crumb-sep">/</span>
+                <span className="param-crumb-cat">{param.category || 'operational'}</span>
+                {param.subcategory && (
+                  <>
+                    <span className="param-crumb-sep">/</span>
+                    <span className="param-crumb-subcat">{param.subcategory}</span>
+                  </>
+                )}
+              </div>
+              <span className="param-name">{param.variable_name}</span>
             </div>
             <div className="param-card-badges">
               <span className={`param-type-badge ${param.value_type}`}>
                 {formatValueType(param.value_type)}
               </span>
-              {isOverridden ? (
+              {isRowDisabled ? (
+                <span className="param-pill-badge disabled">
+                  <Lock size={10} /> Disabled
+                </span>
+              ) : isOverridden ? (
                 <span className="param-pill-badge overridden" title="Custom Project Override">
                   <Sparkles size={10} /> Override (r{param.override_revision})
                 </span>
-              ) : param.allow_project_override ? (
-                <span className="param-pill-badge default" title="Using platform default">
-                  Platform Default
+              ) : param.effective_state === 'INHERIT' ? (
+                <span className="param-pill-badge inherit" title="Using platform default">
+                  Inherits Default
                 </span>
               ) : (
-                <span className="param-pill-badge locked" title="Platform enforced">
-                  <Lock size={10} /> Enforced
+                <span className="param-pill-badge default" title="Platform baseline">
+                  Platform Default
                 </span>
               )}
             </div>
@@ -1579,6 +2228,11 @@ export function ParameterStudio() {
                 Default: <code>{displayValue(param.default_value)}</code>
               </div>
             )}
+            {param.allowed_values && param.allowed_values.length > 0 && (
+              <div style={{ fontSize: '10px', color: 'var(--muted)', marginTop: 3 }}>
+                Allowed: {param.allowed_values.map(v => displayValue(v)).join(', ')}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1596,8 +2250,7 @@ export function ParameterStudio() {
           </button>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {/* Quick boolean toggle */}
-            {param.value_type === 'boolean' && param.allow_project_override && canOverride && (
+            {param.value_type === 'boolean' && param.allow_project_override && canOverride && !isRowDisabled && (
               <button
                 className="btn btn-secondary"
                 style={{
@@ -1614,7 +2267,6 @@ export function ParameterStudio() {
               </button>
             )}
 
-            {/* Revert override button */}
             {isOverridden && canOverride && (
               <button
                 className="btn btn-secondary"
@@ -1627,7 +2279,6 @@ export function ParameterStudio() {
               </button>
             )}
 
-            {/* Delete button (admin) */}
             {isPlatformAdmin && (
               <button
                 className="btn btn-secondary"
@@ -1666,25 +2317,27 @@ export function ParameterStudio() {
             <span className="hero-stat-chip">
               <Lock size={11} /> <b>{stats.platformEnforced}</b> Enforced
             </span>
-            <span className="hero-stat-chip">
-              <Shield size={12} color="var(--acc)" />
-              <b>Scope:</b> {principal?.tenant_id && principal?.project_id ? `${principal.tenant_id} / ${principal.project_id}` : '—'}
-            </span>
           </div>
         </div>
 
         <div className="hero-actions">
           <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setShowTaxonomyGuide(!showTaxonomyGuide)}
+              title="Toggle taxonomy and governance reference guide"
+            >
+              <HelpCircle size={13} /> {showTaxonomyGuide ? 'Hide Guide' : 'Taxonomy Guide'}
+            </button>
+
             {canOverride && (
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => {
+                  resetNewParameterForm(selectedTool !== 'ALL' ? { tool: selectedTool } : undefined);
                   setIsAddOpen(true);
-                  setAddError(null);
-                  if (selectedTool !== 'ALL') {
-                    setNewTool(selectedTool);
-                  }
                 }}
                 title="Define and persist a new parameter set"
               >
@@ -1723,7 +2376,54 @@ export function ParameterStudio() {
         </div>
       </section>
 
-      {/* Parameter Lifecycle Stepper (From Architectural Diagram) */}
+      {/* Collapsible Taxonomy Guidance Reference Panel */}
+      {showTaxonomyGuide && (
+        <section className="param-taxonomy-guide">
+          <div className="param-taxonomy-guide-header" onClick={() => setShowTaxonomyGuide(false)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Tag size={15} color="var(--acc)" />
+              <strong style={{ fontSize: 13 }}>Parameter Taxonomy & Governance Reference</strong>
+            </div>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>Click to collapse</span>
+          </div>
+          <div className="param-taxonomy-guide-grid">
+            <div className="param-taxonomy-guide-card">
+              <h4>
+                <Boxes size={13} color="var(--acc)" /> 1. Main (System Family)
+              </h4>
+              <p>
+                Identifies the core service or tool connector domain (e.g., <code>runtime</code>, <code>jira</code>, <code>splunk</code>).
+              </p>
+            </div>
+            <div className="param-taxonomy-guide-card">
+              <h4>
+                <Layers size={13} color="#22c55e" /> 2. Category (Operational Discipline)
+              </h4>
+              <p>
+                Broad engineering boundary: <code>connectivity</code>, <code>identity</code>, <code>performance</code>, <code>runtime</code>, <code>schedules</code>, <code>security</code>.
+              </p>
+            </div>
+            <div className="param-taxonomy-guide-card">
+              <h4>
+                <Filter size={13} color="#c084fc" /> 3. Subcategory (Configuration Facet)
+              </h4>
+              <p>
+                Targeted operational facet: <code>endpoint</code>, <code>authentication</code>, <code>timeouts</code>, <code>retry</code>, <code>rate_limit</code>.
+              </p>
+            </div>
+            <div className="param-taxonomy-guide-card">
+              <h4>
+                <Shield size={13} color="#f59e0b" /> 4. Effective State & Scopes
+              </h4>
+              <p>
+                <code>SET</code> (active override), <code>INHERIT</code> (inherited baseline), or <code>DISABLED</code> (locked by governance).
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Parameter Lifecycle Stepper */}
       <div className="param-lifecycle-strip">
         <div className="param-lifecycle-steps">
           <div className="param-lifecycle-step active">
@@ -1762,7 +2462,7 @@ export function ParameterStudio() {
         <aside className="param-sidebar">
           <div className="param-sidebar-header">
             <div className="param-sidebar-title-row">
-              <span className="param-sidebar-label">Providers & Tools</span>
+              <span className="param-sidebar-label">Tool Families</span>
               <span className="param-provider-count">{uniqueTools.length}</span>
             </div>
             <div className="param-sidebar-search">
@@ -1796,8 +2496,8 @@ export function ParameterStudio() {
                   <Boxes size={14} />
                 </div>
                 <div className="param-provider-names">
-                  <span className="param-provider-name">All Providers</span>
-                  <span className="param-provider-syskey">{uniqueTools.length} connected tools</span>
+                  <span className="param-provider-name">All Tool Families</span>
+                  <span className="param-provider-syskey">{uniqueTools.length} system domains</span>
                 </div>
               </div>
               <div className="param-provider-badges">
@@ -1847,7 +2547,7 @@ export function ParameterStudio() {
               <Search size={14} color="var(--muted)" />
               <input
                 type="search"
-                placeholder="Search by parameter name, description, or value…"
+                placeholder="Search by key, description, category, subcategory, or value…"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
               />
@@ -1862,43 +2562,12 @@ export function ParameterStudio() {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {/* Quick Status Pills */}
-              <div className="param-status-filters">
-                <button
-                  type="button"
-                  className={`param-filter-pill ${statusFilter === 'ALL' ? 'active' : ''}`}
-                  onClick={() => setStatusFilter('ALL')}
-                >
-                  All
-                </button>
-                <button
-                  type="button"
-                  className={`param-filter-pill ${statusFilter === 'OVERRIDDEN' ? 'active' : ''}`}
-                  onClick={() => setStatusFilter('OVERRIDDEN')}
-                >
-                  Overrides ({stats.overridden})
-                </button>
-                <button
-                  type="button"
-                  className={`param-filter-pill ${statusFilter === 'DEFAULT' ? 'active' : ''}`}
-                  onClick={() => setStatusFilter('DEFAULT')}
-                >
-                  Defaults
-                </button>
-                <button
-                  type="button"
-                  className={`param-filter-pill ${statusFilter === 'LOCKED' ? 'active' : ''}`}
-                  onClick={() => setStatusFilter('LOCKED')}
-                >
-                  Locked
-                </button>
-              </div>
-
               {/* Type Select */}
               <select
                 className="param-type-select"
                 value={typeFilter}
                 onChange={e => setTypeFilter(e.target.value)}
+                aria-label="Filter by value type"
               >
                 <option value="ALL">All Types</option>
                 <option value="string">String</option>
@@ -1908,10 +2577,32 @@ export function ParameterStudio() {
                 <option value="json">JSON</option>
                 <option value="secret_ref">Secret Reference</option>
               </select>
-              <select className="param-type-select" value={scopeFilter} onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)} aria-label="Filter parameter scope">
+
+              {/* Status Select (Reachable governance control) */}
+              <select
+                className="param-type-select"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                aria-label="Filter parameter governance status"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="OVERRIDDEN">Overrides ({stats.overridden})</option>
+                <option value="DEFAULT">Deployment Defaults</option>
+                <option value="CAN_OVERRIDE">Project Overridable</option>
+                <option value="LOCKED">Platform Policy Enforced</option>
+              </select>
+
+              {/* Scope Select */}
+              <select
+                className="param-type-select"
+                value={scopeFilter}
+                onChange={e => setScopeFilter(e.target.value as typeof scopeFilter)}
+                aria-label="Filter parameter scope"
+              >
                 <option value="ALL">All Scopes</option>
-                <option value="PLATFORM">Platform Only</option>
-                <option value="PROJECT">Project Visible</option>
+                <option value="platform_only">Platform Policy (Locked)</option>
+                <option value="project">Project Workspace</option>
+                <option value="platform">Platform Baseline</option>
               </select>
 
               {/* Expand/Collapse All when in ALL mode */}
@@ -1932,32 +2623,116 @@ export function ParameterStudio() {
             </div>
           </div>
 
+          {/* Taxonomy Filter Chips Strip */}
+          <div className="param-filter-chips-bar" style={{ padding: '8px 20px', borderBottom: '1px solid var(--line)' }}>
+            {/* Category Filter Chips */}
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginRight: 4 }}>
+              Category:
+            </span>
+            <button
+              type="button"
+              className={`param-filter-chip ${categoryFilter === 'ALL' ? 'active' : ''}`}
+              onClick={() => {
+                setCategoryFilter('ALL');
+                setSubcategoryFilter('ALL');
+              }}
+            >
+              All
+            </button>
+            {availableCategories.map(cat => (
+              <button
+                key={cat}
+                type="button"
+                className={`param-filter-chip ${categoryFilter === cat ? 'active' : ''}`}
+                onClick={() => {
+                  const next = categoryFilter === cat ? 'ALL' : cat;
+                  setCategoryFilter(next);
+                  setSubcategoryFilter('ALL');
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+
+            {/* Effective State Filter Chips */}
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginLeft: 12, marginRight: 4 }}>
+              State:
+            </span>
+            <button
+              type="button"
+              className={`param-filter-chip ${effectiveStateFilter === 'ALL' ? 'active' : ''}`}
+              onClick={() => setEffectiveStateFilter('ALL')}
+            >
+              All States
+            </button>
+            <button
+              type="button"
+              className={`param-filter-chip ${effectiveStateFilter === 'SET' ? 'active' : ''}`}
+              onClick={() => setEffectiveStateFilter(effectiveStateFilter === 'SET' ? 'ALL' : 'SET')}
+            >
+              SET ({stats.set})
+            </button>
+            <button
+              type="button"
+              className={`param-filter-chip ${effectiveStateFilter === 'INHERIT' ? 'active' : ''}`}
+              onClick={() => setEffectiveStateFilter(effectiveStateFilter === 'INHERIT' ? 'ALL' : 'INHERIT')}
+            >
+              INHERIT ({stats.inherit})
+            </button>
+            <button
+              type="button"
+              className={`param-filter-chip ${effectiveStateFilter === 'DISABLED' ? 'active' : ''}`}
+              onClick={() => setEffectiveStateFilter(effectiveStateFilter === 'DISABLED' ? 'ALL' : 'DISABLED')}
+            >
+              DISABLED ({stats.disabled})
+            </button>
+
+            {/* Contextual Subcategory Chips if Category is chosen */}
+            {categoryFilter !== 'ALL' && availableSubcategories.length > 0 && (
+              <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6, paddingTop: 6, borderTop: '1px dashed var(--line)' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginRight: 4 }}>
+                  Subcategory ({categoryFilter}):
+                </span>
+                <button
+                  type="button"
+                  className={`param-filter-chip ${subcategoryFilter === 'ALL' ? 'active' : ''}`}
+                  onClick={() => setSubcategoryFilter('ALL')}
+                >
+                  All Subcategories
+                </button>
+                {availableSubcategories.map(subcat => (
+                  <button
+                    key={subcat}
+                    type="button"
+                    className={`param-filter-chip ${subcategoryFilter === subcat ? 'active' : ''}`}
+                    onClick={() => setSubcategoryFilter(subcategoryFilter === subcat ? 'ALL' : subcat)}
+                  >
+                    {subcat}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Workspace Content */}
           <div className="param-content-area">
             {/* Notices & Errors */}
             {error && (
-              <div className="notice-banner" role="alert" style={{ borderColor: 'var(--acc-rose)', background: 'rgba(244, 63, 94, 0.08)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--acc-rose)', fontWeight: 600 }}>
-                  <AlertCircle size={15} /> Error
-                </div>
-                <p style={{ margin: '4px 0 0', color: 'var(--tx)', fontSize: 13 }}>{error}</p>
-              </div>
+              <NotificationBanner
+                type="error"
+                message={error}
+                onClose={() => setError(null)}
+                style={{ marginBottom: 16 }}
+              />
             )}
 
             {notice && (
-              <div
-                className="notice-banner"
-                role="status"
-                style={{
-                  borderColor: notice.type === 'success' ? '#22c55e' : 'var(--line)',
-                  background: notice.type === 'success' ? 'rgba(34, 197, 94, 0.08)' : 'var(--card-subtle)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: notice.type === 'success' ? '#22c55e' : 'var(--tx)', fontSize: 13 }}>
-                  {notice.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}
-                  <span>{notice.message}</span>
-                </div>
-              </div>
+              <NotificationBanner
+                type={notice.type}
+                message={notice.message}
+                onClose={() => setNotice(null)}
+                style={{ marginBottom: 16 }}
+              />
             )}
 
             {/* Loading State */}
@@ -1974,7 +2749,7 @@ export function ParameterStudio() {
                 <Sliders size={26} color="var(--muted)" style={{ margin: '0 auto 10px' }} />
                 <h3 style={{ margin: 0, fontSize: 15 }}>No matching parameters</h3>
                 <p className="metric-meta" style={{ marginTop: 4 }}>
-                  No parameters matched the current search query or status filter.
+                  No parameters matched the active filters ({categoryFilter !== 'ALL' ? `Category: ${categoryFilter}` : ''} {subcategoryFilter !== 'ALL' ? `Subcategory: ${subcategoryFilter}` : ''} {effectiveStateFilter !== 'ALL' ? `State: ${effectiveStateFilter}` : ''}).
                 </p>
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
                   <button
@@ -1984,6 +2759,10 @@ export function ParameterStudio() {
                       setSearchQuery('');
                       setTypeFilter('ALL');
                       setStatusFilter('ALL');
+                      setScopeFilter('ALL');
+                      setCategoryFilter('ALL');
+                      setSubcategoryFilter('ALL');
+                      setEffectiveStateFilter('ALL');
                     }}
                   >
                     Reset All Filters
@@ -1991,7 +2770,10 @@ export function ParameterStudio() {
                   {canOverride && (
                     <button
                       className="btn btn-primary"
-                      onClick={() => setIsAddOpen(true)}
+                      onClick={() => {
+                        resetNewParameterForm();
+                        setIsAddOpen(true);
+                      }}
                     >
                       <Plus size={13} /> Add Parameter
                     </button>
@@ -2030,9 +2812,8 @@ export function ParameterStudio() {
                         className="btn btn-secondary"
                         style={{ fontSize: '11px', padding: '4px 10px' }}
                         onClick={() => {
+                          resetNewParameterForm({ tool: selectedTool });
                           setIsAddOpen(true);
-                          setNewTool(selectedTool);
-                          setAddError(null);
                         }}
                       >
                         <Plus size={12} /> Add to {activeSelectedMeta.displayName}
@@ -2047,10 +2828,10 @@ export function ParameterStudio() {
                     <table className="param-table">
                       <thead>
                         <tr>
-                          <th>Parameter Name & Description</th>
+                          <th>Parameter & Operational Taxonomy</th>
                           <th>Type</th>
                           <th>Effective Value</th>
-                          <th>Status / Governance</th>
+                          <th>Status / Scope</th>
                           <th style={{ textAlign: 'right' }}>Actions</th>
                         </tr>
                       </thead>
@@ -2068,12 +2849,13 @@ export function ParameterStudio() {
               </div>
             )}
 
-            {/* View Mode: All Providers Grouped */}
+            {/* View Mode: All Providers Grouped by Tool -> Category */}
             {!loading && selectedTool === 'ALL' && filteredToolsMap.size > 0 && (
-              Array.from(filteredToolsMap.entries()).map(([toolKey, toolParams]) => {
+              Array.from(filteredToolsMap.entries()).map(([toolKey, catMap]) => {
                 const meta = getToolMeta(toolKey);
                 const isCollapsed = Boolean(collapsedTools[toolKey]);
-                const toolOverrideCount = toolParams.filter(p => p.override_revision && p.override_revision > 0).length;
+                const allToolParams = Array.from(catMap.values()).flat();
+                const toolOverrideCount = allToolParams.filter(p => p.override_revision && p.override_revision > 0).length;
 
                 return (
                   <section key={toolKey} className="param-tool-group">
@@ -2081,7 +2863,7 @@ export function ParameterStudio() {
                     <div
                       className="param-tool-group-header"
                       onClick={() => toggleCollapseTool(toolKey)}
-                      title="Click to toggle parameters"
+                      title="Click to toggle tool parameters"
                     >
                       <div className="param-tool-info">
                         <div className="param-tool-avatar">{meta.icon}</div>
@@ -2096,7 +2878,7 @@ export function ParameterStudio() {
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
-                          {toolParams.length}
+                          {allToolParams.length}
                         </span>
                         {toolOverrideCount > 0 && (
                           <span className="badge badge-active" style={{ fontSize: '11px' }}>
@@ -2111,28 +2893,44 @@ export function ParameterStudio() {
 
                     {/* Content when not collapsed */}
                     {!isCollapsed && (
-                      viewMode === 'table' ? (
-                        <div className="param-table-container">
-                          <table className="param-table">
-                            <thead>
-                              <tr>
-                                <th>Parameter Name & Description</th>
-                                <th>Type</th>
-                                <th>Effective Value</th>
-                                <th>Status / Governance</th>
-                                <th style={{ textAlign: 'right' }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {toolParams.map(renderTableRow)}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="param-cards-grid">
-                          {toolParams.map(renderCard)}
-                        </div>
-                      )
+                      <div style={{ padding: '8px 0' }}>
+                        {Array.from(catMap.entries()).map(([catKey, catParams]) => (
+                          <div key={catKey} className="param-category-group">
+                            <div className="param-category-subbar">
+                              <span className="param-category-tag">
+                                <Layers size={12} color="var(--acc)" />
+                                {catKey}
+                              </span>
+                              <span className="param-category-count">
+                                {catParams.length} parameter{catParams.length === 1 ? '' : 's'}
+                              </span>
+                            </div>
+
+                            {viewMode === 'table' ? (
+                              <div className="param-table-container" style={{ marginBottom: 12 }}>
+                                <table className="param-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Parameter & Operational Taxonomy</th>
+                                      <th>Type</th>
+                                      <th>Effective Value</th>
+                                      <th>Status / Scope</th>
+                                      <th style={{ textAlign: 'right' }}>Actions</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {catParams.map(renderTableRow)}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="param-cards-grid" style={{ marginBottom: 14 }}>
+                                {catParams.map(renderCard)}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </section>
                 );

@@ -16,6 +16,7 @@ import {
   Server,
   BellRing,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import { fetchBilling, updateBilling } from '../services/api';
 import type { BillingConfig, BillingPayload } from '../types/api';
 
@@ -144,8 +145,22 @@ export const Billing: React.FC = () => {
         </div>
       </section>
 
-      {error && <div className="notice-banner red" role="alert">{error}</div>}
-      {notice && <div className="notice-banner blue" role="status">{notice}</div>}
+      {error && (
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {notice && (
+        <NotificationBanner
+          type="info"
+          message={notice}
+          onClose={() => setNotice(null)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {/* Live Metric Cards */}
       <div className="metric-grid">

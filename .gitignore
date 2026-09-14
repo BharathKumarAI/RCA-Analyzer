@@ -69,6 +69,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Test and coverage artifacts
+.local/connector-tests/
 design-review/
 .coverage
 .coverage.*

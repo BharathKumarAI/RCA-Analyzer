@@ -418,9 +418,6 @@ RCA_ALLOWED_EXTENSIONS=${extList}
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
-              <span className="dot pulse" /> <b>Scope:</b> {principal.tenant_id} / {principal.project_id}
-            </span>
-            <span className="hero-stat-chip">
               <b>Mode:</b> {health.mode.toUpperCase()}
             </span>
             <span className="hero-stat-chip">
@@ -617,7 +614,7 @@ RCA_ALLOWED_EXTENSIONS=${extList}
             <div className="settings-readiness-grid">
               <div className="settings-readiness-item">
                 <CheckCircle2 size={16} style={{ color: 'var(--acc3)', flexShrink: 0 }} />
-                <span><strong>Platform Scope:</strong> {principal.tenant_id} / {principal.project_id}</span>
+                <span><strong>Configured deployment:</strong> {principal.tenant_id} / {principal.project_id}</span>
               </div>
               <div className="settings-readiness-item">
                 <CheckCircle2 size={16} style={{ color: 'var(--acc3)', flexShrink: 0 }} />
@@ -1308,7 +1305,7 @@ RCA_ALLOWED_EXTENSIONS=${extList}
           <div className="settings-card-subtle">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <strong style={{ color: 'var(--tx)', fontSize: '13.5px' }}>
-                Active Project Scope: <code>{principal.tenant_id} / {principal.project_id}</code>
+                Configured deployment: <code>{principal.tenant_id} / {principal.project_id}</code>
               </strong>
               <a className="btn btn-secondary" href="#project-setup" style={{ fontSize: '12px', padding: '4px 10px' }}>
                 Open Project Setup

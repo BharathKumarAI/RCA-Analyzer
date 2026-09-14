@@ -1,6 +1,7 @@
 import '../styles/admin-configuration.css';
 import { useEffect, useState } from 'react';
 import { RefreshCw, Save } from 'lucide-react';
+import { NotificationBanner } from './NotificationBanner';
 import { request } from '../services/api';
 
 type Field = { title?: string; description?: string; type?: string; enum?: string[]; options?: string[]; minimum?: number; maximum?: number; exclusiveMinimum?: number; maxLength?: number; anyOf?: Field[] };
@@ -43,8 +44,8 @@ export function ConfigurationEditor({ endpoint, deployment = false }: { endpoint
   }
   return <section className="configuration-editor">
     <div className="configuration-toolbar"><p>{deployment || snapshot?.activation === 'restart' ? 'Edit and save the configuration for the next service restart. Existing data is not moved automatically.' : 'Changes apply to new uploads. Requests already in progress retain their current limits.'}</p><button className="btn btn-secondary" disabled={busy} onClick={() => void load()}><RefreshCw size={14} />{dirty ? 'Discard and reload' : 'Reload'}</button></div>
-    {error && <p className="notice-banner" role="alert">{error}</p>}
-    {notice && <p className="notice-banner" role="status">{notice}</p>}
+    {error && <NotificationBanner type="error" message={error} onClose={() => setError(null)} style={{ marginBottom: 12 }} />}
+    {notice && <NotificationBanner type="info" message={notice} onClose={() => setNotice(null)} style={{ marginBottom: 12 }} />}
     {!snapshot ? <p role="status">{busy ? 'Loading configuration…' : 'Configuration is unavailable. Reload to try again.'}</p> : <form onSubmit={save}>
       {snapshot.pending_restart && <p className="notice-banner">Saved values differ from the running service. A restart is pending.</p>}
       <fieldset disabled={busy} className="configuration-fields"><legend className="sr-only">Configuration fields</legend>

@@ -2,14 +2,51 @@
   name: Jira Cloud Incident Triage
   system_name: itsm
   category: Ticketing
-  description: Read-only Jira ticket lookup, comment fetch, and structured fields extraction for incident workflows.
+  description: Read-only Jira ticket lookup, comment fetch, and structured fields
+    extraction for incident workflows.
   integration_kind: native
   protocol: HTTPS
-  auth_method: Bearer Token
-  default_endpoint: https://atlassian.net/rest/api/3
-  default_ui_base_url: https://atlassian.net
-  default_secret: JIRA_API_TOKEN
-  default_service_user: triage-bot@organization.com
+  auth_method: Basic API Token
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: itsm
+  supported_operations:
+  - get_ticket
+  known_limitations:
+  - Read-only ticket lookup; comment writes and issue mutations are unsupported.
+  - Native provider appends /rest/api/2/issue/{id}.
+  - JQL queue search requires backend search extension.
+  auth_profiles:
+  - id: basic_api_token
+    name: Basic Authentication (Email + API Token)
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - account_identifier
+    - api_token_secret_ref
+    optional_fields: []
+    hidden_fields:
+    - password_secret_ref
+    - domain
+  - id: oauth2_client_credentials
+    name: OAuth 2.0 Client Credentials (Planned)
+    status: planned
+    transport_compatibility: HTTPS
+    required_fields:
+    - oauth_provider_profile
+    - client_id
+    - client_secret_ref
+    optional_fields:
+    - audience
+    - scopes
+    hidden_fields:
+    - api_token_secret_ref
+  default_endpoint: https://<JIRA_WORKSPACE>.atlassian.net
+  default_ui_base_url: https://<JIRA_WORKSPACE>.atlassian.net
+  default_secret: env://JIRA_API_TOKEN
+  default_service_user: triage-bot@organization.internal
   default_scope: platform_default
   can_override: true
   default_timeout_seconds: 30
@@ -17,21 +54,109 @@
   default_retry_backoff: 5
   default_rate_limit: 100 req/min
   default_config:
-    project_key: SAG
-    timezone: America/Chicago
-    polling_frequency: Every 15 minutes
-
+    project_key: ''
+    timezone: UTC
+    polling_frequency: ''
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Jira Cloud Incident Triage
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
+  - variable_name: custom_field_mapping
+    label: Jira Custom Field Mapping
+    description: Verified Jira field IDs and project display mappings used when extracting issue evidence.
+    value_type: json
+    default_value: {}
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: query
+    subcategory: field_mapping
+    icon: list
+    runtime_binding: jira.custom_field_mapping
+  - variable_name: attachment_processing
+    label: Attachment Processing
+    description: Process files supplied through the project attachment service; Jira-hosted attachment downloads are not enabled.
+    value_type: string
+    default_value: disabled
+    allowed_values:
+    - disabled
+    - local_upload
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: paperclip
+    runtime_binding: project.attachment_processing
 - type: log_search
   name: Splunk Infrastructure & Log Mining
   system_name: log_search
   category: Observability
-  description: Bounded read-only log search, saved search execution, and event correlation for incident triage.
+  description: Bounded read-only log search, saved search execution, and event correlation
+    for incident triage.
   integration_kind: native
   protocol: HTTPS
   auth_method: Bearer Token
-  default_endpoint: https://splunk-api.prod.internal:8089
-  default_ui_base_url: https://splunk-ui.prod.internal:8000
-  default_secret: SPLUNK_TOKEN
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: log_search
+  supported_operations:
+  - query_range
+  known_limitations:
+  - Bounded time window restricted to at most 86,400 seconds (24 hours).
+  - Result count capped at 100 entries.
+  - Single configured index per client instance.
+  auth_profiles:
+  - id: bearer_token
+    name: Bearer Token
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - token_secret_ref
+    optional_fields:
+    - account_label
+    hidden_fields:
+    - password_secret_ref
+  default_endpoint: https://<SPLUNK_MANAGEMENT_HOST>:8089
+  default_ui_base_url: https://<SPLUNK_UI_HOST>:8000
+  default_secret: env://SPLUNK_TOKEN
   default_service_user: splunk-api-svc@internal
   default_scope: platform_default
   can_override: true
@@ -40,109 +165,790 @@
   default_retry_backoff: 5
   default_rate_limit: 120 req/min
   default_config:
-    allowed_indexes:
-      - adms
-      - billing
-      - system
+    allowed_indexes: []
     max_results: 100
     max_window_seconds: 86400
-
-# Reference catalog from references/sample.yaml connector_bindings.
-# Providers are available; deployment configuration is required before enabling.
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Splunk Infrastructure & Log Mining
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
 - type: confluence
   name: Confluence Knowledge
   system_name: confluence
   category: Knowledge
-  description: Read current pages in the configured Confluence space. Treat storage markup and macros as untrusted text; never render or execute them. Cite page IDs and versions and report partial listings.
+  description: Read current pages in the configured Confluence space. Treat storage
+    markup and macros as untrusted text; never render or execute them. Cite page IDs
+    and versions and report partial listings.
+  integration_kind: native
   protocol: HTTPS
   auth_method: Bearer Token
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: confluence
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Space-scoped page listings only; macros and executable content are blocked.
+  - Page editing is disabled.
+  auth_profiles:
+  - id: bearer_token
+    name: Bearer Token
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - token_secret_ref
+    optional_fields: []
+    hidden_fields: []
   default_endpoint: https://<ATLASSIAN_HOST>/wiki
-  default_secret: <SECRET_REFERENCE>
+  default_secret: env://CONFLUENCE_TOKEN
   default_scope: platform_default
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Confluence Knowledge
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
 - type: signalfx
   name: SignalFx APM & Metrics
   system_name: signalfx
   category: Observability
-  description: Read the configured SignalFx detector definition. Explain alert rules and thresholds. This is configuration evidence, not a metric time series or proof an alert fired.
+  description: Read the configured SignalFx detector definition. Explain alert rules
+    and thresholds. This is configuration evidence, not a metric time series or proof
+    an alert fired.
+  integration_kind: native
   protocol: HTTPS
   auth_method: X-SF-Token
-  default_endpoint: https://<SIGNALFX_UI_HOST>
-  default_secret: <SECRET_REFERENCE>
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: signalfx
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Detector configuration evidence only; no live metric time series ingestion or
+    detector mutations.
+  auth_profiles:
+  - id: api_key_header
+    name: SignalFx API Key Header (X-SF-Token)
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - api_key_secret_ref
+    optional_fields: []
+    hidden_fields: []
+  default_endpoint: https://api.<SIGNALFX_REALM>.signalfx.com
+  default_secret: env://SIGNALFX_TOKEN
   default_scope: platform_default
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: SignalFx APM & Metrics
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
 - type: qtest
   name: qTest Test Management
   system_name: qtest
   category: Testing
-  description: Read root-level qTest runs from the configured project. Distinguish test definitions from execution results. Do not claim nested runs were searched; report coverage limits.
+  description: Read root-level qTest runs from the configured project. Distinguish
+    test definitions from execution results. Do not claim nested runs were searched;
+    report coverage limits.
+  integration_kind: native
   protocol: HTTPS
   auth_method: Bearer Token
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: qtest
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Root-level project test runs only; recursive folder traversal is not supported.
+  auth_profiles:
+  - id: bearer_token
+    name: Bearer Token
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - token_secret_ref
+    optional_fields: []
+    hidden_fields: []
   default_endpoint: https://<QTEST_HOST>/api/v3
-  default_secret: <SECRET_REFERENCE>
+  default_secret: env://QTEST_TOKEN
   default_scope: platform_default
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: qTest Test Management
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
 - type: gitlab
   name: GitLab Source & Deployments
   system_name: gitlab
   category: DevOps
-  description: Read recent deployments in the configured GitLab project. Correlate deployment status and timestamps with the incident. Correlation does not establish causality.
+  description: Read recent deployments in the configured GitLab project. Correlate
+    deployment status and timestamps with the incident. Correlation does not establish
+    causality.
+  integration_kind: native
   protocol: HTTPS
   auth_method: Personal Access Token
-  default_endpoint: https://<GITLAB_HOST>/api/v4
-  default_secret: <SECRET_REFERENCE>
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: gitlab
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Bounded recent deployment records only; pipelines and repository cloning are disabled.
+  auth_profiles:
+  - id: api_key_header
+    name: GitLab Private Token (PRIVATE-TOKEN)
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - api_key_secret_ref
+    optional_fields: []
+    hidden_fields: []
+  default_endpoint: https://gitlab.<ORGANIZATION>.internal/api/v4
+  default_secret: env://GITLAB_TOKEN
   default_scope: platform_default
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: GitLab Source & Deployments
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
 - type: oracle
   name: Oracle Database
   system_name: oracle
   category: Database
-  description: Read the current Oracle session wait snapshot for the configured database username. Explain blocking sessions and wait classes. This snapshot cannot establish historic contention. No arbitrary SQL is available.
+  description: Read the current Oracle session wait snapshot for the configured database
+    username. Explain blocking sessions and wait classes. This snapshot cannot establish
+    historic contention. No arbitrary SQL is available.
+  integration_kind: native
   protocol: OCI
   auth_method: Database Credentials
+  version: 1.0.0
+  availability: deprecated
+  platform_enabled: false
+  is_enabled_by_policy: false
+  provider_adapter_id: oracle
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Database querying is disabled pending scope reconciliation under repository guidance.
+  - No arbitrary SQL, table exploration, or live database mutations.
+  auth_profiles:
+  - id: database_password
+    name: Database Credentials (Blocked by Policy)
+    status: disabled_by_policy
+    transport_compatibility: OCI
+    required_fields:
+    - database_username
+    - password_secret_ref
+    optional_fields: []
+    hidden_fields: []
   default_endpoint: <ORACLE_HOST>
-  default_secret: <SECRET_REFERENCE>
+  default_secret: env://ORACLE_PASSWORD
   default_scope: platform_default
   default_config:
     environment_scoped: true
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Oracle Database
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
+  - variable_name: driver_mode
+    label: Oracle Driver Mode
+    description: Thin uses python-oracledb without Oracle Client libraries; Thick requires the approved local client library profile.
+    value_type: string
+    default_value: thin
+    allowed_values:
+    - thin
+    - thick
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: connectivity
+    subcategory: protocol
+    icon: database
+    runtime_binding: oracle.driver_mode
+  - variable_name: oracle_client_lib
+    label: Oracle Client Library Directory
+    description: Approved local Oracle Client/Instant Client directory for Thick mode. Hidden and unused in Thin mode.
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    required_when: driver_mode == 'thick'
+    visibility_condition:
+      field: driver_mode
+      equals: thick
+    ownership: project_only
+    category: connectivity
+    subcategory: endpoint
+    icon: folder
+    runtime_binding: oracle.oracle_client_lib
+  - variable_name: connection_format
+    label: Oracle Connection Format
+    description: Authorized DSN shape used by the local connection test; arbitrary SQL remains unavailable.
+    value_type: string
+    default_value: dsn
+    allowed_values:
+    - dsn
+    - host_service
+    - tns_alias
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: connectivity
+    subcategory: protocol
+    icon: link
+    runtime_binding: oracle.connection_format
 - type: kafka
   name: Kafka Message Streams
   system_name: kafka
   category: Messaging
-  description: Read the deployment-approved Kafka MCP evidence snapshot. Distinguish offsets, lag and message evidence according to returned fields. Never publish messages, commit offsets or modify consumer groups.
+  description: Read topic partition metadata via native SASL_SSL or approved MCP evidence.
+    Distinguish offsets, lag and message evidence according to returned fields. Never
+    publish messages, commit offsets or modify consumer groups.
   integration_kind: native
   protocol: Native or MCP
-  auth_method: Bearer Token
-  default_endpoint: mcp://<KAFKA_MCP_HOST>:<PORT>
-  default_secret: <SECRET_REFERENCE>
+  auth_method: SASL SCRAM / Bearer
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: kafka
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Native partition metadata only; consumer lag measurement not supported natively.
+  - Message consumption, publishing, offset commits, and consumer group changes are
+    blocked.
+  auth_profiles:
+  - id: sasl_scram_tls
+    name: SASL SCRAM-SHA-512 over TLS
+    status: active
+    transport_compatibility: SASL_SSL
+    required_fields:
+    - username
+    - password_secret_ref
+    optional_fields: []
+    hidden_fields: []
+  - id: bearer_token
+    name: MCP Bearer Token
+    status: active
+    transport_compatibility: MCP
+    required_fields:
+    - token_secret_ref
+    optional_fields: []
+    hidden_fields: []
+  default_endpoint: <KAFKA_BROKER_LIST>
+  default_secret: env://KAFKA_PASSWORD
   default_scope: platform_default
   default_config:
     environment_scoped: true
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Kafka Message Streams
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
+  - variable_name: topic_filter
+    label: Kafka Topic Filter
+    description: Exact authorized topic name used by the current native metadata reader. Wildcards and message-content filters are unsupported.
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: query
+    subcategory: topic_selection
+    icon: filter
+    runtime_binding: kafka.topic
 - type: unix
-  name: Unix / Tuxedo
+  name: Unix
   system_name: unix
   category: Infrastructure
-  description: Read the deployment-approved Unix/Tuxedo MCP evidence snapshot. Report service status and supplied log observations. Never request arbitrary shell commands, scripts, file writes or service restarts.
+  description: Bounded log tail via native SFTP or approved MCP evidence snapshot.
+    Report service status and supplied log observations. Never request arbitrary shell
+    commands, scripts, file writes or service restarts.
   integration_kind: native
-  protocol: Native or MCP
-  auth_method: Bearer Token
-  default_endpoint: mcp://<UNIX_MCP_HOST>:<PORT>
-  default_secret: <SECRET_REFERENCE>
+  protocol: SFTP/SSH
+  auth_method: SSH Private Key (PuTTY-compatible)
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: unix
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Bounded SFTP log tail only; arbitrary shell execution, scripts, and service restarts
+    are blocked.
+  - PuTTY sessions use standard SSH. Export PPK keys to OpenSSH or PKCS8 before registering the managed key file; PPK is not decoded directly.
+  auth_profiles:
+  - id: ssh_private_key
+    name: SSH Private Key
+    status: active
+    transport_compatibility: SFTP
+    required_fields:
+    - username
+    - private_key_ref
+    - known_hosts_ref
+    optional_fields:
+    - private_key_passphrase_ref
+    hidden_fields:
+    - password_secret_ref
+  - id: ssh_password
+    name: SSH Password
+    status: active
+    transport_compatibility: SFTP
+    required_fields:
+    - username
+    - password_secret_ref
+    - known_hosts_ref
+    optional_fields: []
+    hidden_fields:
+    - private_key_ref
+    - private_key_passphrase_ref
+  default_endpoint: sftp://<UNIX_HOST>:22
+  default_secret: env://SSH_PRIVATE_KEY
   default_scope: platform_default
   default_config:
     environment_scoped: true
-
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined system name. Defaults to Unix; enter Tuxedo here when that is the system being accessed.
+    value_type: string
+    default_value: Unix
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe
+  - variable_name: host
+    label: SSH Host
+    description: Approved Unix host resource used for the bounded SFTP connection.
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: connectivity
+    subcategory: endpoint
+    icon: server
+    runtime_binding: unix.host
+  - variable_name: port
+    label: SSH Port
+    description: Approved SSH port for the PuTTY-compatible SFTP connection.
+    value_type: integer
+    default_value: 22
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: connectivity
+    subcategory: endpoint
+    icon: radio
+    runtime_binding: unix.port
+  - variable_name: username
+    label: SSH Username
+    description: Account used by the bounded SFTP read.
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: identity
+    subcategory: service_account
+    icon: user
+    runtime_binding: unix.username
+  - variable_name: private_key_ref
+    label: SSH Private Key Reference
+    description: Authorized managed OpenSSH or PKCS8 key file. Export PuTTY PPK keys to a supported format first; private key bytes never enter project configuration.
+    value_type: secret_ref
+    default_value: env://SSH_PRIVATE_KEY
+    allow_project_override: true
+    visible_in_project: true
+    ownership: secret_reference
+    sensitivity: secret_reference
+    category: security
+    subcategory: secret
+    icon: key
+    runtime_binding: unix.private_key_ref
+  - variable_name: known_hosts_ref
+    label: Host Trust Reference
+    description: Authorized known-hosts or host-key binding used to verify the SSH server.
+    value_type: secret_ref
+    default_value: env://SSH_KNOWN_HOSTS
+    allow_project_override: true
+    visible_in_project: true
+    ownership: secret_reference
+    sensitivity: secret_reference
+    category: security
+    subcategory: secret
+    icon: shield
+    runtime_binding: unix.known_hosts_ref
+  - variable_name: log_path
+    label: Approved Log Path
+    description: Absolute deployment-authorized path read through SFTP; shell commands are unavailable.
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: query
+    subcategory: path
+    icon: file
+    runtime_binding: unix.log_path
 - type: kubernetes
   name: Kubernetes Cluster Health
   system_name: kubernetes
   category: Infrastructure
-  description: Read pod status in the configured Kubernetes namespace. Identify unhealthy conditions, restart counts and scheduling failures from returned status. Never read secrets, execute in containers or modify workloads.
+  description: Read pod status in the configured Kubernetes namespace. Identify unhealthy
+    conditions, restart counts and scheduling failures from returned status. Never
+    read secrets, execute in containers or modify workloads.
+  integration_kind: native
   protocol: HTTPS
   auth_method: Service Account Token
-  default_endpoint: https://{cluster}.k8s.<organization>.com
-  default_secret: <SECRET_REFERENCE>
+  version: 1.0.0
+  availability: published
+  platform_enabled: true
+  is_enabled_by_policy: true
+  provider_adapter_id: kubernetes
+  supported_operations:
+  - read_evidence
+  known_limitations:
+  - Namespace-scoped pod status only; reading secrets, container exec, and workload
+    changes are blocked.
+  auth_profiles:
+  - id: k8s_service_account_token
+    name: Kubernetes Service Account Token (Bearer)
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - token_secret_ref
+    optional_fields:
+    - ca_bundle_ref
+    hidden_fields: []
+  default_endpoint: https://kubernetes.default.svc
+  default_secret: env://K8S_SERVICE_ACCOUNT_TOKEN
   default_scope: platform_default
   default_config:
     environment_scoped: true
+  parameter_fields:
+  - variable_name: system_name
+    label: System Name
+    description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+    value_type: string
+    default_value: Kubernetes Cluster Health
+    required: true
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: tag
+  - variable_name: environment_dependency
+    label: Environment Dependent/Independent
+    description: Explicit project choice between Environment Dependent (environment
+      mappings) and Environment Independent (shared external system).
+    value_type: string
+    default_value: independent
+    required: true
+    allowed_values:
+    - dependent
+    - independent
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: layers
+  - variable_name: tool_environment
+    label: Tool Environment
+    description: Authorized external environment name (e.g. Shared for independent,
+      or target tool environment).
+    value_type: string
+    default_value: Shared
+    required: true
+    required_when: environment_dependency == 'dependent'
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_only
+    category: operational
+    icon: globe

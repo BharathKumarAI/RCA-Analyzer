@@ -1,23 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, previewMcpImport, resetProjectIntegration, saveIntegration, testIntegration } from '../services/api';
-import { IntegrationDefinition, Principal, ToolDefinition } from '../types/api';
+import { ApiError, fetchProjectSetup, previewMcpImport, resetProjectIntegration, saveIntegration, testIntegration } from '../services/api';
+import { EnvironmentConfig, IntegrationDefinition, Principal, ToolDefinition } from '../types/api';
 
 export function IntegrationForm({ tool, principal, onClose, onSaved }: {
   tool?: ToolDefinition; principal: Principal; onClose: () => void; onSaved: () => Promise<void>;
 }) {
   const record = tool?.registration;
   const platformAdmin = principal.roles.includes('PLATFORM_ADMIN');
-  const projectEditor = platformAdmin || principal.roles.some(role => ['PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role));
+  const projectEditor = platformAdmin || principal.roles.some(role => ['PROJECT_OWNER'].includes(role));
   const dialog = useRef<HTMLDialogElement>(null);
   const [scope, setScope] = useState<'platform' | 'project'>(platformAdmin && (!record || record.scope_level === 'platform_default') ? 'platform' : 'project');
   const [id, setId] = useState(record?.id || '');
   const initial: IntegrationDefinition = record?.definition || {
-    name: tool?.name || '', kind: tool?.type === 'a2a' ? 'a2a' : 'mcp', endpoint: '',
+    name: tool?.name || '', system_name: tool?.system_name || tool?.name || '', environment_dependency: undefined, tool_environment: '', project_environment_ids: [], kind: tool?.type === 'a2a' ? 'a2a' : 'mcp', endpoint: '',
     description: '', auth_method: 'none', secret_reference: '',
     transport: tool?.type === 'a2a' ? 'a2a_jsonrpc' : 'streamable_http',
     timeout_seconds: 30, allow_project_override: true,
   };
   const [form, setForm] = useState(initial);
+  const [systemNameCustomized, setSystemNameCustomized] = useState(Boolean(record?.definition?.system_name));
+  const [environments, setEnvironments] = useState<EnvironmentConfig[]>([]);
+  const [environmentError, setEnvironmentError] = useState('');
+  const [loadingEnvironments, setLoadingEnvironments] = useState(false);
   const [inputMode, setInputMode] = useState<'fields' | 'json' | 'command'>('fields');
   const [importSource, setImportSource] = useState('');
   const [reviewing, setReviewing] = useState(false);
@@ -34,7 +38,9 @@ export function IntegrationForm({ tool, principal, onClose, onSaved }: {
   };
   const chooseImport = (connection: { id: string; definition: IntegrationDefinition }) => {
     if (!record) setId(connection.id);
-    setForm(connection.definition); setInputMode('fields'); setTestResult(null); setError('');
+    setForm({ ...connection.definition, system_name: connection.definition.system_name || connection.definition.name, environment_dependency: connection.definition.environment_dependency, tool_environment: connection.definition.tool_environment || '', project_environment_ids: connection.definition.project_environment_ids || [] });
+    setSystemNameCustomized(Boolean(connection.definition.system_name && connection.definition.system_name !== connection.definition.name));
+    setInputMode('fields'); setTestResult(null); setError('');
   };
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -59,6 +65,18 @@ export function IntegrationForm({ tool, principal, onClose, onSaved }: {
     if (node && !node.open) node.showModal();
     return () => { if (node?.open) node.close(); };
   }, []);
+  useEffect(() => {
+    if (scope !== 'project') return;
+    let current = true;
+    setLoadingEnvironments(true);
+    setEnvironmentError('');
+    fetchProjectSetup().then(setup => {
+      if (current) setEnvironments((setup.runtime.environments || []).filter(environment => environment.enabled !== false));
+    }).catch(failure => {
+      if (current) setEnvironmentError(failure instanceof Error ? failure.message : 'Unable to load project environments. Reopen this form to retry.');
+    }).finally(() => { if (current) setLoadingEnvironments(false); });
+    return () => { current = false; };
+  }, [scope]);
   const changeScope = (value: 'platform' | 'project') => {
     setScope(value);
     setForm(value === 'platform' ? record?.platform_definition || initial : initial);
@@ -96,15 +114,18 @@ export function IntegrationForm({ tool, principal, onClose, onSaved }: {
     if (inputMode !== 'fields') { await reviewImport(); return; }
     setSaving(true); setError('');
     try {
+      const definition = scope === 'platform'
+        ? Object.fromEntries(Object.entries(form).filter(([key]) => !['system_name', 'environment_dependency', 'tool_environment', 'project_environment_ids'].includes(key))) as IntegrationDefinition
+        : form;
       await saveIntegration(scope, id, {
-        definition: form,
+        definition,
         expected_revision: record ? (scope === 'platform' ? record.platform_revision : record.project_revision) : '',
         expected_platform_revision: scope === 'project' ? record?.platform_revision || '' : '',
       });
       await finish();
     } catch (failure) {
       setError(failure instanceof ApiError && failure.status === 422
-        ? 'Check the connection fields. Remote connections require HTTPS and credential references; commands require a valid executable, arguments and environment references.'
+        ? failure.message
         : failure instanceof ApiError && failure.status === 409
           ? failure.message
           : failure instanceof Error ? failure.message : 'Unable to save integration.');
@@ -161,7 +182,38 @@ export function IntegrationForm({ tool, principal, onClose, onSaved }: {
           </div>}
         </fieldset> : <fieldset disabled={!canSave}>
           <label>Integration ID<input required pattern="[a-z][a-z0-9_-]{0,63}" maxLength={64} value={id} disabled={!!record} placeholder="incident-tools" onChange={event => setId(event.target.value)} /></label>
-          <label>Name<input required maxLength={120} value={form.name} onChange={event => field('name', event.target.value)} /></label>
+          <label>Name<input required maxLength={120} value={form.name} onChange={event => {
+            const name = event.target.value;
+            setForm(current => ({ ...current, name, system_name: systemNameCustomized ? current.system_name : name }));
+            setTestResult(null);
+          }} /></label>
+          {scope === 'project' && <>
+            <label>System Name <span aria-hidden="true">*</span><input required maxLength={128} value={form.system_name || ''} placeholder={form.name || 'MCP integration name'} onChange={event => { setSystemNameCustomized(true); field('system_name', event.target.value); }} /><small>Project-scoped runtime identity. It starts from the integration name and remains editable.</small></label>
+            <fieldset className="integration-identity-group">
+              <legend>Environment scope <span aria-hidden="true">*</span></legend>
+              <label><input required type="radio" name="integration-environment-dependency" checked={form.environment_dependency === 'dependent'} onChange={() => field('environment_dependency', 'dependent')} /> Environment dependent</label>
+              <label><input required type="radio" name="integration-environment-dependency" checked={form.environment_dependency === 'independent'} onChange={() => { field('environment_dependency', 'independent'); field('project_environment_ids', []); }} /> Environment independent</label>
+            </fieldset>
+            {form.environment_dependency === 'dependent' && <fieldset>
+              <legend>Project environments <span aria-hidden="true">*</span></legend>
+              <small>Choose the project environments that use this external tool environment.</small>
+              {loadingEnvironments && <p role="status">Loading project environments…</p>}
+              {environmentError && <p role="alert">{environmentError}</p>}
+              {!loadingEnvironments && !environmentError && environments.length === 0 && <p>Add an active environment in Project Setup before mapping this connection.</p>}
+              {environments.map(environment => <label key={environment.id}>
+                <input type="checkbox" checked={(form.project_environment_ids || []).includes(environment.id)}
+                  onChange={event => field('project_environment_ids', event.target.checked
+                    ? [...(form.project_environment_ids || []), environment.id]
+                    : (form.project_environment_ids || []).filter(id => id !== environment.id))} />
+                {environment.name || environment.id} <small>{environment.name && environment.name !== environment.id ? environment.id : ''}</small>
+              </label>)}
+              {(form.project_environment_ids || []).filter(id => !environments.some(environment => environment.id === id)).length > 0 && !loadingEnvironments && !environmentError && <div role="alert">
+                <p>A saved environment is no longer active. Remove unavailable mappings and select an active environment before saving.</p>
+                <button type="button" className="btn btn-secondary" onClick={() => field('project_environment_ids', (form.project_environment_ids || []).filter(id => environments.some(environment => environment.id === id)))}>Remove unavailable mappings</button>
+              </div>}
+            </fieldset>}
+            <label>Tool Environment <span aria-hidden="true">*</span><input required maxLength={128} value={form.tool_environment || ''} placeholder={form.environment_dependency === 'independent' ? 'Shared' : 'Authorized external environment'} onChange={event => field('tool_environment', event.target.value)} /></label>
+          </>}
           <label>Type<select value={form.kind} disabled={!!record} onChange={event => {
             const kind = event.target.value as 'mcp' | 'a2a';
             setForm(current => ({ ...current, kind, transport: kind === 'mcp' ? 'streamable_http' : 'a2a_jsonrpc', command: '', args: [], env: {} }));

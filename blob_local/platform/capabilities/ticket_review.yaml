@@ -15,11 +15,13 @@ requires:
     - itsm
 
 permissions:
-  minimum_role: PROJECT_ANALYST
+  minimum_role: PROJECT_VIEWER
   allowed_roles:
     - PLATFORM_ADMIN
     - PROJECT_OWNER
     - PROJECT_ANALYST
+    - PROJECT_MANAGER
+    - PROJECT_VIEWER
   allowed_actions:
     - itsm.get_ticket
 

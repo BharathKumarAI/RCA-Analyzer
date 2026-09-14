@@ -86,6 +86,31 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             api.state.registry = platform.registry
             api.state.harness = api.state.registry.harness
             api.state.file_limits = platform.file_limits
+            project_secret_references = {
+                reference
+                for options in platform.connector_options.values()
+                for reference in (
+                    options.get("secrets", {}).values()
+                    if isinstance(options, dict)
+                    else getattr(options, "secrets", {}).values()
+                )
+                if isinstance(reference, str)
+            }
+            project_secret_references.update(
+                template.default_secret
+                for template in platform.connector_templates
+                if isinstance(template.default_secret, str)
+            )
+            allowed_hosts = {
+                host.strip().lower()
+                for host in configured.integration_allowed_hosts.split(",")
+                if host.strip()
+            }
+            enabled_connector_adapters = {
+                name
+                for name, options in platform.connector_options.items()
+                if (options.get("enabled") if isinstance(options, dict) else getattr(options, "enabled", False))
+            }
             providers = build_connectors(
                 platform.connector_options,
                 configured.mode,
@@ -135,10 +160,17 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 optimization_service=api.state.optimizations,
                 chat_artifacts=api.state.chat_artifacts,
                 platform=platform,
+                connector_instance_store=api.state.platform_admin,
+                connector_secret_references=project_secret_references,
+                connector_allowed_hosts=allowed_hosts or None,
+                connector_enabled_adapters=enabled_connector_adapters,
             )
             api.state.runner.harness_workspace = api.state.harness_workspace
             api.state.runner.run_events = api.state.run_events
             cleanup.push_async_callback(api.state.runner.aclose)
+            from app.runtime.playground import Playground
+            api.state.playground = Playground(api.state.runner)
+            await api.state.playground.initialize()
             await api.state.runner.session_service.prepare_tables()
             telemetry = setup_telemetry() if configured.mode == "live" else None
             try:

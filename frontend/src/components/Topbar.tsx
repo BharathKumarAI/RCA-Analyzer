@@ -16,6 +16,7 @@ interface TopbarProps {
   principal: Principal;
   theme: 'dark' | 'light';
   activePage?: ActivePage;
+  projectKey?: string | null;
   onToggleTheme: () => void;
   onOpenSearch: () => void;
   onOpenSession: () => void;
@@ -30,6 +31,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   health,
   theme,
   activePage = 'overview',
+  projectKey = null,
   onToggleTheme,
   onOpenSearch,
   onOpenSession,
@@ -82,6 +84,9 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span className="telemetry-dot" />
           <span>{health.mode === 'live' ? 'Live' : 'Demo'}</span>
         </div>
+        <span className="scope-pill" title={projectKey ? "Authenticated project workspace" : "Templates and configuration setup"}>
+          {projectKey ? `/p/${projectKey}` : 'Administration'}
+        </span>
 
         <button
           type="button"

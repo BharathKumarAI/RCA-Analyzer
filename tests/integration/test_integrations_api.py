@@ -26,6 +26,10 @@ def definition(
     }
 
 
+def project_definition(**kwargs):
+    return {**definition(**kwargs), "environment_dependency": "independent", "tool_environment": "Shared"}
+
+
 def write_body(value, *, expected_revision="", expected_platform_revision=""):
     return {
         "definition": value,
@@ -95,7 +99,7 @@ def test_platform_project_crud_inheritance_and_revision_guards(tmp_path):
             "/api/v1/integrations/project/incident",
             headers=token("owner"),
             json=write_body(
-                definition(endpoint="https://project-mcp.example.test"),
+                project_definition(endpoint="https://project-mcp.example.test"),
                 expected_platform_revision=platform_revision,
             ),
         )
@@ -130,7 +134,7 @@ def test_platform_project_crud_inheritance_and_revision_guards(tmp_path):
             "/api/v1/integrations/project/incident",
             headers=token("owner"),
             json=write_body(
-                definition(endpoint="https://updated-project-mcp.example.test"),
+                project_definition(endpoint="https://updated-project-mcp.example.test"),
                 expected_revision=project_revision,
                 expected_platform_revision=platform_revision,
             ),
@@ -143,7 +147,7 @@ def test_platform_project_crud_inheritance_and_revision_guards(tmp_path):
             "/api/v1/integrations/project/incident",
             headers=token("owner"),
             json=write_body(
-                definition(endpoint="https://stale.example.test"),
+                project_definition(endpoint="https://stale.example.test"),
                 expected_revision="0" * 32,
                 expected_platform_revision=platform_revision,
             ),
@@ -180,7 +184,7 @@ def test_platform_settings_can_lock_project_overrides(tmp_path):
             "/api/v1/integrations/project/locked",
             headers=token("owner"),
             json=write_body(
-                definition(endpoint="https://project.example.test"),
+                project_definition(endpoint="https://project.example.test"),
                 expected_platform_revision=revision,
             ),
         )
@@ -190,7 +194,7 @@ def test_platform_settings_can_lock_project_overrides(tmp_path):
         response = client.put(
             "/api/v1/integrations/project/project-only",
             headers=token("owner"),
-            json=write_body(definition(endpoint="https://project.example.test")),
+            json=write_body(project_definition(endpoint="https://project.example.test")),
         )
         assert response.status_code == 200, response.text
         assert any(row["scope_level"] == "project_only" for row in response.json())
@@ -248,3 +252,23 @@ def test_registration_schema_rejects_unsafe_endpoints_and_mismatched_transports(
                 json=write_body(value),
             )
             assert response.status_code == 422, response.text
+
+
+def test_project_integration_identity_is_required_and_preserved(tmp_path):
+    settings, token = settings_for(tmp_path)
+    with TestClient(create_app(settings)) as client:
+        url = "/api/v1/integrations/project/identity"
+        headers = token("owner")
+        assert client.put(url, headers=headers, json=write_body(definition())).status_code == 422
+        saved = client.put(url, headers=headers, json=write_body(project_definition())).json()[0]
+        assert saved["definition"]["system_name"] == "Incident MCP"
+        updated = client.put(url, headers=headers, json=write_body(
+            project_definition(name="Renamed connector"), expected_revision=saved["revision"],
+        ))
+        assert updated.status_code == 200, updated.text
+        assert updated.json()[0]["definition"]["system_name"] == "Incident MCP"
+        duplicate = {**project_definition(), "system_name": "incident mcp"}
+        assert client.put("/api/v1/integrations/project/duplicate", headers=headers, json=write_body(duplicate)).status_code == 422
+        forbidden_mapping = {**project_definition(), "environment_dependency": "dependent", "project_environment_ids": ["not-this-project"]}
+        assert client.put("/api/v1/integrations/project/mapped", headers=headers, json=write_body(forbidden_mapping)).status_code == 422
+        assert client.put("/api/v1/integrations/platform/identity", headers=token("admin"), json=write_body(project_definition())).status_code == 422

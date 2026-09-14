@@ -30,6 +30,7 @@ import {
   Key,
   Globe,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   fetchConnectorsHealth,
   fetchConnectorHealthCheck,
@@ -553,13 +554,12 @@ export const HealthChecks: React.FC = () => {
       </section>
 
       {error && (
-        <div className="notice-banner error-banner" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <AlertTriangle size={16} />
-          <span>{error}</span>
-          <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '2px 8px' }} onClick={() => setError(null)}>
-            <X size={13} />
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Subsystem Live Infrastructure Telemetry Deck */}

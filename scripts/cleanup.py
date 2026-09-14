@@ -7,11 +7,13 @@ import argparse
 import asyncio
 import json
 import time
-from sqlalchemy import select
+from sqlalchemy import select, delete, or_
 from app.persistence.database import session_service
 from app.persistence.store import InvestigationStore, runs
 from app.runtime.run_contract import TERMINAL_STATUSES, content_hash, RunContract
 from app.settings import Settings
+from app.runtime.playground import APP_NAME, experiments, metadata as playground_metadata
+from app.persistence.database import initialize_tables
 from app.persistence.chat_artifacts import ChatArtifactStore
 from app.inputs.files import FileLimits
 
@@ -29,6 +31,7 @@ async def cleanup(apply=False):
         )
         sessions = session_service(settings.session_database_url.get_secret_value())
         await store.initialize()
+        await initialize_tables(store.engine, playground_metadata)
         async with store.engine.connect() as connection:
             expired = (
                 await connection.execute(
@@ -41,6 +44,12 @@ async def cleanup(apply=False):
                     )
                 )
             ).all()
+        async with store.engine.connect() as connection:
+            expired_experiments = (await connection.execute(select(experiments).where(
+                experiments.c.tenant_id == settings.tenant_id,
+                experiments.c.updated_at < time.time() - settings.retention_days * 86400,
+                or_(experiments.c.status != "RUNNING", experiments.c.deadline < time.time()),
+            ))).mappings().all()
         artifact_store = ChatArtifactStore(store, settings, FileLimits().max_file_bytes)
         artifact_count = await artifact_store.cleanup(apply=apply)
         if not apply:
@@ -48,6 +57,7 @@ async def cleanup(apply=False):
                 json.dumps(
                     {
                         "expired_terminal_runs": len(expired),
+                        "expired_personal_experiments": len(expired_experiments),
                         "expired_raw_artifacts": artifact_count,
                         "retention_days": settings.retention_days,
                         "applied": False,
@@ -65,6 +75,13 @@ async def cleanup(apply=False):
                 user_id=content_hash([run.tenant_id, run.project_id, run.subject]),
                 session_id=run.run_id,
             )
+        for experiment in expired_experiments:
+            await sessions.delete_session(app_name=APP_NAME, user_id=experiment["owner_key"], session_id=experiment["run_id"])
+            async with store.engine.begin() as connection:
+                await connection.execute(delete(experiments).where(
+                    experiments.c.run_id == experiment["run_id"],
+                    experiments.c.tenant_id == settings.tenant_id,
+                ))
         deleted = await store.delete_expired(
             settings.retention_days * 86400,
             scope=(settings.tenant_id, settings.project_id),
@@ -73,6 +90,7 @@ async def cleanup(apply=False):
             json.dumps(
                 {
                     "deleted_runs_and_attachments": deleted,
+                    "deleted_personal_experiments": len(expired_experiments),
                     "deleted_raw_artifacts": artifact_count,
                     "applied": True,
                 }

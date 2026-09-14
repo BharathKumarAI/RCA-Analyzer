@@ -13,3 +13,15 @@ assert.match(palette, /if \(!item\.visible \|\| !isActivePage\(item\.page\)\) re
 assert.match(palette, /title: item\.label/);
 assert.match(palette, /category: item\.group/);
 console.log('shell navigation persistence checks passed');
+
+const app = await readFile(new URL('../frontend/src/App.tsx', import.meta.url), 'utf8');
+const topbar = await readFile(new URL('../frontend/src/components/Topbar.tsx', import.meta.url), 'utf8');
+const connectorEditor = await readFile(new URL('../frontend/src/components/ConnectorInstanceEditor.tsx', import.meta.url), 'utf8');
+// Admin navigation must not inherit a project merely because the session has one.
+assert.match(app, /const scopedProjectKey = routeProjectKey;/);
+assert.doesNotMatch(app, /setRouteProjectKey\(principal\.project_id\)/);
+assert.match(app, /`\/admin\/\$\{window\.location\.search\}#\$\{page\}`/);
+assert.match(app, /handleSelectPage\('runs'\)/);
+assert.match(topbar, /projectKey \? `\/p\/\$\{projectKey\}` : 'Administration'/);
+assert.doesNotMatch(connectorEditor, /payments-prod/);
+console.log('admin and project navigation separation checks passed');

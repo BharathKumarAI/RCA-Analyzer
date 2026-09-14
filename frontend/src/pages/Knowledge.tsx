@@ -13,9 +13,11 @@ import {
   CheckCircle2,
   SlidersHorizontal,
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import {
   fetchKnowledge,
   createKnowledgeDoc,
+  uploadKnowledgeDoc,
   updateKnowledgeDoc,
   deleteKnowledgeDoc,
 } from '../services/api';
@@ -41,6 +43,7 @@ export const Knowledge: React.FC = () => {
   const [category, setCategory] = useState('Incident Triage');
   const [tagsInput, setTagsInput] = useState('');
   const [content, setContent] = useState('');
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [status, setStatus] = useState('active');
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,15 +66,10 @@ export const Knowledge: React.FC = () => {
 
   const openAdd = () => {
     setTitle('');
-    setCategory('Incident Triage');
-    setTagsInput('runbook, triage, kubernetes');
-    setContent(
-      '# Runbook: High API Latency Investigation\n\n' +
-        '## Initial Checks\n' +
-        '1. Check Splunk `k8s.container.cpu_utilization` for gateway pods.\n' +
-        '2. Inspect Jira for any active deploys or schema migrations.\n' +
-        '3. If database pool exhaustion occurs, verify connection pool max limit.\n'
-    );
+    setCategory('');
+    setTagsInput('');
+    setContent('');
+    setSourceFile(null);
     setStatus('active');
     setShowAddModal(true);
   };
@@ -82,12 +80,13 @@ export const Knowledge: React.FC = () => {
     setCategory(item.category || 'General');
     setTagsInput((item.tags || []).join(', '));
     setContent(item.content || '');
+    setSourceFile(null);
     setStatus(item.status || 'active');
   };
 
   const handleSaveDoc = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !content.trim()) return;
+    if (!title.trim() || (!content.trim() && !sourceFile)) return;
 
     setSubmitting(true);
     setError(null);
@@ -100,7 +99,7 @@ export const Knowledge: React.FC = () => {
 
     const payload: KnowledgePayload = {
       title: title.trim(),
-      category: category.trim(),
+      category: category.trim() || 'Runbook',
       tags,
       content: content.trim(),
       media_type: 'text/markdown',
@@ -114,15 +113,17 @@ export const Knowledge: React.FC = () => {
         setEditingItem(null);
         setSuccessMsg('Runbook document updated successfully!');
       } else {
-        const created = await createKnowledgeDoc(payload);
+        const created = sourceFile
+          ? await uploadKnowledgeDoc(sourceFile, title.trim(), category.trim() || 'Runbook')
+          : await createKnowledgeDoc(payload);
         setItems(prev => [created, ...prev]);
         setShowAddModal(false);
-        setSuccessMsg('New knowledge document published to corpus!');
+        setSuccessMsg(sourceFile ? 'File uploaded and extracted into the project corpus.' : 'Knowledge document published to the project corpus.');
       }
-      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save knowledge document');
     } finally {
+      setSourceFile(null);
       setSubmitting(false);
     }
   };
@@ -135,7 +136,6 @@ export const Knowledge: React.FC = () => {
       setItems(prev => prev.filter(it => it.id !== docId));
       if (viewingItem?.id === docId) setViewingItem(null);
       setSuccessMsg('Runbook document deleted successfully.');
-      setTimeout(() => setSuccessMsg(null), 3000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete knowledge document');
     }
@@ -201,18 +201,21 @@ export const Knowledge: React.FC = () => {
       </section>
 
       {error && (
-        <div className="notice-banner red" role="alert" style={{ marginBottom: 16 }}>
-          <AlertTriangle size={15} /> {error}
-          <button className="btn btn-outline btn-sm" onClick={() => setError(null)} style={{ marginLeft: 'auto' }}>
-            Dismiss
-          </button>
-        </div>
+        <NotificationBanner
+          type="error"
+          message={error}
+          onClose={() => setError(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {successMsg && (
-        <div className="notice-banner green" role="status" style={{ marginBottom: 16 }}>
-          <CheckCircle2 size={15} /> {successMsg}
-        </div>
+        <NotificationBanner
+          type="success"
+          message={successMsg}
+          onClose={() => setSuccessMsg(null)}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Filter and Search Bar */}
@@ -388,6 +391,11 @@ export const Knowledge: React.FC = () => {
                 <span style={{ fontSize: 11, color: 'var(--muted)' }}>
                   {item.size_bytes ? `${(item.size_bytes / 1024).toFixed(1)} KB` : 'Markdown'}
                 </span>
+                {item.upload && (
+                  <span title={`Extracted from ${item.upload.filename}`} style={{ fontSize: 10, color: 'var(--muted)' }}>
+                    extracted text · {item.upload.warnings.length ? `${item.upload.warnings.length} warning${item.upload.warnings.length === 1 ? '' : 's'}` : 'source verified'}
+                  </span>
+                )}
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button
                     type="button"
@@ -500,6 +508,25 @@ export const Knowledge: React.FC = () => {
                 </div>
               </div>
 
+              {!editingItem && (
+                <div style={{ marginBottom: 12, padding: 12, border: '1px solid var(--line)', borderRadius: 6, background: 'var(--card-subtle)' }}>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+                    Upload a local runbook or document
+                  </label>
+                  <input
+                    type="file"
+                    onChange={e => setSourceFile(e.target.files?.[0] || null)}
+                    disabled={submitting}
+                    accept=".txt,.md,.markdown,.pdf,.docx,.csv,.json,.yaml,.yml"
+                    style={{ width: '100%', color: 'var(--text)', fontSize: 12 }}
+                  />
+                  <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 11, lineHeight: 1.45 }}>
+                    The backend extracts bounded text and retains the extracted content only. Original files are not retained.
+                  </p>
+                  {sourceFile && <span style={{ display: 'block', marginTop: 5, color: 'var(--acc3)', fontSize: 11 }}>Selected: {sourceFile.name}</span>}
+                </div>
+              )}
+
               <div style={{ marginBottom: 12 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
                   Index Tags (Comma-separated)
@@ -515,7 +542,7 @@ export const Knowledge: React.FC = () => {
 
               <div style={{ marginBottom: 20 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
-                  Markdown Content *
+                  {sourceFile ? 'Optional note (ignored for uploaded content)' : 'Markdown Content *'}
                 </label>
                 <textarea
                   required

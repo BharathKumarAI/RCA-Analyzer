@@ -363,10 +363,6 @@ export const Skills: React.FC<SkillsProps> = ({ principal, onNavigate }) => {
               Active project overrides: <b>{activeOverridesCount}</b>
             </span>
             <span className="skills-stat-chip">
-              <ShieldCheck size={12} />
-              Scope: <b>{principal?.project_id || 'unconfigured'}</b>
-            </span>
-            <span className="skills-stat-chip">
               <Activity size={12} />
               Offline checks: <b>Deterministic MLflow</b>
             </span>

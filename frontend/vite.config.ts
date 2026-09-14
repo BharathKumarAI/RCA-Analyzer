@@ -11,10 +11,18 @@ export default defineConfig({
       name: 'root-redirect',
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (req.url === '/' || req.url === '') {
+          const requestUrl = req.url || '';
+          const [pathname, search = ''] = requestUrl.split('?');
+          if (pathname === '/' || pathname === '') {
             res.writeHead(302, { Location: '/admin/' });
             res.end();
             return;
+          }
+          // The production app is mounted at /admin/, while project workspaces
+          // intentionally live at /p/<project_key>/. Let Vite serve the same
+          // SPA entry for a direct project URL so browser refreshes work in dev.
+          if (pathname === '/p' || pathname.startsWith('/p/')) {
+            req.url = `/admin/${search ? `?${search}` : ''}`;
           }
           next();
         });

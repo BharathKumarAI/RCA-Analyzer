@@ -66,6 +66,18 @@ async def mutate_runtime(request: Request, principal: Principal, operation, tool
     return result
 
 
+@router.get("/taxonomy")
+async def get_parameter_taxonomy(principal: Principal):
+    from app.configuration.models import KNOWN_PARAMETER_CATEGORIES
+
+    return {
+        "categories": {
+            cat: list(subcats)
+            for cat, subcats in KNOWN_PARAMETER_CATEGORIES.items()
+        }
+    }
+
+
 @router.get("")
 async def list_parameters(request: Request, principal: Principal, view: Literal["all", "project"] = "all"):
     result = await invoke(

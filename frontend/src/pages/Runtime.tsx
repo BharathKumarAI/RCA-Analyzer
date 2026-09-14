@@ -23,6 +23,7 @@ import {
   Save,
   Edit3
 } from 'lucide-react';
+import { NotificationBanner } from '../components/NotificationBanner';
 import { SystemHealth, RuntimeStageItem } from '../types/api';
 import { ApiError, fetchConfig, fetchPrincipal, fetchRuntimeStages, updateRuntimeStage } from '../services/api';
 
@@ -300,7 +301,6 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
       setStages(prev => ({ ...prev, [selectedNode]: updated }));
       setStageSaveSuccess(`Stage "${updated.name}" updated successfully!`);
       setIsEditingStage(false);
-      setTimeout(() => setStageSaveSuccess(null), 4000);
     } catch (e) {
       setStageSaveError(e instanceof Error ? e.message : 'Failed to update stage tuning');
     } finally {
@@ -556,14 +556,20 @@ export const Runtime: React.FC<RuntimeProps> = ({ health }) => {
       </label>
 
       {stageSaveSuccess && (
-        <div className="notice-banner green" style={{ padding: '6px 10px', fontSize: 11, margin: 0 }}>
-          <CheckCircle2 size={13} /> {stageSaveSuccess}
-        </div>
+        <NotificationBanner
+          type="success"
+          message={stageSaveSuccess}
+          onClose={() => setStageSaveSuccess(null)}
+          style={{ padding: '8px 12px', fontSize: 12, margin: 0 }}
+        />
       )}
       {stageSaveError && (
-        <div className="notice-banner red" style={{ padding: '6px 10px', fontSize: 11, margin: 0 }}>
-          {stageSaveError}
-        </div>
+        <NotificationBanner
+          type="error"
+          message={stageSaveError}
+          onClose={() => setStageSaveError(null)}
+          style={{ padding: '8px 12px', fontSize: 12, margin: 0 }}
+        />
       )}
 
       {isEditingStage ? (
