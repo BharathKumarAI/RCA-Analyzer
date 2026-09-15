@@ -16,6 +16,9 @@ def workspace_catalog(service, principal, source, graph, runtime, editable):
         category = ('Graph Workflows' if node.kind in {'sequence', 'parallel', 'graph', 'join'}
                     else 'Agents' if node.kind in {'agent', 'builtin'}
                     else 'Skills' if node.kind == 'skill'
+                    else 'Connector Templates' if node.kind == 'connector_template'
+                    else 'Project Templates' if node.kind == 'project_template'
+                    else 'Parameters' if node.kind == 'parameter'
                     else 'Governance' if node.kind == 'policy' else 'References')
         add(node.id, node.kind, node.label, category, node.reason or 'Resolved workflow component',
             node.source, {**node.details, 'graph_id': node.id, 'reason': node.reason}, node.enabled,
@@ -70,8 +73,8 @@ def workspace_catalog(service, principal, source, graph, runtime, editable):
         'Recorded events and measured usage only; historical runs may have no detailed trace',
         'app/persistence/run_events.py', {'api': '/api/v1/runs/{run_id}/trace', 'execution_mode': settings.mode})
     # Reuse the existing admin editors; platform-owned values remain read-only here.
-    management_pages = {"capability": "capabilities", "model": "parameters", "connector": "tools",
-        "tool": "tools", "skill": "skills", "policy": "policy", "session": "runtime",
+    management_pages = {"project_template": "project-setup", "capability": "capabilities", "model": "parameters", "connector": "tools",
+        "connector_template": "tools", "parameter": "parameters", "tool": "tools", "skill": "skills", "policy": "policy", "session": "runtime",
         "attachments": "runtime", "optimization": "optimization", "trace": "runtime"}
     for item in items:
         if item.kind in management_pages:

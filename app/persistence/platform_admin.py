@@ -25,6 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.exc import IntegrityError
 from app.persistence.database import scoped_engine, initialize_tables
+from app.configuration.connection_records import connection_values
 
 metadata = MetaData(schema="platform")
 
@@ -260,11 +261,36 @@ project_environment_bindings_table = Table(
     Column("tool_env_id", String(64), nullable=False),
     Column("external_resource", String(256), nullable=False),
     Column("credential_binding_id", String(128), nullable=True),
+    Column("connection_id", String(64), nullable=True),
     Column("narrowing_filters_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
     Column("status", String(32), nullable=False, default="active"),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
 )
+
+connector_environment_connections_table = Table(
+    "connector_environment_connections",
+    metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("instance_id", String(64), primary_key=True),
+    Column("connection_id", String(64), primary_key=True),
+    Column("connection_name", String(128), nullable=False),
+    Column("environment_name", String(64), nullable=False),
+    Column("enabled", Boolean, nullable=False, default=False),
+    Column("routing_mode", String(32), nullable=False, default="direct"),
+    Column("auth_profile_id", String(64), nullable=True),
+    Column("target_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("credentials_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("mcp_config_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("resource_scope_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("status", String(32), nullable=False, default="draft"),
+    Column("test_status", String(32), nullable=False, default="not_tested"),
+    Column("last_tested_at", Float, nullable=True),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+
 
 connector_candidate_test_results_table = Table(
     "connector_candidate_test_results",
@@ -1710,14 +1736,24 @@ class PlatformAdminStore:
                 project_environment_bindings_table.c.project_id == project_id,
             ))).mappings().all()
 
+            connections = (await conn.execute(select(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+            ).order_by(connector_environment_connections_table.c.connection_id))).mappings().all()
+
         bindings_by_instance: Dict[str, List[Dict[str, Any]]] = {}
         for b in bindings:
             bindings_by_instance.setdefault(b["instance_id"], []).append(dict(b))
+
+        connections_by_instance: Dict[str, List[Dict[str, Any]]] = {}
+        for c in connections:
+            connections_by_instance.setdefault(c["instance_id"], []).append(dict(c))
 
         results = []
         for inst in instances:
             d = dict(inst)
             d["bindings"] = bindings_by_instance.get(inst["instance_id"], [])
+            d["environment_connections"] = connections_by_instance.get(inst["instance_id"], [])
             results.append(d)
         return results
 
@@ -1735,8 +1771,14 @@ class PlatformAdminStore:
                 project_environment_bindings_table.c.project_id == project_id,
                 project_environment_bindings_table.c.instance_id == instance_id,
             ))).mappings().all()
+            connections = (await conn.execute(select(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+            ).order_by(connector_environment_connections_table.c.connection_id))).mappings().all()
         d = dict(instance)
         d["bindings"] = [dict(b) for b in bindings]
+        d["environment_connections"] = [dict(c) for c in connections]
         return d
 
     async def save_project_connector_instance(
@@ -1751,6 +1793,7 @@ class PlatformAdminStore:
         expected_revision: int,
         author: str,
         bindings: Optional[List[Dict[str, Any]]] = None,
+        environment_connections: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         now = time.time()
         async with self.engine.begin() as conn:
@@ -1826,13 +1869,130 @@ class PlatformAdminStore:
                         tool_env_id=b.get("tool_env_id", b["project_env_id"]),
                         external_resource=b["external_resource"],
                         credential_binding_id=b.get("credential_binding_id"),
+                        connection_id=b.get("connection_id"),
                         narrowing_filters_json=b.get("narrowing_filters_json", {}),
                         status=b.get("status", "active"),
                         created_at=now,
                         updated_at=now,
                     ))
 
+            if environment_connections is not None:
+                await conn.execute(delete(connector_environment_connections_table).where(
+                    connector_environment_connections_table.c.tenant_id == tenant_id,
+                    connector_environment_connections_table.c.project_id == project_id,
+                    connector_environment_connections_table.c.instance_id == instance_id,
+                ))
+                for ec in environment_connections:
+                    await conn.execute(insert(connector_environment_connections_table).values(
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                        instance_id=instance_id,
+                        connection_id=ec["connection_id"],
+                        **connection_values(ec),
+                        enabled=False,
+                        status="draft",
+                        test_status="not_tested",
+                        last_tested_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+
         return await self.get_project_connector_instance(tenant_id, project_id, instance_id)
+
+    async def list_environment_connections(self, tenant_id: str, project_id: str, instance_id: str) -> List[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+            ).order_by(connector_environment_connections_table.c.connection_id))).mappings().all()
+        return [dict(r) for r in rows]
+
+    async def get_environment_connection(self, tenant_id: str, project_id: str, instance_id: str, connection_id: str) -> Optional[Dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+                connector_environment_connections_table.c.connection_id == connection_id,
+            ))).mappings().first()
+        return dict(row) if row else None
+
+    async def save_environment_connection(self, tenant_id: str, project_id: str, instance_id: str, connection: Dict[str, Any]) -> Dict[str, Any]:
+        now = time.time()
+        cid = connection["connection_id"]
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(select(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+                connector_environment_connections_table.c.connection_id == cid,
+            ))).mappings().first()
+            values = {
+                **connection_values(connection),
+                "enabled": False, "status": "draft", "test_status": "not_tested",
+                "last_tested_at": None, "updated_at": now,
+            }
+            if existing:
+                await conn.execute(update(connector_environment_connections_table).where(
+                    connector_environment_connections_table.c.tenant_id == tenant_id,
+                    connector_environment_connections_table.c.project_id == project_id,
+                    connector_environment_connections_table.c.instance_id == instance_id,
+                    connector_environment_connections_table.c.connection_id == cid,
+                ).values(**values))
+            else:
+                await conn.execute(insert(connector_environment_connections_table).values(
+                    tenant_id=tenant_id, project_id=project_id, instance_id=instance_id,
+                    connection_id=cid, created_at=now, **values,
+                ))
+        return await self.get_environment_connection(tenant_id, project_id, instance_id, cid)
+
+    async def delete_environment_connection(self, tenant_id: str, project_id: str, instance_id: str, connection_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+                connector_environment_connections_table.c.connection_id == connection_id,
+            ))
+        return result.rowcount > 0
+
+    async def update_environment_connection_test_status(
+        self, tenant_id: str, project_id: str, instance_id: str, connection_id: str, test_status: str, last_tested_at: Optional[float] = None,
+        *, expected_updated_at: float
+    ) -> Optional[Dict[str, Any]]:
+        now = time.time() if last_tested_at is None else last_tested_at
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+                connector_environment_connections_table.c.connection_id == connection_id,
+                connector_environment_connections_table.c.updated_at == expected_updated_at,
+            ).values(test_status=test_status, last_tested_at=now, updated_at=now,
+                     **({"enabled": False, "status": "draft"} if test_status != "passed" else {})))
+            if result.rowcount == 0:
+                raise ValueError("Environment connection changed during testing; retest the saved version")
+        return await self.get_environment_connection(tenant_id, project_id, instance_id, connection_id)
+
+    async def set_environment_connection_enabled(
+        self, tenant_id: str, project_id: str, instance_id: str, connection_id: str, enabled: bool
+    ) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        status = "active" if enabled else "inactive"
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(connector_environment_connections_table).where(
+                connector_environment_connections_table.c.tenant_id == tenant_id,
+                connector_environment_connections_table.c.project_id == project_id,
+                connector_environment_connections_table.c.instance_id == instance_id,
+                connector_environment_connections_table.c.connection_id == connection_id,
+                *((connector_environment_connections_table.c.test_status == "passed",
+                   connector_environment_connections_table.c.last_tested_at >= now - 900) if enabled else ()),
+            ).values(enabled=enabled, status=status, updated_at=now))
+            if result.rowcount == 0:
+                raise ValueError("Environment connection requires a fresh passing test")
+        return await self.get_environment_connection(tenant_id, project_id, instance_id, connection_id)
+
 
     async def set_project_connector_instance_enabled(
         self, tenant_id: str, project_id: str, instance_id: str, enabled: bool, author: str = "admin",

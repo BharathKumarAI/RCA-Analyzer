@@ -1,0 +1,108 @@
+type: kafka
+name: Kafka Message Streams
+system_name: kafka
+category: Messaging
+description: Read topic partition metadata via native SASL_SSL or approved MCP evidence.
+  Distinguish offsets, lag and message evidence according to returned fields. Never
+  publish messages, commit offsets or modify consumer groups.
+integration_kind: native
+protocol: Native or MCP
+auth_method: SASL SCRAM / Bearer
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: kafka
+supported_operations:
+- read_evidence
+known_limitations:
+- Native partition metadata only; consumer lag measurement not supported natively.
+- Message consumption, publishing, offset commits, and consumer group changes are
+  blocked.
+auth_profiles:
+- id: sasl_scram_tls
+  name: SASL SCRAM-SHA-512 over TLS
+  status: active
+  transport_compatibility: SASL_SSL
+  required_fields:
+  - username
+  - password_secret_ref
+  optional_fields: []
+  hidden_fields: []
+- id: bearer_token
+  name: MCP Bearer Token
+  status: active
+  transport_compatibility: MCP
+  required_fields:
+  - token_secret_ref
+  optional_fields: []
+  hidden_fields: []
+default_endpoint: <KAFKA_BROKER_LIST>
+default_secret: env://KAFKA_PASSWORD
+default_scope: platform_default
+default_config:
+  environment_scoped: true
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: Kafka Message Streams
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe
+- variable_name: topic_filter
+  label: Kafka Topic Filter
+  description: Exact authorized topic name used by the current native metadata reader. Wildcards and message-content filters are unsupported.
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: query
+  subcategory: topic_selection
+  icon: filter
+  runtime_binding: kafka.topic

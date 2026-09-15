@@ -125,5 +125,6 @@ async def put_configuration(section: Section, body: ConfigurationWrite, request:
             request.app.state.file_limits = candidate
             request.app.state.platform = replace(request.app.state.platform, file_limits=candidate)
             request.app.state.runner.platform = request.app.state.platform
+            request.app.state.harness_workspace.platform = request.app.state.platform
             request.app.state.chat_artifacts.max_bytes = candidate.max_file_bytes
         return await snapshot(request, section)

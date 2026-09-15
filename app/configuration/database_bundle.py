@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 from app.configuration.parameters import ParameterStore, RUNTIME_FIELDS
 from app.configuration.platform import PlatformConfiguration
+from app.configuration.connector_catalog import published_parameter_templates
 from app.connectors.providers.registry import ConnectorOptions, CONNECTOR_IDS
 from app.optimization.content import read_platform
 from app.persistence.database import initialize_tables
@@ -243,28 +244,48 @@ async def update_bundle_file(engine, settings, relative_path: str, content: str)
     return await _store_bundle(engine, settings, files, digest, row.content_hash)
 
 
-async def load_effective_settings(engine, settings, cleanup):
+async def load_effective_settings(engine, settings, cleanup, *, connector_template_store=None):
     """Shared database configuration resolution for API and maintenance jobs."""
     store = ParameterStore(engine)
-    platform = PlatformConfiguration.load(settings)
+    if settings.database_configuration:
+        configured = await load_bundle(engine, settings, cleanup)
+        # The active bundle is the source for declarative configuration in a
+        # database-backed deployment. Loading it before seeding prevents the
+        # process-local checkout from contributing stale template definitions.
+        platform = PlatformConfiguration.load(configured)
+    else:
+        configured = settings
+        platform = PlatformConfiguration.load(configured)
+
+    templates = (
+        await published_parameter_templates(platform.connector_templates, connector_template_store)
+        if connector_template_store is not None
+        else platform.connector_templates
+    )
     await store.seed_connector_template_definitions(
-        settings.tenant_id,
-        platform.connector_templates,
+        configured.tenant_id,
+        templates,
         platform.connector_options,
     )
+
     if not settings.database_configuration:
-        await store.seed_runtime_definitions(settings.tenant_id, settings)
-        rows = await store.resolve(settings.tenant_id, settings.project_id)
+        await store.seed_runtime_definitions(configured.tenant_id, configured)
+        rows = await store.resolve(
+            configured.tenant_id,
+            configured.project_id,
+            templates,
+            platform.connector_options,
+        )
         runtime = {row["variable_name"]: row["effective_value"] for row in rows if row["tool"] == "runtime"}
-        configured = Settings.model_validate(settings.model_dump() | runtime)
+        configured = Settings.model_validate(configured.model_dump() | runtime)
         configured.validate_runtime()
         return configured, rows
-    configured = await load_bundle(engine, settings, cleanup)
+
     await store.seed_runtime_definitions(configured.tenant_id, configured)
     rows = await store.resolve(
         configured.tenant_id,
         configured.project_id,
-        platform.connector_templates,
+        templates,
         platform.connector_options,
     )
     runtime = {

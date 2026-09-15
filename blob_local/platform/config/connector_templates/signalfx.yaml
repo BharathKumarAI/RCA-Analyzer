@@ -1,0 +1,84 @@
+type: signalfx
+name: SignalFx APM & Metrics
+system_name: signalfx
+category: Observability
+description: Read the configured SignalFx detector definition. Explain alert rules
+  and thresholds. This is configuration evidence, not a metric time series or proof
+  an alert fired.
+integration_kind: native
+protocol: HTTPS
+auth_method: X-SF-Token
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: signalfx
+supported_operations:
+- read_evidence
+known_limitations:
+- Detector configuration evidence only; no live metric time series ingestion or
+  detector mutations.
+auth_profiles:
+- id: api_key_header
+  name: SignalFx API Key Header (X-SF-Token)
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - api_key_secret_ref
+  optional_fields: []
+  hidden_fields: []
+default_endpoint: https://api.<SIGNALFX_REALM>.signalfx.com
+default_secret: env://SIGNALFX_TOKEN
+default_scope: platform_default
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: SignalFx APM & Metrics
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe

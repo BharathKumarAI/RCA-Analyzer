@@ -127,3 +127,103 @@ def test_published_template_rejects_incompatible_auth_profile_shape():
                 },
             ),
         )
+
+
+def test_auth_profile_rejects_duplicate_conditional_fields():
+    core_fields = (
+        ConnectorTemplateField(
+            variable_name="system_name", description="System name", value_type="string",
+            default_value="Example", required=True, ownership="project_only",
+        ),
+        ConnectorTemplateField(
+            variable_name="environment_dependency", description="Environment choice", value_type="string",
+            default_value="independent", allowed_values=("dependent", "independent"),
+            required=True, ownership="project_only",
+        ),
+        ConnectorTemplateField(
+            variable_name="tool_environment", description="Tool environment", value_type="string",
+            default_value="Shared", required=True, ownership="project_only",
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="must not contain duplicates"):
+        ConnectorTemplate(
+            type="example",
+            name="Example",
+            system_name="example",
+            category="Testing",
+            description="Example connector",
+            protocol="HTTPS",
+            auth_method="Bearer Token",
+            default_endpoint="https://example.test",
+            default_secret="env://EXAMPLE_TOKEN",
+            default_scope="platform_default",
+            parameter_fields=core_fields,
+            auth_profiles=(
+                {
+                    "id": "bearer_token",
+                    "name": "Bearer Token",
+                    "status": "active",
+                    "transport_compatibility": "HTTPS",
+                    "required_fields": ["token_secret_ref", "token_secret_ref"],
+                    "optional_fields": [],
+                    "hidden_fields": [],
+                },
+            ),
+        )
+
+
+def test_auth_profile_rejects_unhashable_conditional_fields():
+    core_fields = (
+        ConnectorTemplateField(
+            variable_name="system_name", description="System name", value_type="string",
+            default_value="Example", required=True, ownership="project_only",
+        ),
+        ConnectorTemplateField(
+            variable_name="environment_dependency", description="Environment choice", value_type="string",
+            default_value="independent", allowed_values=("dependent", "independent"),
+            required=True, ownership="project_only",
+        ),
+        ConnectorTemplateField(
+            variable_name="tool_environment", description="Tool environment", value_type="string",
+            default_value="Shared", required=True, ownership="project_only",
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="lowercase identifiers"):
+        ConnectorTemplate(
+            type="example",
+            name="Example",
+            system_name="example",
+            category="Testing",
+            description="Example connector",
+            protocol="HTTPS",
+            auth_method="Bearer Token",
+            default_endpoint="https://example.test",
+            default_secret="env://EXAMPLE_TOKEN",
+            default_scope="platform_default",
+            parameter_fields=core_fields,
+            auth_profiles=(
+                {
+                    "id": "bearer_token",
+                    "name": "Bearer Token",
+                    "status": "active",
+                    "transport_compatibility": "HTTPS",
+                    "required_fields": [{"field": "token_secret_ref"}],
+                    "optional_fields": [],
+                    "hidden_fields": [],
+                },
+            ),
+        )
+
+
+def test_shared_field_contract_excludes_instance_fields_and_enforces_bounds():
+    with pytest.raises(ValidationError):
+        ConnectorTemplateField(variable_name="host", description="Host", value_type="string",
+                               default_value="", ownership="project_only", template_editable=True)
+    with pytest.raises(ValidationError):
+        ConnectorTemplateField(variable_name="api_token", description="Credential", value_type="secret_ref",
+                               default_value="env://TOKEN", sensitivity="secret_reference", template_editable=True)
+    with pytest.raises(ValidationError):
+        ConnectorTemplateField(variable_name="limit", description="Limit", value_type="integer",
+                               default_value=5, template_editable=True, minimum=1, maximum=4)

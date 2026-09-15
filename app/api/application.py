@@ -16,7 +16,7 @@ from app.policy.access import enforce_api_access
 from app.runtime.bootstrap import application_lifespan
 from app.api.routes import catalog, files, runs, agents, optimization, chats, parameters, harness, deployment_settings
 from app.api.routes import platform_configuration
-from app.api.routes import integrations, harness_workspace, ui_settings, project_editor, connectors_api
+from app.api.routes import project_templates, integrations, harness_workspace, ui_settings, project_editor, connectors_api
 from app.api.routes import project_redaction
 from app.api.routes import knowledge_uploads, playground
 
@@ -116,7 +116,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             status_code=422,
         )
 
-    for module in (catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace, ui_settings, project_editor, deployment_settings, connectors_api):
+    for module in (project_templates, catalog, files, runs, agents, optimization, chats, parameters, integrations, harness, harness_workspace, ui_settings, project_editor, deployment_settings, connectors_api):
         api.include_router(module.router)
     api.include_router(platform_configuration.router)
     api.include_router(project_redaction.router)

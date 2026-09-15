@@ -119,6 +119,13 @@ def build_root_agent(
     ):
 
         def triage_instruction(ctx):
+            attachment_policy = snapshot.get("jira_attachment_processing", "disabled")
+            triage_attachment_evidence = ""
+            if attachment_policy == "local_upload" and contract.request.attachment_ids:
+                triage_attachment_evidence = (
+                    "\nAttached file evidence (validated local uploads for ticket context):\n"
+                    + governance.attachment_marker
+                )
             return (
                 UNTRUSTED_DATA_RULE
                 + prompts["triage"]
@@ -131,6 +138,7 @@ def build_root_agent(
                 + "\nRequest plan: "
                 + str(ctx.state.get("request_plan", "Unavailable"))
                 + env_mapping_context
+                + triage_attachment_evidence
                 + "\nOnly retrieve a ticket when the request plan requires "
                 + "triage, RCA, data retrieval, sanity checking, follow-up, or rerun work."
             )

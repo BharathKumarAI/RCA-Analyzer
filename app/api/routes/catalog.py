@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import tempfile
 import sys
 import time
 import uuid
@@ -19,6 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.capabilities.resolver import CapabilityResolver
 from app.tools.catalog import TOOL_ACTIONS
 from app.configuration.models import ProjectLayer
+from app.configuration.harness_bundles import BUILTINS
+from app.configuration.project_templates import project_template_context
+from app.configuration.connector_catalog import refresh_published_templates
 from app.configuration.yaml_data import load_yaml_data
 from app.connectors.health import CheckStatus, ConnectorHealth
 from app.connectors.providers.project_storage import project_prefix
@@ -372,6 +376,8 @@ async def _save_project_file(request: Request, principal: Principal, content: st
         / "configuration"
         / "project.yaml"
     )
+    if len(content.encode("utf-8")) > 65536:
+        raise ValueError("Project configuration exceeds 64 KiB")
     if request.app.state.settings.database_configuration:
         await update_bundle_file(
             request.app.state.store.engine,
@@ -380,7 +386,13 @@ async def _save_project_file(request: Request, principal: Principal, content: st
             content,
         )
     target_file.parent.mkdir(parents=True, exist_ok=True)
-    target_file.write_text(content, encoding="utf-8")
+    descriptor, temporary = tempfile.mkstemp(dir=target_file.parent, prefix=".project-")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        os.replace(temporary, target_file)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return target_file
 
 
@@ -419,12 +431,71 @@ def _connector_templates_by_system(request: Request) -> dict[str, Any]:
     }
 
 
-def _all_connectors(request: Request) -> tuple[set[str], dict[str, Any]]:
-    template_by_system = _connector_templates_by_system(request)
+async def _connector_template_catalog(request: Request) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    """Return inventory and executable templates from the lifecycle source."""
+    platform = await refresh_published_templates(request.app.state.platform, request.app.state.platform_admin)
+    inventory = platform.connector_templates
+    return inventory, tuple(item for item in inventory if item.availability == "published")
+
+
+def _all_connectors(request: Request, templates=None) -> tuple[set[str], dict[str, Any]]:
+    template_by_system = (
+        _connector_templates_by_system(request)
+        if templates is None
+        else {template.system_name: template for template in templates}
+    )
     all_connectors = set(request.app.state.runner.connectors) | set(
         template_by_system.keys()
     )
     return all_connectors, template_by_system
+
+
+def _template_parameter_payload(
+    template, rows, *, visible_only: bool = False
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    fields = {field.variable_name: field for field in template.parameter_fields}
+    result = []
+    bindings = {}
+    for row in rows:
+        if row.get("tool") != template.system_name:
+            continue
+        if visible_only and not row.get("project_visible", True):
+            continue
+        name = row["variable_name"]
+        field = fields.get(name)
+        item = {
+            key: value
+            for key, value in row.items()
+            if key not in {"tenant_id", "project_id", "override_value", "override_revision"}
+        }
+        if row.get("value_type") == "secret_ref" or (field and field.sensitivity in {"masked", "secret_reference"}):
+            item.update(default_value=None, effective_value=None, redacted=True)
+        if field is not None:
+            item.update({
+                "label": field.label or name,
+                "template_editable": field.template_editable,
+                "runtime_binding": field.runtime_binding,
+                "minimum": field.minimum,
+                "maximum": field.maximum,
+                "max_length": field.max_length,
+            })
+            if field.runtime_binding:
+                bindings[name] = field.runtime_binding
+        result.append(item)
+    return result, bindings
+
+
+def _template_payload(template, rows, *, visible_only: bool = False) -> dict[str, Any]:
+    parameters, bindings = _template_parameter_payload(
+        template, rows, visible_only=visible_only
+    )
+    return {
+        **template.model_dump(mode="json"),
+        "template_source": "platform.connector_templates",
+        "template_version": template.version,
+        "effective_parameters": parameters,
+        "runtime_bindings": bindings,
+    }
 
 
 async def _agent_bindings(request: Request, principal: Principal, capability: str) -> list[dict[str, Any]]:
@@ -834,9 +905,10 @@ async def health_summary(request: Request, principal: Principal):
 @router.get("/api/v1/tools")
 async def tools(request: Request, principal: Principal):
     """Expose the saved catalog separately from active runtime probe status."""
+    inventory, published = await _connector_template_catalog(request)
     parameter_rows = await request.app.state.parameters.resolve(
         principal.tenant_id, principal.project_id,
-        request.app.state.platform.connector_templates,
+        published,
         request.app.state.platform.connector_options,
     )
     saved_values = {}
@@ -844,7 +916,7 @@ async def tools(request: Request, principal: Principal):
         saved_values.setdefault(row["tool"], {})[row["variable_name"]] = row["effective_value"]
     project = request.app.state.registry.inheritance.project(principal)
     disabled = set(project.disabled_connectors) if project else set()
-    all_connectors, templates_by_system = _all_connectors(request)
+    all_connectors, templates_by_system = _all_connectors(request, inventory)
     templates = templates_by_system.keys()
     available = (set(request.app.state.runner.connectors) - disabled) | {
         connector for connector in all_connectors if connector in templates and connector not in disabled
@@ -905,8 +977,8 @@ async def tools(request: Request, principal: Principal):
             "rate_limit": template.default_rate_limit if template else "unlimited",
             "last_ping": last_ping,
             "latency_ms": probe.latency_ms if probe else None,
-            "calls_today": 0,
-            "error_rate": 0.0,
+            "calls_today": None,
+            "error_rate": None,
             "endpoint": template.default_endpoint if template else None,
             "ui_base_url": template.default_ui_base_url if template else None,
             "service_user": template.default_service_user if template else None,
@@ -916,7 +988,7 @@ async def tools(request: Request, principal: Principal):
             "timeout_seconds": template.default_timeout_seconds if template else None,
             "retry_attempts": template.default_retry_attempts if template else None,
             "retry_backoff_seconds": template.default_retry_backoff if template else None,
-            "max_response_bytes": 10485760,
+            "max_response_bytes": saved_values.get(connector, {}).get("max_response_bytes"),
             "verify_ssl": True,
             "token_header_format": None,
             "custom_config": template.default_config if template else {},
@@ -925,6 +997,11 @@ async def tools(request: Request, principal: Principal):
             "health": probe.model_dump(mode="json") if probe else None,
             "probe_available": connector in request.app.state.runner.connectors and connector not in disabled,
         })
+        if template:
+            projection = _template_payload(template, parameter_rows, visible_only=Role.PLATFORM_ADMIN not in principal.roles)
+            result[-1].update({key: projection[key] for key in (
+                "template_source", "template_version", "effective_parameters", "runtime_bindings",
+            )})
         saved = saved_values.get(connector, {})
         for field in ("endpoint", "ui_base_url", "service_user", "timeout_seconds",
                       "retry_attempts", "retry_backoff_seconds", "rate_limit"):
@@ -960,10 +1037,12 @@ async def tools(request: Request, principal: Principal):
 @router.get("/api/v1/tools/templates")
 async def connector_templates(request: Request, principal: Principal):
     """Expose connector templates used for governance UI workflows."""
-    return [
-        template.model_dump(mode="json")
-        for template in request.app.state.platform.connector_templates
-    ]
+    inventory, published = await _connector_template_catalog(request)
+    rows = await request.app.state.parameters.resolve(principal.tenant_id, principal.project_id,
+        published, request.app.state.platform.connector_options)
+    return [_template_payload(template, rows, visible_only=Role.PLATFORM_ADMIN not in principal.roles)
+            for template in inventory]
+
 
 
 SKILL_STAGE_MAP = {
@@ -2320,6 +2399,13 @@ def _validate_project_yaml(
     if not isinstance(data, dict):
         return False, ["Project configuration must be a YAML dictionary mapping"], [], None
 
+    current = request.app.state.registry.inheritance.project(principal)
+    provenance = current.project_template.model_dump(mode="json") if current and current.project_template else None
+    if data.get("project_template") is not None and data["project_template"] != provenance:
+        return False, ["Project template provenance is server-owned"], [], None
+    if provenance is not None:
+        data["project_template"] = provenance
+
     # Scope validation
     conf_tenant = data.get("tenant_id")
     conf_project = data.get("project_id")
@@ -2339,6 +2425,7 @@ def _validate_project_yaml(
         "project_id",
         "allow_user_overrides",
         "allow_user_preferences",
+        "project_template",
     }
 
     # Strict platform-level delegation check
@@ -2471,6 +2558,7 @@ def _validate_project_yaml(
 
 @router.get("/api/v1/project/setup")
 async def project_setup(request: Request, principal: Principal):
+    inventory, published = await _connector_template_catalog(request)
     runtime = request.app.state.registry.inheritance.runtime(
         principal,
         request.app.state.settings,
@@ -2493,7 +2581,7 @@ async def project_setup(request: Request, principal: Principal):
         principal.project_id,
     )
     disabled = set(project.disabled_connectors) if project else set()
-    all_connectors, templates_by_system = _all_connectors(request)
+    all_connectors, templates_by_system = _all_connectors(request, inventory)
     enabled = all_connectors - disabled
     health_rows = await request.app.state.runner.health(enabled)
     project_health = {
@@ -2532,7 +2620,7 @@ async def project_setup(request: Request, principal: Principal):
     parameters = await request.app.state.parameters.resolve(
         principal.tenant_id,
         principal.project_id,
-        request.app.state.platform.connector_templates,
+        published,
         request.app.state.platform.connector_options,
     )
     connector_fields = [
@@ -2555,46 +2643,50 @@ async def project_setup(request: Request, principal: Principal):
             "source": row["source"],
         }
         for row in parameters
-        if row.get("tool") in all_connectors
+        if row.get("tool") in all_connectors and row.get("project_visible", True)
     ]
-    stage_definitions = [
-        {
-            "id": "orchestrator",
-            "name": "Orchestrator & Intent Planner",
-            "description": "Classifies incoming requests, identifies required tools/agents, and plans bounded read-only execution.",
-            "default_model": "fast-investigation",
-        },
-        {
-            "id": "triage",
-            "name": "Incident Triage & Anchor Extraction",
-            "description": "Extracts time anchors, incident severity, and affected components using ITSM connectors.",
-            "default_model": "balanced-investigation",
-        },
-        {
-            "id": "logs",
-            "name": "Log Investigation & Anomaly Search",
-            "description": "Executes bounded log queries around the incident time anchor using log connectors.",
-            "default_model": "balanced-investigation",
-        },
-        {
-            "id": "extraction",
-            "name": "Document & Attachment Extraction",
-            "description": "Processes uploaded documents, log bundles, and image OCR evidence.",
-            "default_model": "fast-investigation",
-        },
-        {
-            "id": "router",
-            "name": "Project Specialist Routing",
-            "description": "Dispatches approved project specialist agents matching specific incident domains.",
-            "default_model": "balanced-investigation",
-        },
-        {
-            "id": "synthesis",
-            "name": "Final Root Cause Synthesis",
-            "description": "Produces grounded InvestigationResult JSON citing validated evidence IDs.",
-            "default_model": "high-reasoning-synthesis",
-        },
-    ]
+    # Share the builtin-to-stage mapping used by Harness compilation and agents.
+    profiles = request.app.state.platform.profiles
+    bindings = []
+    for definition in request.app.state.registry.list_all():
+        resolved = CapabilityResolver(request.app.state.registry).resolve(
+            definition.id, principal, check_health=False,
+        )
+        if resolved.is_authorized:
+            bindings.append(resolved.capability)
+    stage_definitions = []
+    for stage in dict.fromkeys(BUILTINS.values()):
+        model_stage = "triage" if stage in {"orchestrator", "router"} else stage
+        configured_bindings = []
+        for capability in bindings:
+            profile = profiles.profiles[capability.model_profile]
+            stage_id = getattr(profile, model_stage)
+            configured_bindings.append({
+                "capability": capability.id,
+                "binding_scope": "capability_default",
+                "harness_workspace_api": f"/api/v1/harness/workspace?capability={capability.id}",
+                "model_profile": capability.model_profile,
+                "stage_id": stage_id,
+                **profiles.stages[stage_id].model_dump(mode="json"),
+            })
+        stage_definitions.append({
+            "id": stage,
+            "name": stage.replace("_", " ").title(),
+            "description": f"Configured {stage} agent stage",
+            "default_model": configured_bindings[0]["model_profile"] if configured_bindings else None,
+            "agent_ids": [name for name, value in BUILTINS.items() if value == stage],
+            "bindings": configured_bindings,
+            "source": "config/model_profiles.yaml",
+            "content_hash": content_hash(configured_bindings),
+        })
+
+    managed_templates = await request.app.state.project_templates.list(principal.tenant_id)
+    selectable_templates = [{k: v for k, v in item.items() if k != "tenant_id"}
+                            for item in managed_templates if item["status"] == "published"]
+    bound = next((item for item in managed_templates if project and project.project_template
+                  and item["template_id"] == project.project_template.template_id
+                  and item["version"] == project.project_template.template_version), None)
+    template_document = bound["definition"] if bound else {"harness": {}}
 
     return {
         "generated_at": time.time(),
@@ -2630,13 +2722,15 @@ async def project_setup(request: Request, principal: Principal):
         "available_capabilities": available_capabilities,
         "available_skills": available_skills,
         "stage_definitions": stage_definitions,
-        "template_yaml": _PROJECT_SETUP_SAMPLE_YAML.format(
-            tenant_id=principal.tenant_id, project_id=principal.project_id
+        "project_template": await project_template_context(
+            request.app.state.project_templates, principal, project, request.app.state.harness.revision,
         ),
+        "project_templates": selectable_templates,
+        "template_yaml": yaml.safe_dump(template_document, sort_keys=False),
         "project_layer": project.model_dump(mode="json") if project else None,
         "template_snapshot": [
-            template.model_dump(mode="json")
-            for template in request.app.state.platform.connector_templates
+            _template_payload(template, parameters, visible_only=True)
+            for template in published
         ],
         "connector_fields": connector_fields,
         "project_file": {
@@ -2676,18 +2770,25 @@ async def save_project_setup(
             403,
             "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project configuration",
         )
-    valid, errors, warnings, validated = _validate_project_yaml(
-        payload.yaml, request, principal
-    )
-    if not valid:
-        raise HTTPException(
-            422,
-            detail=f"Project configuration failed platform policy validation: {'; '.join(errors)}",
+    from app.api.routes.harness import _lock
+    async with _lock(request):
+        valid, errors, warnings, validated = _validate_project_yaml(
+            payload.yaml, request, principal
         )
-    await _save_project_file(request, principal, payload.yaml)
-    request.app.state.registry.inheritance.projects[
-        (principal.tenant_id, principal.project_id)
-    ] = ProjectLayer.model_validate(validated)
+        if not valid:
+            raise HTTPException(
+                422,
+                detail=f"Project configuration failed platform policy validation: {'; '.join(errors)}",
+            )
+        persisted = load_yaml_data(payload.yaml) | {
+            "tenant_id": principal.tenant_id, "project_id": principal.project_id,
+        }
+        if validated.get("project_template"):
+            persisted["project_template"] = validated["project_template"]
+        await _save_project_file(request, principal, yaml.safe_dump(persisted, sort_keys=False))
+        request.app.state.registry.inheritance.projects[
+            (principal.tenant_id, principal.project_id)
+        ] = ProjectLayer.model_validate(persisted)
     return await project_setup(request, principal)
 
 

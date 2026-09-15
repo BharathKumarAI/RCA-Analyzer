@@ -1,10 +1,11 @@
 """Typed platform defaults and project overrides. Values never carry credentials."""
 
+from contextlib import AsyncExitStack
 import json
 import math
 import re
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
@@ -60,6 +61,13 @@ definitions = Table(
     Column("allowed_values", JSON().with_variant(JSONB, "postgresql"), nullable=True),
     Column("scope", String(16), nullable=False, default="platform"),
     Column("icon", String(64), nullable=False),
+    Column("label", String(256), nullable=True),
+    Column("section", String(64), nullable=True),
+    Column("display_order", Integer, nullable=True),
+    Column("is_required", Boolean, nullable=False, default=False),
+    Column("ownership", String(32), nullable=False, default="runtime"),
+    Column("validation_rules", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("runtime_binding", String(128), nullable=True),
     Column("revision", Integer, nullable=False),
     Column("updated_at", Float, nullable=False),
     CheckConstraint(
@@ -71,10 +79,13 @@ definitions = Table(
 overrides = Table(
     "parameter_overrides",
     metadata,
-    Column("tenant_id", String(256), primary_key=True),
-    Column("project_id", String(256), primary_key=True),
-    Column("tool", String(64), primary_key=True),
-    Column("variable_name", String(64), primary_key=True),
+    Column("override_id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", String(256), nullable=False),
+    Column("project_id", String(256), nullable=False),
+    Column("tool", String(64), nullable=False),
+    Column("variable_name", String(64), nullable=False),
+    Column("instance_id", String(128), nullable=True),
+    Column("environment_id", String(64), nullable=True),
     Column("value", JSON().with_variant(JSONB, "postgresql"), nullable=False),
     Column("revision", Integer, nullable=False),
     Column("updated_at", Float, nullable=False),
@@ -92,6 +103,17 @@ overrides = Table(
     ),
     CheckConstraint("revision > 0"),
     schema="project",
+)
+system_configurations = Table(
+    "system_configurations",
+    metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("config_type", String(64), primary_key=True),
+    Column("config_key", String(128), primary_key=True),
+    Column("content_json", JSON().with_variant(JSONB, "postgresql"), nullable=False),
+    Column("revision", Integer, nullable=False, default=1),
+    Column("updated_at", Float, nullable=False),
+    schema="platform",
 )
 audit = Table(
     "parameter_audit",
@@ -153,7 +175,7 @@ def _normalize_parameter_name(raw: str) -> str:
 def _resolve_secret_variable(template: ConnectorTemplate, connector_options) -> str | None:
     if template.secret_variable:
         return template.secret_variable
-    options = connector_options.get(template.system_name, {})
+    options = (connector_options or {}).get(template.system_name, {})
     if not isinstance(options, dict):
         options = options.model_dump() if hasattr(options, "model_dump") else {}
     secrets = options.get("secrets", {})
@@ -493,6 +515,13 @@ class ParameterDefinition(BaseModel):
     allowed_values: list[Any] | None = Field(default=None)
     scope: Literal["platform", "project", "platform_only"] | None = None
     icon: str = Field(default="settings", pattern=r"^[a-z0-9_-]{1,64}$")
+    label: str | None = Field(default=None, max_length=256)
+    section: str | None = Field(default=None, max_length=64)
+    display_order: int | None = Field(default=None)
+    is_required: bool = False
+    ownership: str = Field(default="runtime", max_length=32)
+    validation_rules: dict[str, Any] | None = Field(default=None)
+    runtime_binding: str | None = Field(default=None, max_length=128)
     expected_revision: int = Field(default=0, ge=0)
 
     @model_validator(mode="before")
@@ -528,11 +557,24 @@ class ParameterDefinition(BaseModel):
         return self
 
 
+class TemplateParameterChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    value: Any
+    expected_revision: int = Field(ge=0)
+
+
+class TemplateParameterChanges(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    changes: dict[str, TemplateParameterChange] = Field(min_length=1, max_length=64)
+
+
 class ParameterOverride(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     value: Any
     expected_revision: int = Field(ge=0)
     expected_definition_revision: int = Field(ge=1)
+    instance_id: str | None = Field(default=None, max_length=128)
+    environment_id: str | None = Field(default=None, max_length=64)
 
 
 class ParameterConflict(ValueError):
@@ -558,6 +600,13 @@ class ParameterStore:
 
     @staticmethod
     def runtime_value(tool, name, value):
+        if tool == "itsm" and name == "custom_field_mapping":
+            from app.connectors.providers.jira import validate_custom_field_mapping
+
+            validate_custom_field_mapping(value)
+        if tool == "itsm" and name == "custom_jql":
+            if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 and c not in "\n\t\r" for c in value):
+                raise ValueError("Custom JQL must be text of at most 4096 characters")
         if tool == "runtime":
             if name not in RUNTIME_FIELDS:
                 raise ValueError("This setting is deployment-managed")
@@ -615,7 +664,7 @@ class ParameterStore:
             )
         )
 
-    async def define(self, p, tool, name, definition):
+    async def define(self, p, tool, name, definition, *, connection=None):
         if Role.PLATFORM_ADMIN not in p.roles:
             raise PermissionError("Platform administrator required")
         definition = ParameterDefinition.model_validate(definition.model_dump())
@@ -631,7 +680,8 @@ class ParameterStore:
         revision = definition.expected_revision + 1
         values.update(revision=revision, updated_at=time.time())
         try:
-            async with self.engine.begin() as c:
+            async with AsyncExitStack() as stack:
+                c = connection if connection is not None else await stack.enter_async_context(self.engine.begin())
                 row = (
                     await c.execute(select(definitions).where(*key).with_for_update())
                 ).first()
@@ -810,13 +860,26 @@ class ParameterStore:
                     ).values(default_value=value, revision=revision, updated_at=time.time()))
                 await self.record(c, p, "runtime", name, "define", revision)
 
-    async def set_override(self, p, tool, name, body):
+    async def set_override(
+        self,
+        p,
+        tool,
+        name,
+        body,
+        *,
+        instance_id: Optional[str] = None,
+        environment_id: Optional[str] = None,
+    ):
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
             Role.PROJECT_OWNER,
         }:
             raise PermissionError("Project owner or administrator required")
         body = ParameterOverride.model_validate(body.model_dump())
+        target_instance_id = instance_id if instance_id is not None else body.instance_id
+        target_environment_id = (
+            environment_id if environment_id is not None else body.environment_id
+        )
         self.native_connection_edit(p, tool, name, body.value)
         try:
             async with self.engine.begin() as c:
@@ -844,9 +907,22 @@ class ParameterStore:
                     )
                 self.validate_definition_values(definition, body.value)
                 self.runtime_value(tool, name, body.value)
+
+                inst_cond = (
+                    overrides.c.instance_id == target_instance_id
+                    if target_instance_id is not None
+                    else overrides.c.instance_id.is_(None)
+                )
+                env_cond = (
+                    overrides.c.environment_id == target_environment_id
+                    if target_environment_id is not None
+                    else overrides.c.environment_id.is_(None)
+                )
                 key = (
                     *self.key(overrides, p.tenant_id, tool, name),
                     overrides.c.project_id == p.project_id,
+                    inst_cond,
+                    env_cond,
                 )
                 current = (await c.execute(select(overrides).where(*key))).first()
                 if (current.revision if current else 0) != body.expected_revision:
@@ -868,7 +944,11 @@ class ParameterStore:
                     or 0
                 ) + 1
                 values = dict(
-                    value=body.value, revision=revision, updated_at=time.time()
+                    value=body.value,
+                    revision=revision,
+                    updated_at=time.time(),
+                    instance_id=target_instance_id,
+                    environment_id=target_environment_id,
                 )
                 if current:
                     result = await c.execute(
@@ -893,7 +973,16 @@ class ParameterStore:
             raise ParameterConflict("Override revision changed") from None
         return {"revision": revision}
 
-    async def reset_override(self, p, tool, name, expected_revision):
+    async def reset_override(
+        self,
+        p,
+        tool,
+        name,
+        expected_revision,
+        *,
+        instance_id: Optional[str] = None,
+        environment_id: Optional[str] = None,
+    ):
         if not set(p.roles) & {
             Role.PLATFORM_ADMIN,
             Role.PROJECT_OWNER,
@@ -918,11 +1007,24 @@ class ParameterStore:
                 )
             if definition is not None and not definition.enabled:
                 raise PermissionError("Disabled parameter is immutable")
+
+            inst_cond = (
+                overrides.c.instance_id == instance_id
+                if instance_id is not None
+                else overrides.c.instance_id.is_(None)
+            )
+            env_cond = (
+                overrides.c.environment_id == environment_id
+                if environment_id is not None
+                else overrides.c.environment_id.is_(None)
+            )
             result = await c.execute(
                 delete(overrides).where(
                     *self.key(overrides, p.tenant_id, tool, name),
                     overrides.c.project_id == p.project_id,
                     overrides.c.revision == expected_revision,
+                    inst_cond,
+                    env_cond,
                 )
             )
             if result.rowcount != 1:
@@ -931,13 +1033,110 @@ class ParameterStore:
                 c, p, tool, name, "reset", expected_revision, p.project_id
             )
 
+    async def save_template_defaults(
+        self, p, tool: str, payload: TemplateParameterChanges,
+        connector_templates: tuple[ConnectorTemplate, ...], connector_options=None,
+    ) -> dict[str, dict[str, int]]:
+        """Save a form atomically using the same validation and audit path as single edits."""
+        if Role.PLATFORM_ADMIN not in p.roles:
+            raise PermissionError("Platform administrator required")
+        payload = TemplateParameterChanges.model_validate(payload.model_dump())
+        rows = await self.template_defaults(p.tenant_id, connector_templates, connector_options)
+        available = {row["variable_name"]: row for row in rows if row["tool"] == tool}
+        if payload.changes.keys() - available.keys():
+            raise ValueError("Only declared shared template parameters may be saved")
+        fields = self.shared_fields(connector_templates)
+        revisions = {}
+        async with self.engine.begin() as connection:
+            # Stable lock order prevents two forms from locking the same rows in reverse.
+            for name, change in sorted(payload.changes.items()):
+                row = available[name]
+                fields[(tool, name)].validate_parameter_value(change.value)
+                definition = ParameterDefinition.model_validate({
+                    key: row[key] for key in ParameterDefinition.model_fields
+                    if key in row and key not in {"default_value", "expected_revision"}
+                } | {"default_value": change.value, "expected_revision": change.expected_revision})
+                revisions[name] = await self.define(p, tool, name, definition, connection=connection)
+        return revisions
+
+    @staticmethod
+    def shared_fields(connector_templates):
+        fields = {}
+        for template in connector_templates:
+            if not template.platform_enabled or not template.is_enabled_by_policy:
+                continue
+            for field in template.parameter_fields:
+                if not field.template_editable:
+                    continue
+                key = (template.system_name, field.variable_name)
+                previous = fields.get(key)
+                contract = ("value_type", "allowed_values", "minimum", "maximum", "max_length", "allow_project_override")
+                if previous and any(getattr(previous, name) != getattr(field, name) for name in contract):
+                    raise ParameterConflict("Published versions have incompatible shared parameter contracts")
+                fields[key] = field
+        return fields
+
+    @staticmethod
+    def apply_instance_defaults(instance, rows, template):
+        """Resolve safe runtime controls without modifying scope or credentials."""
+        values = {row["variable_name"]: row for row in rows if row["tool"] == template.system_name}
+        definition = dict(instance.get("definition_json") or {})
+        nested = definition.get("parameters") or {}
+        if not isinstance(nested, dict):
+            raise ValueError("Connector parameters must be an object")
+        for field in template.parameter_fields:
+            if not field.template_editable or field.variable_name not in {
+                "timeout_seconds", "max_results", "max_response_bytes", "max_window_seconds", "custom_field_mapping",
+            }:
+                continue
+            name = field.variable_name
+            row = values.get(name)
+            if row is not None and not row["enabled"]:
+                raise PermissionError("A required connector parameter is disabled")
+            inherited = row["effective_value"] if row is not None else field.default_value
+            value = definition.get(name, nested.get(name, inherited))
+            if not (row.get("allow_project_override", field.allow_project_override) if row is not None else field.allow_project_override) and value != inherited:
+                raise PermissionError("Connector instance overrides a platform-locked parameter")
+            field.validate_parameter_value(value)
+            ParameterStore.runtime_value(template.system_name, name, value)
+            definition[name] = value
+        return {**instance, "definition_json": definition}
+
+    async def template_defaults(self, tenant, connector_templates, connector_options=None):
+        """Shared controls use declared metadata, never instance or override values."""
+        from app.configuration.connector_governance import governed_templates
+        connector_templates = await governed_templates(self.engine, tenant, connector_templates)
+        fields = self.shared_fields(connector_templates)
+        rows = await self.resolve(tenant, None, connector_templates, connector_options)
+        result = []
+        for row in rows:
+            field = fields.get((row["tool"], row["variable_name"]))
+            if field is None:
+                continue
+            if row["value_type"] != field.value_type or row["allow_project_override"] != field.allow_project_override:
+                raise ParameterConflict("Stored parameter definition differs from the published contract")
+            field.validate_parameter_value(row["default_value"])
+            result.append({key: value for key, value in dict(
+                row, effective_value=row["default_value"], source="platform",
+                effective_state="SET" if row["enabled"] else "DISABLED",
+                label=field.label or field.variable_name,
+                minimum=field.minimum, maximum=field.maximum, max_length=field.max_length,
+                runtime_binding=field.runtime_binding,
+            ).items() if key not in {"tenant_id", "project_id", "override_value", "override_revision"}})
+        return result
+
     async def resolve(
         self,
         tenant,
         project,
         connector_templates: tuple[ConnectorTemplate, ...] | tuple = (),
         connector_options=None,
+        *,
+        instance_id: Optional[str] = None,
+        environment_id: Optional[str] = None,
     ):
+        from app.configuration.connector_governance import governed_templates
+        connector_templates = await governed_templates(self.engine, tenant, connector_templates)
         template_rows: list[dict[str, Any]] = []
         if connector_templates:
             template_rows = _build_template_parameter_rows(
@@ -946,26 +1145,10 @@ class ParameterStore:
                 connector_options,
             )
         async with self.engine.connect() as c:
-            rows = (
+            def_rows = (
                 (
                     await c.execute(
-                        select(
-                            definitions,
-                            overrides.c.value.label("override_value"),
-                            overrides.c.revision.label("override_revision"),
-                        )
-                        .outerjoin(
-                            overrides,
-                            (
-                                (definitions.c.tenant_id == overrides.c.tenant_id)
-                                & (definitions.c.tool == overrides.c.tool)
-                                & (
-                                    definitions.c.variable_name
-                                    == overrides.c.variable_name
-                                )
-                                & (overrides.c.project_id == project)
-                            ),
-                        )
+                        select(definitions)
                         .where(definitions.c.tenant_id == tenant)
                         .order_by(definitions.c.tool, definitions.c.variable_name)
                     )
@@ -973,18 +1156,71 @@ class ParameterStore:
                 .mappings()
                 .all()
             )
+
+            override_rows = []
+            if project:
+                override_rows = (
+                    (
+                        await c.execute(
+                            select(overrides).where(
+                                overrides.c.tenant_id == tenant,
+                                overrides.c.project_id == project,
+                            )
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+
+        overrides_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for ov in override_rows:
+            k = (ov["tool"], ov["variable_name"])
+            overrides_by_key.setdefault(k, []).append(ov)
+
         resolved = []
         resolved_keys = set()
-        for row in rows:
-            has_override = bool(row["override_revision"])
+        for row in def_rows:
+            key = (row["tool"], row["variable_name"])
+            resolved_keys.add(key)
+
+            # 5-level precedence hierarchy
+            matched_override = None
+            match_level = 5
+            for ov in overrides_by_key.get(key, []):
+                o_inst = ov.get("instance_id")
+                o_env = ov.get("environment_id")
+                if (
+                    instance_id is not None
+                    and environment_id is not None
+                    and o_inst == instance_id
+                    and o_env == environment_id
+                ):
+                    matched_override = ov
+                    match_level = 1
+                    break
+                elif instance_id is not None and o_inst == instance_id and o_env is None:
+                    if match_level > 2:
+                        matched_override = ov
+                        match_level = 2
+                elif environment_id is not None and o_inst is None and o_env == environment_id:
+                    if match_level > 3:
+                        matched_override = ov
+                        match_level = 3
+                elif o_inst is None and o_env is None:
+                    if match_level > 4:
+                        matched_override = ov
+                        match_level = 4
+
+            has_override = matched_override is not None
             if has_override and row["scope"] != "project":
                 raise ValueError("Fixed parameter has an invalid override")
+
             if not row["enabled"]:
                 effective_value = None
                 effective_state = "DISABLED"
             else:
                 effective_value = (
-                    row["override_value"] if has_override else row["default_value"]
+                    matched_override["value"] if has_override else row["default_value"]
                 )
                 validate_value(row["value_type"], effective_value)
                 if (
@@ -996,23 +1232,36 @@ class ParameterStore:
                 effective_state = "SET" if has_override else (
                     "INHERIT" if row["scope"] == "project" else "SET"
                 )
-            key = (row["tool"], row["variable_name"])
-            resolved_keys.add(key)
+
             resolved.append(
                 dict(row)
                 | {
                     "main": row["tool"],
+                    "override_value": matched_override["value"] if has_override else None,
+                    "override_revision": matched_override["revision"] if has_override else None,
+                    "instance_id": matched_override.get("instance_id") if has_override else None,
+                    "environment_id": matched_override.get("environment_id") if has_override else None,
+                    "scope_level": match_level,
                     "effective_value": effective_value,
                     "effective_state": effective_state,
                     "source": "project" if has_override else "platform",
                     "project_visible": row["scope"] != "platform_only",
                     "scope": row["scope"],
+                    "label": row.get("label") or row["variable_name"],
+                    "section": row.get("section"),
+                    "display_order": row.get("display_order"),
+                    "is_required": row.get("is_required", False),
+                    "ownership": row.get("ownership", "runtime"),
+                    "validation_rules": row.get("validation_rules"),
+                    "runtime_binding": row.get("runtime_binding"),
                 }
             )
+
         for row in template_rows:
             key = (row["tool"], row["variable_name"])
             if key in resolved_keys:
                 continue
+            resolved_keys.add(key)
             validate_value(row["value_type"], row["default_value"])
             if row["allowed_values"] is not None and row["default_value"] not in row["allowed_values"]:
                 raise ValueError("Stored value is not in allowed_values")
@@ -1031,8 +1280,18 @@ class ParameterStore:
                     "subcategory": row["subcategory"],
                     "allowed_values": row["allowed_values"],
                     "icon": row["icon"],
+                    "label": row.get("label") or row["variable_name"],
+                    "section": row.get("section"),
+                    "display_order": row.get("display_order"),
+                    "is_required": row.get("is_required", False),
+                    "ownership": row.get("ownership", "runtime"),
+                    "validation_rules": row.get("validation_rules"),
+                    "runtime_binding": row.get("runtime_binding"),
                     "revision": 0,
                     "override_revision": None,
+                    "instance_id": None,
+                    "environment_id": None,
+                    "scope_level": 5,
                     "enabled": row["enabled"],
                     "effective_value": row["default_value"],
                     "effective_state": "INHERIT"

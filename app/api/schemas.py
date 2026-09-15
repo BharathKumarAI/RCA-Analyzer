@@ -3,6 +3,9 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 
+from app.runtime.run_contract import ConnectorSelection
+
+
 class RunExecutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     capability: str = Field(default="incident_triage", min_length=1, max_length=128)
@@ -10,6 +13,7 @@ class RunExecutionRequest(BaseModel):
     incident_id: str | None = Field(default=None, max_length=64)
     chat_id: str | None = Field(default=None, pattern=r"^chat_[0-9a-f]{32}$")
     attachment_ids: list[str] = Field(default_factory=list, max_length=100)
+    connector_selections: dict[str, ConnectorSelection] = Field(default_factory=dict, max_length=10)
 
 
 class DraftRequest(BaseModel):

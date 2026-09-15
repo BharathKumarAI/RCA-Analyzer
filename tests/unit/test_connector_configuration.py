@@ -20,7 +20,7 @@ def row(tool, variable_name, value, *, revision=1, override_revision=None):
     }
 
 
-def test_untouched_template_defaults_are_not_runtime_connector_values():
+def test_shared_limits_apply_without_retargeting_untouched_connection_defaults():
     defaults = [
         row("itsm", "endpoint", "https://sample.atlassian.net"),
         row("itsm", "service_user", "sample@example.test"),
@@ -28,7 +28,9 @@ def test_untouched_template_defaults_are_not_runtime_connector_values():
         row("log_search", "endpoint", "https://sample.splunk.test"),
         row("log_search", "timeout_seconds", 30),
     ]
-    assert configured_connector_values(defaults) == {}
+    assert configured_connector_values(defaults) == {
+        "itsm": {"timeout_s": 30}, "log_search": {"timeout_s": 30},
+    }
 
 
 def test_explicit_platform_edits_and_project_overrides_map_only_native_fields():
@@ -150,4 +152,3 @@ async def test_build_connectors_passes_saved_runtime_values_to_native_providers(
         assert splunk.max_response_bytes == 3_000_000
         assert splunk.max_results == 250
         assert splunk.max_window_seconds == 7_200
-

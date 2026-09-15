@@ -1,0 +1,87 @@
+type: kubernetes
+name: Kubernetes Cluster Health
+system_name: kubernetes
+category: Infrastructure
+description: Read pod status in the configured Kubernetes namespace. Identify unhealthy
+  conditions, restart counts and scheduling failures from returned status. Never
+  read secrets, execute in containers or modify workloads.
+integration_kind: native
+protocol: HTTPS
+auth_method: Service Account Token
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: kubernetes
+supported_operations:
+- read_evidence
+known_limitations:
+- Namespace-scoped pod status only; reading secrets, container exec, and workload
+  changes are blocked.
+auth_profiles:
+- id: k8s_service_account_token
+  name: Kubernetes Service Account Token (Bearer)
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - token_secret_ref
+  optional_fields:
+  - ca_bundle_ref
+  hidden_fields: []
+default_endpoint: https://kubernetes.default.svc
+default_secret: env://K8S_SERVICE_ACCOUNT_TOKEN
+default_scope: platform_default
+default_config:
+  environment_scoped: true
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: Kubernetes Cluster Health
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe

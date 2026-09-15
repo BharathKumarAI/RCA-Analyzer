@@ -1,0 +1,83 @@
+type: gitlab
+name: GitLab Source & Deployments
+system_name: gitlab
+category: DevOps
+description: Read recent deployments in the configured GitLab project. Correlate
+  deployment status and timestamps with the incident. Correlation does not establish
+  causality.
+integration_kind: native
+protocol: HTTPS
+auth_method: Personal Access Token
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: gitlab
+supported_operations:
+- read_evidence
+known_limitations:
+- Bounded recent deployment records only; pipelines and repository cloning are disabled.
+auth_profiles:
+- id: api_key_header
+  name: GitLab Private Token (PRIVATE-TOKEN)
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - api_key_secret_ref
+  optional_fields: []
+  hidden_fields: []
+default_endpoint: https://gitlab.<ORGANIZATION>.internal/api/v4
+default_secret: env://GITLAB_TOKEN
+default_scope: platform_default
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: GitLab Source & Deployments
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe

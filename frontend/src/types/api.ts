@@ -103,6 +103,10 @@ export interface ConnectorTemplateItem {
   supported_operations?: string[];
   known_limitations?: string[];
   auth_profiles?: ConnectorAuthProfileItem[];
+  /** Active profiles with a native provider implementation. */
+  native_auth_profile_ids?: string[];
+  runtime_support?: Array<{name: string; status: string; detail: string}>;
+  implemented_access_modes?: string[];
   default_endpoint: string;
   default_ui_base_url?: string;
   default_secret: string;
@@ -118,15 +122,55 @@ export interface ConnectorTemplateItem {
   default_config: Record<string, any>;
   default_mcp?: Record<string, any>;
   default_a2a?: Record<string, any>;
+  governance_revision?: number;
+  field_governance?: Array<{ variable_name: string; label: string; tier: GovernanceTier; editable_allowed: boolean; description: string }>;
+  shared_parameters?: ParameterDefinitionRow[];
+}
+
+export interface TemplateParameterChange {
+  value: unknown;
+  expected_revision: number;
+}
+
+export interface TemplateParameterChanges {
+  changes: Record<string, TemplateParameterChange>;
 }
 
 export interface EnvironmentBindingItem {
   project_env_id: string;
   tool_env_id?: string;
+  connection_id?: string | null;
   external_resource: string;
   credential_binding_id?: string;
   narrowing_filters_json?: Record<string, any>;
   status?: 'active' | 'inactive';
+}
+
+export interface EnvironmentConnectionItem {
+  connection_id: string;
+  connection_name: string;
+  environment_name: string;
+  enabled: boolean;
+  routing_mode: 'direct' | 'mcp' | 'hybrid';
+  auth_profile_id?: string;
+  target?: Record<string, any>;
+  credentials?: Record<string, any>;
+  mcp_configuration?: Record<string, any>;
+  resource_scope?: string[];
+  status?: string;
+  test_status?: 'PASSED' | 'FAILED' | 'PARTIAL' | 'NOT_RUN' | 'NOT_APPLICABLE' | 'NOT_INDEPENDENTLY_VERIFIED' | string;
+  last_tested_at?: number | null;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface ToolAccessRuleItem {
+  tool_id: string;
+  capability?: string;
+  access_route: 'direct' | 'mcp';
+  allowed_roles?: string[];
+  allowed_environments?: string[];
+  restricted_reason?: string;
 }
 
 export interface ProjectConnectorInstanceItem {
@@ -179,6 +223,8 @@ export interface ProjectConnectorInstanceItem {
   created_at?: number;
   updated_at?: number;
   bindings?: EnvironmentBindingItem[];
+  environment_connections?: EnvironmentConnectionItem[];
+  tool_access_rules?: ToolAccessRuleItem[];
 }
 
 export interface CandidateTestStageResult {
@@ -206,14 +252,22 @@ export interface ConnectorTemplateField {
   default_source?: 'static' | 'discovered' | 'computed' | 'none';
   required?: boolean;
   required_when?: string;
+  nullable?: boolean;
   visibility_condition?: { field: string; equals: unknown };
-  allowed_values?: string[];
+  allowed_values?: unknown[];
   allow_project_override: boolean;
   visible_in_project: boolean;
   ownership?: 'platform_locked' | 'project_override_allowed' | 'project_only' | 'derived' | 'secret_reference';
   category?: string;
   subcategory?: string;
   runtime_binding?: string;
+  template_editable?: boolean;
+  ui_control?: 'text' | 'textarea' | 'select' | 'multi_select' | 'toggle' | string;
+  unit?: string;
+  minimum?: number;
+  maximum?: number;
+  max_length?: number;
+  sensitivity?: 'normal' | 'masked' | 'secret_reference' | string;
   icon: string;
 }
 
@@ -407,6 +461,7 @@ export interface ToolDefinition {
   token_header_format?: string;
   project_key?: string;
   custom_config?: Record<string, any>;
+  actions?: string[];
   mcp_config?: {
     transport: 'sse' | 'stdio' | 'websocket' | 'streamable_http';
     command?: string;
@@ -437,6 +492,7 @@ export interface CapabilityItem {
   version?: string;
   description: string;
   stage_type?: string;
+  agent_stages?: string[];
   orchestrator?: string;
   model_profile?: string;
   max_steps?: number;
@@ -450,6 +506,9 @@ export interface CapabilityItem {
   optional?: {
     connectors?: string[];
   };
+  required_connectors?: string[];
+  optional_connectors?: string[];
+  agent_bindings?: Array<{ agent_id?: string; role?: string }>;
   permissions?: {
     minimum_role?: string;
     allowed_roles?: string[];

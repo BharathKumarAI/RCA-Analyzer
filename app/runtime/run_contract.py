@@ -22,12 +22,20 @@ def content_hash(value: object) -> str:
     )
 
 
+class ConnectorSelection(BaseModel):
+    """Opaque saved-record selectors; targets, credentials and scope stay server-owned."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    instance_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    environment_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     text: str = Field(min_length=1, max_length=16000)
     incident_id: str | None = Field(default=None, max_length=64)
     chat_id: str | None = Field(default=None, pattern=r"^chat_[0-9a-f]{32}$")
     attachment_ids: tuple[str, ...] = Field(default=(), max_length=100)
+    connector_selections: dict[str, ConnectorSelection] = Field(default_factory=dict, max_length=10)
 
 
 class RunContract(BaseModel):

@@ -44,16 +44,144 @@ Project specialists use a data-only YAML approval flow. See [agent lifecycle](do
 
 ## Local setup
 
+Install dependencies:
+
 ```bash
 uv sync --locked --extra dev
+```
+
+Deploy the local PostgreSQL instance and template configuration:
+
+```bash
 make db-deploy
-uv run python -m scripts.smoke_test
-uv run uvicorn main:app --reload --env-file .env --host 0.0.0.0 --port 8000
 ```
 
 The [local deployer](scripts/deploy_local_database.py) creates missing credentials in `.env` and `.env.runtime` and starts PostgreSQL on `127.0.0.1:5432` by default. Configure authentication before using protected endpoints.
 
 `RCA_MODE=demo` is offline and simulated; it must not be presented as a real diagnosis. Use `RCA_MODE=live` with trusted auth and connector configuration for live operation. `RCA_TENANT_ID` and `RCA_PROJECT_ID` define the single deployment scope. `RCA_PRINCIPALS_JSON` maps verified JWT subjects to server-side principals; request bodies cannot assign roles.
+
+## Database migrations
+
+Versioned SQL migrations are located in the [`migrations/`](migrations/) directory. Migrations run inside a transaction under a PostgreSQL advisory lock (`726320260911`) and verify SHA-256 checksums to guarantee schema immutability.
+
+- **Apply pending migrations:**
+  ```bash
+  make db-migrate
+  # Equivalent to: uv run python -m scripts.migrate
+  ```
+  Applies any unapplied `.sql` migrations sequentially using `RCA_MIGRATION_DATABASE_URL` (or `RCA_DATABASE_URL` from `.env`) and records each version in `platform.schema_migrations`.
+
+- **Initial deployment & role permission sync:**
+  ```bash
+  make db-deploy
+  # Equivalent to: uv run python -m scripts.deploy_local_database
+  ```
+  Ensures the PostgreSQL container is up, applies all migrations, runs MLflow tracking upgrades, provisions/syncs data permissions for the restricted runtime `rca_app` role across all schemas, and seeds baseline platform and project templates. If a newly created table causes `permission denied for table ...` on startup, re-run `make db-deploy` (or `uv run python -m scripts.deploy_database`) to grant permissions to `rca_app`.
+
+- **Recreate and re-migrate (clean database):**
+  ```bash
+  uv run python -m scripts.deploy_local_database --recreate
+  ```
+  Drops and recreates the database before running migrations and seeds; stored local blob files are retained.
+
+## Starting and stopping services
+
+RCA Analyzer consists of three core components:
+1. **PostgreSQL Database** (`127.0.0.1:5432`)
+2. **Backend API** (`127.0.0.1:8000`)
+3. **Frontend Admin Workspace** (`http://localhost:5173/admin/` in dev, or `http://localhost:8000/admin/` when built)
+
+### Option 1: Local development (Separate processes)
+
+#### Starting services
+
+1. **Database:**
+   ```bash
+   # Initialize credentials and start PostgreSQL (if not already running):
+   make db-deploy
+
+   # Or resume an existing container:
+   docker compose up -d postgres
+   ```
+
+2. **Backend API:**
+   ```bash
+   make dev
+   # Equivalent to: uv run uvicorn app.fast_api_app:app --reload --env-file .env --host 0.0.0.0 --port 8000
+   ```
+   Verify the API is running:
+   ```bash
+   curl http://127.0.0.1:8000/health
+   curl http://127.0.0.1:8000/ready
+   ```
+
+3. **Frontend Admin Workspace:**
+   ```bash
+   cd frontend
+   npm ci
+   RCA_API_TARGET=http://127.0.0.1:8000 npm run dev
+   ```
+   Open `http://localhost:5173/admin/` in your browser.
+
+*(Optional production build)*: To serve the frontend directly through the FastAPI backend without running Vite:
+```bash
+cd frontend && npm run build
+```
+The FastAPI backend will automatically mount and serve the built assets at `http://localhost:8000/admin/`.
+
+#### Stopping services
+
+- **Frontend:** Press `Ctrl+C` in the frontend terminal, or terminate the process on port 5173:
+  ```bash
+  lsof -ti :5173 | xargs kill
+  ```
+- **Backend API:** Press `Ctrl+C` in the backend terminal, or terminate the process on port 8000:
+  ```bash
+  lsof -ti :8000 | xargs kill
+  ```
+- **Database:**
+  ```bash
+  # Stop PostgreSQL container without removing stored data:
+  docker compose stop postgres
+
+  # Or stop and remove Compose containers:
+  docker compose down
+  ```
+
+---
+
+### Option 2: Full stack with Docker Compose
+
+#### Starting all services
+
+```bash
+make docker-up
+```
+This runs `make db-deploy` to ensure `.env.runtime` and database credentials exist, then builds and starts both `postgres` and `api` containers in detached mode.
+
+Verify container status:
+```bash
+docker compose ps
+curl http://127.0.0.1:8000/health
+```
+
+#### Stopping all services
+
+```bash
+make docker-down
+# Equivalent to: docker compose down
+```
+
+To pause containers without deleting them:
+```bash
+docker compose stop
+```
+
+To reset the database (recreate schemas while retaining local blob storage):
+```bash
+uv run python -m scripts.deploy_local_database --recreate
+```
+
 
 ## Verification and current boundaries
 

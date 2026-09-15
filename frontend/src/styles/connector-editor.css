@@ -1538,4 +1538,299 @@
   to { transform: rotate(360deg); }
 }
 
+/* ==========================================================================
+   Repeatable Environment Connections & Tool Access Matrix Styles
+   ========================================================================== */
+
+.prism-conn-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.prism-conn-table-wrap {
+  overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid var(--line, #2a3a4b);
+  background: var(--bg, #101820);
+  margin-bottom: 16px;
+}
+
+.prism-conn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.prism-conn-table th {
+  background: rgba(23, 35, 48, 0.95);
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #64748b);
+  text-align: left;
+  border-bottom: 1px solid var(--line, #2a3a4b);
+  white-space: nowrap;
+}
+
+.prism-conn-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(42, 58, 75, 0.4);
+  vertical-align: middle;
+}
+
+.prism-conn-table tr:last-child td {
+  border-bottom: none;
+}
+
+.prism-conn-table tr:hover td {
+  background: rgba(110, 164, 232, 0.03);
+}
+
+.prism-conn-name-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prism-conn-name-text {
+  font-weight: 600;
+  color: var(--tx, #f8fafc);
+}
+
+.prism-conn-id-sub {
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  color: var(--muted, #64748b);
+}
+
+.prism-conn-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.prism-conn-status.passed {
+  background: rgba(91, 192, 158, 0.12);
+  color: #5bc09e;
+  border: 1px solid rgba(91, 192, 158, 0.3);
+}
+
+.prism-conn-status.failed {
+  background: rgba(240, 120, 145, 0.12);
+  color: #f07891;
+  border: 1px solid rgba(240, 120, 145, 0.3);
+}
+
+.prism-conn-status.not-run {
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--muted, #64748b);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+}
+
+.prism-routing-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.prism-routing-tag.direct {
+  background: rgba(110, 164, 232, 0.12);
+  color: #6ea4e8;
+  border: 1px solid rgba(110, 164, 232, 0.25);
+}
+
+.prism-routing-tag.mcp {
+  background: rgba(212, 168, 83, 0.12);
+  color: #d4a853;
+  border: 1px solid rgba(212, 168, 83, 0.25);
+}
+
+.prism-routing-tag.hybrid {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+}
+
+.prism-conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prism-conn-btn {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.prism-conn-btn.test {
+  background: rgba(110, 164, 232, 0.1);
+  color: #6ea4e8;
+  border-color: rgba(110, 164, 232, 0.3);
+}
+
+.prism-conn-btn.test:hover:not(:disabled) {
+  background: rgba(110, 164, 232, 0.2);
+}
+
+.prism-conn-btn.enable {
+  background: rgba(91, 192, 158, 0.1);
+  color: #5bc09e;
+  border-color: rgba(91, 192, 158, 0.3);
+}
+
+.prism-conn-btn.enable.active {
+  background: rgba(91, 192, 158, 0.2);
+  border-color: #5bc09e;
+}
+
+.prism-conn-btn.disable {
+  background: rgba(100, 116, 139, 0.1);
+  color: var(--muted, #64748b);
+  border-color: rgba(100, 116, 139, 0.3);
+}
+
+.prism-conn-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Connection Form Card */
+.prism-conn-form-card {
+  border: 1px solid rgba(110, 164, 232, 0.3);
+  border-radius: 8px;
+  background: var(--card-subtle, #172330);
+  padding: 16px;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+.prism-conn-form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line, #2a3a4b);
+}
+
+.prism-conn-form-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--tx, #f8fafc);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prism-conn-form-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line, #2a3a4b);
+}
+
+/* Tool Access Matrix */
+.prism-tool-access-wrap {
+  overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid var(--line, #2a3a4b);
+  background: var(--bg, #101820);
+  margin: 12px 0 16px 0;
+}
+
+.prism-tool-access-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.prism-tool-access-table th {
+  background: rgba(23, 35, 48, 0.95);
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #64748b);
+  text-align: left;
+  border-bottom: 1px solid var(--line, #2a3a4b);
+  white-space: nowrap;
+}
+
+.prism-tool-access-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(42, 58, 75, 0.4);
+  vertical-align: middle;
+}
+
+.prism-policy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.prism-policy-badge.safe {
+  background: rgba(91, 192, 158, 0.12);
+  color: #5bc09e;
+  border: 1px solid rgba(91, 192, 158, 0.3);
+}
+
+.prism-policy-badge.blocked {
+  background: rgba(240, 120, 145, 0.12);
+  color: #f07891;
+  border: 1px solid rgba(240, 120, 145, 0.3);
+}
+
+.prism-policy-safeguard-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(240, 120, 145, 0.08);
+  border: 1px solid rgba(240, 120, 145, 0.3);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  color: var(--tx, #f8fafc);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.prism-policy-safeguard-banner strong {
+  color: #f07891;
+  font-size: 12.5px;
+  display: block;
+  margin-bottom: 2px;
+}
+
+
 

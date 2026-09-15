@@ -4,7 +4,7 @@
 
 Use Google ADK native `LlmAgent`, `Workflow`, `JoinNode`, `AgentTool`, `FunctionTool`, `Runner`, `Session`, and `Event` classes. Do not add LangChain. The request path is FastAPI -> authenticated settings/scope -> capability resolution -> SQLAlchemy run/session persistence -> ADK root workflow.
 
-Keep network and credentials in [app/connectors/providers](app/connectors/providers); expose typed ADK tools under [app/tools/domain](app/tools/domain). Current live connectors are read-only Jira and Splunk. Database querying is disabled until its connector is implemented.
+Keep network and credentials in [app/connectors/providers](app/connectors/providers); expose typed ADK tools under [app/tools/domain](app/tools/domain). Current live connectors are strictly read-only Jira (Cloud REST v3 with cursor pagination, budgeted ADF traversal, and project-scoped JQL) and Splunk. Database querying and Jira write mutations (issue creation, updates, deletions) are unsupported.
 
 ## Security and inputs
 
@@ -14,7 +14,7 @@ Attachments are local-only and bounded. Do not add remote URL fetching, macros, 
 
 ## Changes
 
-Capabilities remain declarative YAML in [capabilities](blob_local/platform/capabilities). Stage model names and limits belong in [config/model_profiles.yaml](blob_local/platform/config/model_profiles.yaml). Persist runs and evidence through the async SQLAlchemy store. There is no durable background worker or recovery contract in this release.
+All durable configurations (model profiles, capabilities, stage prompts, file limits, connector templates, and parameter definitions) are managed and resolved database-first via `platform.system_configurations` and `platform.parameter_definitions`. The 5-level deterministic scope precedence hierarchy (`project + instance + env` -> `project + instance` -> `project + env` -> `project-wide` -> `platform default`) uses explicit nullable foreign-key columns without invented fallback defaults. Persist runs and evidence through the async SQLAlchemy store. There is no durable background worker or recovery contract in this release.
 
 Custom agent YAML is submitted through `/api/v1/agent-configurations`, validated against the data-only definition model, and stored by content hash in the local blob store or configured GCS bucket. Only a same-scope administrator other than the author can approve it; the orchestrator sees approved definitions only. Keep `instruction` data-only, allow only existing tool names, and preserve expected-hash review checks. Revoke active definitions when needed.
 

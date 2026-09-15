@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import ts from '../frontend/node_modules/typescript/lib/typescript.js';
+const source = await fs.readFile(new URL('../frontend/src/services/api.ts', import.meta.url), 'utf8');
+const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
+const api = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
+// Exercise the persistence-column/public-payload boundary and invalidate test evidence on edit.
+const normalized = api.normalizeEnvironmentConnection({ connection_id: 'qa', connection_name: 'QA', environment_name: 'qa', routing_mode: 'direct', target_json: { endpoint: 'https://qa.example.test' }, credentials_json: { token_secret_ref: 'env://QA_TOKEN' }, resource_scope_json: ['QA'], mcp_configuration_json: {}, enabled: true, status: 'active', test_status: 'PASSED', last_tested_at: 123 });
+assert.deepEqual(normalized.target, { endpoint: 'https://qa.example.test' });
+assert.equal(normalized.credentials.token_secret_ref, 'env://QA_TOKEN');
+assert.equal(normalized.test_status, 'passed');
+const draft = api.environmentConnectionDraft(normalized);
+assert.equal(draft.enabled, false);
+assert.equal(draft.status, 'draft');
+assert.equal(draft.test_status, 'not_tested');
+assert.equal(draft.last_tested_at, null);
+assert.deepEqual(draft.resource_scope, ['QA']);
+assert.ok(!('target_json' in draft));
+assert.ok(!('updated_at' in draft));
+assert.deepEqual(api.environmentConnectionDraft({}).resource_scope, []);

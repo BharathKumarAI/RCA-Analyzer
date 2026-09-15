@@ -1,6 +1,6 @@
 import type {
   Principal, AgentConfiguration, Run, ToolDefinition, AuditLog, SystemHealth, SystemDiagnostics, CapabilityItem, ConnectorTemplateItem, RuntimeConfig,
-  ProjectConnectorInstanceItem, CandidateTestResponse,
+  ProjectConnectorInstanceItem, CandidateTestResponse, EnvironmentConnectionItem,
   ConnectorsHealthResponse, AlertsResponse, NotificationsResponse, ProjectSetupResponse,
   ParameterDefinitionRow,
   ConnectorHealthRecord, SkillItem, SkillSaveResponse, ProjectValidationResult, ConnectionTestResponse,
@@ -8,7 +8,7 @@ import type {
   UserItem, UserPayload, RoleItem, RolePayload, BillingConfig, BillingPayload,
   PolicyConfig, FileLimitsConfig, CleanupResult, KnowledgeItem, KnowledgePayload,
   RuntimeStageItem, RuntimeStagePayload, CustomAlertPayload, AlertConfig, PlatformSettingsConfig,
-  ProjectRedactionPolicy, RedactionPreviewResponse
+  ProjectRedactionPolicy, RedactionPreviewResponse, TemplateParameterChanges
 } from '../types/api';
 // Session credentials stay in memory; discard storage left by older builds.
 let inMemoryToken: string | null = null;
@@ -26,7 +26,15 @@ export async function request<T>(path: string, options: ApiRequestOptions = {}):
   const headers = new Headers(options.headers); headers.set('Accept', 'application/json'); if (inMemoryToken) headers.set('Authorization', `Bearer ${inMemoryToken}`);
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) { headers.set('Content-Type', 'application/json'); options = { ...options, body: JSON.stringify(options.body) }; }
   const { body, ...requestInit } = options;
-  let response: Response; try { response = await fetch(path, { ...requestInit, headers, body: body as BodyInit | null | undefined }); } catch (error) { throw new ApiError(0, error instanceof Error ? error.message : 'Network request failed'); }
+  let response: Response;
+  try {
+    response = await fetch(path, { ...requestInit, headers, body: body as BodyInit | null | undefined });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    throw new ApiError(0, timedOut
+      ? 'The server did not respond. Check that the backend is running, then try connecting again.'
+      : error instanceof Error ? error.message : 'Network request failed');
+  }
   if (!response.ok) { let detail: unknown = null; try { detail = await response.clone().json(); } catch { detail = response.statusText; } const value = detail && typeof detail === 'object' && 'detail' in detail ? (detail as { detail: unknown }).detail : detail;
     const message = typeof value === 'string' ? value : Array.isArray(value) ? value.map(item => item && typeof item === 'object' && 'msg' in item ? `${Array.isArray(item.loc) ? item.loc.join('.') + ': ' : ''}${item.msg}` : JSON.stringify(item)).join('; ') : `HTTP ${response.status}`; throw new ApiError(response.status, message, detail); }
   return response.status === 204 ? null as T : response.json() as Promise<T>;
@@ -34,7 +42,9 @@ export async function request<T>(path: string, options: ApiRequestOptions = {}):
 function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run_id, mode: raw.mode, result: raw.result, capability: raw.capability, prompt: result?.summary || raw.reason || '', status: raw.status === 'SUCCEEDED' ? 'COMPLETED' : raw.status, created_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', completed_at: raw.updated_at ? new Date(raw.updated_at * 1000).toISOString() : undefined, duration_seconds: raw.created_at && raw.updated_at ? Math.max(0, raw.updated_at - raw.created_at) : undefined, stages: raw.stage ? [{ name: raw.stage, status: raw.status === 'RUNNING' ? 'running' : 'completed', agent: raw.stage, duration_ms: 0 }] : [], evidence_count: raw.evidence_count ?? 0, findings: result?.summary || raw.reason, raw }; }
 function mapAgent(raw: any): AgentConfiguration { const d = raw.definition || raw; return { id: raw.draft_id || d.id, name: d.name, role: 'Specialist', description: d.description || '', status: raw.status === 'APPROVED' ? 'active' : raw.status === 'PENDING' ? 'pending' : raw.status === 'REVOKED' ? 'deprecated' : 'draft', model: d.model_profile || d.stage_model || 'configured', temperature: 0, thinking_budget: 0, max_steps: 0, tools: [...(d.tools || [])], permissions: [], rag_sources: [], prompt: d.instruction || '', accuracy: 0, hallucination_rate: 0, avg_latency_sec: 0, version: d.version || '', updated_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', author: raw.author_subject, content_hash: raw.content_hash, approved_by: raw.reviewer_subject, rejection_reason: raw.review_reason }; }
 export async function fetchHealth(): Promise<SystemHealth> { const started = performance.now(); const data = await request<any>('/api/v1/health'); return { status: data.status, latency_ms: Math.round(performance.now() - started), tenant_id: data.tenant_id, project_id: data.project_id, mode: data.mode, active_runs: data.active_runs, total_runs: data.total_runs, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 }; }
-export async function fetchPrincipal(): Promise<Principal> { return request<Principal>('/api/v1/me'); }
+export async function fetchPrincipal(): Promise<Principal> {
+  return request<Principal>('/api/v1/me', { signal: AbortSignal.timeout(15_000) });
+}
 export async function fetchProjectRedaction(): Promise<ProjectRedactionPolicy> {
   return request<ProjectRedactionPolicy>('/api/v1/project/redaction');
 }
@@ -71,23 +81,69 @@ export async function publishConnectorTemplate(id: string, version = '1.0.0'): P
 export async function deprecateConnectorTemplate(id: string, version = '1.0.0'): Promise<any> {
   return request(`/api/v1/connectors/templates/${encodeURIComponent(id)}/deprecate?version=${encodeURIComponent(version)}`, { method: 'POST' });
 }
+function normalizeConnectorInstance(row: ProjectConnectorInstanceItem): ProjectConnectorInstanceItem {
+  return { ...row, environment_connections: row.environment_connections?.map(connection => normalizeEnvironmentConnection(connection as EnvironmentConnectionItem & Record<string, unknown>)) };
+}
 export async function fetchProjectConnectors(projectId: string): Promise<ProjectConnectorInstanceItem[]> {
-  return request<ProjectConnectorInstanceItem[]>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`);
+  return (await request<ProjectConnectorInstanceItem[]>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`)).map(normalizeConnectorInstance);
 }
 export async function getProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
-  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}`);
+  return normalizeConnectorInstance(await request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}`));
 }
 export async function saveProjectConnector(projectId: string, payload: any): Promise<ProjectConnectorInstanceItem> {
-  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`, { method: 'POST', body: payload });
+  return normalizeConnectorInstance(await request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors`, { method: 'POST', body: payload }));
 }
 export async function enableProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
-  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/enable`, { method: 'POST' });
+  return normalizeConnectorInstance(await request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/enable`, { method: 'POST' }));
 }
 export async function disableProjectConnector(projectId: string, instanceId: string): Promise<ProjectConnectorInstanceItem> {
-  return request<ProjectConnectorInstanceItem>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/disable`, { method: 'POST' });
+  return normalizeConnectorInstance(await request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/disable`, { method: 'POST' }));
 }
 export async function deleteProjectConnector(projectId: string, instanceId: string): Promise<{ status: string; instance_id: string }> {
   return request<{ status: string; instance_id: string }>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}`, { method: 'DELETE' });
+}
+// Database records use *_json columns; forms use the public payload names.
+export function normalizeEnvironmentConnection(row: EnvironmentConnectionItem & Record<string, unknown>): EnvironmentConnectionItem {
+  return { ...row,
+    target: (row.target ?? row.target_json) as Record<string, unknown> | undefined,
+    credentials: (row.credentials ?? row.credentials_json) as Record<string, unknown> | undefined,
+    mcp_configuration: (row.mcp_configuration ?? row.mcp_configuration_json) as Record<string, unknown> | undefined,
+    resource_scope: (row.resource_scope ?? row.resource_scope_json) as string[] | undefined,
+    test_status: row.test_status?.toLowerCase(),
+  };
+}
+export function environmentConnectionDraft(row: Partial<EnvironmentConnectionItem>) {
+  return {
+    connection_id: row.connection_id, connection_name: row.connection_name,
+    environment_name: row.environment_name, routing_mode: row.routing_mode,
+    auth_profile_id: row.auth_profile_id || null, target: row.target || {},
+    credentials: row.credentials || {}, mcp_configuration: row.mcp_configuration || {},
+    resource_scope: row.resource_scope || [], enabled: false, status: 'draft',
+    test_status: 'not_tested', last_tested_at: null,
+  };
+}
+export async function listEnvironmentConnections(projectId: string, instanceId: string): Promise<EnvironmentConnectionItem[]> {
+  const rows = await request<Array<EnvironmentConnectionItem & Record<string, unknown>>>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/connections`);
+  return rows.map(normalizeEnvironmentConnection);
+}
+export async function saveEnvironmentConnection(projectId: string, instanceId: string, payload: Partial<EnvironmentConnectionItem>): Promise<EnvironmentConnectionItem> {
+  const row = await request<EnvironmentConnectionItem & Record<string, unknown>>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/connections`, {
+    method: 'POST', body: environmentConnectionDraft(payload),
+  });
+  return normalizeEnvironmentConnection(row);
+}
+export async function deleteEnvironmentConnection(projectId: string, instanceId: string, connectionId: string): Promise<{ status: string; connection_id: string }> {
+  return request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
+}
+export async function testEnvironmentConnection(projectId: string, instanceId: string, connectionId: string): Promise<CandidateTestResponse> {
+  return request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/connections/${encodeURIComponent(connectionId)}/test`, { method: 'POST' });
+}
+export async function testSavedProjectConnector(projectId: string, instanceId: string): Promise<CandidateTestResponse> {
+  return request(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/test`, { method: 'POST' });
+}
+export async function enableEnvironmentConnection(projectId: string, instanceId: string, connectionId: string, enabled: boolean): Promise<EnvironmentConnectionItem> {
+  const row = await request<EnvironmentConnectionItem & Record<string, unknown>>(`/api/v1/projects/${encodeURIComponent(projectId)}/connectors/${encodeURIComponent(instanceId)}/connections/${encodeURIComponent(connectionId)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
+  return normalizeEnvironmentConnection(row);
 }
 export async function validateConnectorCandidate(candidate: Record<string, any>): Promise<{ valid: boolean; errors: string[]; candidate_hash: string }> {
   return request('/api/v1/connectors/validate', { method: 'POST', body: { candidate } });
@@ -191,7 +247,19 @@ export async function updateUiSettings(payload: Omit<import('../types/api').UiSe
 }
 
 export async function fetchConfig(): Promise<RuntimeConfig> { return request<RuntimeConfig>('/api/v1/config'); }
-export async function fetchParameters(view?: 'project'): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>(view ? `/api/v1/parameters?view=${view}` : '/api/v1/parameters'); }
+export async function fetchParameters(view?: 'project' | 'template'): Promise<ParameterDefinitionRow[]> { return request<ParameterDefinitionRow[]>(view ? `/api/v1/parameters?view=${view}` : '/api/v1/parameters'); }
+export async function saveTemplateParameters(
+  tool: string,
+  body: TemplateParameterChanges
+): Promise<Record<string, { revision: number }>> {
+  return request<Record<string, { revision: number }>>(
+    `/api/v1/parameters/${encodeURIComponent(tool)}/template`,
+    {
+      method: 'PUT',
+      body,
+    }
+  );
+}
 export async function fetchParameterTaxonomy(): Promise<Record<string, string[]>> {
   const res = await request<{ categories: Record<string, string[]> }>('/api/v1/parameters/taxonomy');
   return res.categories;
@@ -324,5 +392,11 @@ export async function previewMcpImport(source: string, format: 'json' | 'command
 export async function setProjectAvailability(kind: 'connectors' | 'capabilities', id: string, enabled: boolean, expectedEnabled: boolean): Promise<void> {
   await request(`/api/v1/project/availability/${kind}/${encodeURIComponent(id)}`, {
     method: 'PUT', body: { enabled, expected_enabled: expectedEnabled },
+  });
+}
+
+export async function saveConnectorFieldGovernance(templateId: string, revision: number, fields: Record<string, import('../types/api').GovernanceTier>): Promise<{ revision: number }> {
+  return request(`/api/v1/connectors/templates/${encodeURIComponent(templateId)}/field-governance`, {
+    method: 'PUT', body: { expected_revision: revision, fields },
   });
 }

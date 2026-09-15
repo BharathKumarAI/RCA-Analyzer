@@ -1,0 +1,177 @@
+type: unix
+name: Unix
+system_name: unix
+category: Infrastructure
+description: Bounded log tail via native SFTP or approved MCP evidence snapshot.
+  Report service status and supplied log observations. Never request arbitrary shell
+  commands, scripts, file writes or service restarts.
+integration_kind: native
+protocol: SFTP/SSH
+auth_method: SSH Private Key (PuTTY-compatible)
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: unix
+supported_operations:
+- read_evidence
+known_limitations:
+- Bounded SFTP log tail only; arbitrary shell execution, scripts, and service restarts
+  are blocked.
+- PuTTY sessions use standard SSH. Export PPK keys to OpenSSH or PKCS8 before registering the managed key file; PPK is not decoded directly.
+auth_profiles:
+- id: ssh_private_key
+  name: SSH Private Key
+  status: active
+  transport_compatibility: SFTP
+  required_fields:
+  - username
+  - private_key_ref
+  - known_hosts_ref
+  optional_fields:
+  - private_key_passphrase_ref
+  hidden_fields:
+  - password_secret_ref
+- id: ssh_password
+  name: SSH Password
+  status: active
+  transport_compatibility: SFTP
+  required_fields:
+  - username
+  - password_secret_ref
+  - known_hosts_ref
+  optional_fields: []
+  hidden_fields:
+  - private_key_ref
+  - private_key_passphrase_ref
+default_endpoint: sftp://<UNIX_HOST>:22
+default_secret: env://SSH_PRIVATE_KEY
+default_scope: platform_default
+default_config:
+  environment_scoped: true
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined system name. Defaults to Unix; enter Tuxedo here when that is the system being accessed.
+  value_type: string
+  default_value: Unix
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe
+- variable_name: host
+  label: SSH Host
+  description: Approved Unix host resource used for the bounded SFTP connection.
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: connectivity
+  subcategory: endpoint
+  icon: server
+  runtime_binding: unix.host
+- variable_name: port
+  label: SSH Port
+  description: Approved SSH port for the PuTTY-compatible SFTP connection.
+  value_type: integer
+  default_value: 22
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: connectivity
+  subcategory: endpoint
+  icon: radio
+  runtime_binding: unix.port
+- variable_name: username
+  label: SSH Username
+  description: Account used by the bounded SFTP read.
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: identity
+  subcategory: service_account
+  icon: user
+  runtime_binding: unix.username
+- variable_name: private_key_ref
+  label: SSH Private Key Reference
+  description: Authorized managed OpenSSH or PKCS8 key file. Export PuTTY PPK keys to a supported format first; private key bytes never enter project configuration.
+  value_type: secret_ref
+  default_value: env://SSH_PRIVATE_KEY
+  allow_project_override: true
+  visible_in_project: true
+  ownership: secret_reference
+  sensitivity: secret_reference
+  category: security
+  subcategory: secret
+  icon: key
+  runtime_binding: unix.private_key_ref
+- variable_name: known_hosts_ref
+  label: Host Trust Reference
+  description: Authorized known-hosts or host-key binding used to verify the SSH server.
+  value_type: secret_ref
+  default_value: env://SSH_KNOWN_HOSTS
+  allow_project_override: true
+  visible_in_project: true
+  ownership: secret_reference
+  sensitivity: secret_reference
+  category: security
+  subcategory: secret
+  icon: shield
+  runtime_binding: unix.known_hosts_ref
+- variable_name: log_path
+  label: Approved Log Path
+  description: Absolute deployment-authorized path read through SFTP; shell commands are unavailable.
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: query
+  subcategory: path
+  icon: file
+  runtime_binding: unix.log_path

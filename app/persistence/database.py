@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 21
 
 SCHEMAS = ("runtime", "governance", "optimization", "platform", "project", "adk")
 

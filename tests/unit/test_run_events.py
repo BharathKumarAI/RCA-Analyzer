@@ -149,6 +149,7 @@ class RunEventStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"sequence":1', body)
 
     async def test_stream_emits_run_progress_trace_and_complete(self):
+        from app.api.schemas import RunExecutionRequest
         state = SimpleNamespace(
             store=self.store,
             run_events=self.events,
@@ -179,7 +180,7 @@ class RunEventStoreTests(unittest.IsolatedAsyncioTestCase):
         response = await _stream_run(
             request,
             self.principal,
-            SimpleNamespace(
+            RunExecutionRequest(
                 prompt="Investigate",
                 chat_id=None,
                 incident_id=None,

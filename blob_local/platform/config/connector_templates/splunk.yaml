@@ -1,0 +1,127 @@
+type: log_search
+name: Splunk Infrastructure & Log Mining
+system_name: log_search
+category: Observability
+description: Bounded read-only log search, saved search execution, and event correlation
+  for incident triage.
+integration_kind: native
+protocol: HTTPS
+auth_method: Bearer Token
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: log_search
+supported_operations:
+- query_range
+known_limitations:
+- Bounded time window restricted to at most 86,400 seconds (24 hours).
+- Result count capped at 100 entries.
+- Single configured index per client instance.
+auth_profiles:
+- id: bearer_token
+  name: Bearer Token
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - token_secret_ref
+  optional_fields:
+  - account_label
+  hidden_fields:
+  - password_secret_ref
+default_endpoint: https://<SPLUNK_MANAGEMENT_HOST>:8089
+default_ui_base_url: https://<SPLUNK_UI_HOST>:8000
+default_secret: env://SPLUNK_TOKEN
+default_service_user: splunk-api-svc@internal
+default_scope: platform_default
+can_override: true
+default_timeout_seconds: 30
+default_retry_attempts: 3
+default_retry_backoff: 5
+default_rate_limit: 120 req/min
+default_config:
+  allowed_indexes: []
+  max_results: 100
+  max_window_seconds: 86400
+parameter_fields:
+- variable_name: max_response_bytes
+  runtime_binding: connector.max_response_bytes
+  description: Maximum response body size in bytes.
+  value_type: integer
+  default_value: 1048576
+  template_editable: true
+  minimum: 1024
+  maximum: 8388608
+  category: performance
+  ownership: project_override_allowed
+- variable_name: max_window_seconds
+  runtime_binding: connector.max_window_seconds
+  description: Maximum search interval in seconds.
+  value_type: integer
+  default_value: 86400
+  template_editable: true
+  minimum: 60
+  maximum: 86400
+  category: performance
+  ownership: project_override_allowed
+- variable_name: max_results
+  runtime_binding: connector.max_results
+  description: Maximum events returned by a bounded search.
+  value_type: integer
+  default_value: 100
+  template_editable: true
+  minimum: 1
+  maximum: 1000
+  category: performance
+  ownership: project_override_allowed
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: Splunk Infrastructure & Log Mining
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe

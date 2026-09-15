@@ -1,0 +1,122 @@
+type: oracle
+name: Oracle Database
+system_name: oracle
+category: Database
+description: Read the current Oracle session wait snapshot for the configured database
+  username. Explain blocking sessions and wait classes. This snapshot cannot establish
+  historic contention. No arbitrary SQL is available.
+integration_kind: native
+protocol: OCI
+auth_method: Database Credentials
+version: 1.0.0
+availability: deprecated
+platform_enabled: false
+is_enabled_by_policy: false
+provider_adapter_id: oracle
+supported_operations:
+- read_evidence
+known_limitations:
+- Database querying is disabled pending scope reconciliation under repository guidance.
+- No arbitrary SQL, table exploration, or live database mutations.
+auth_profiles:
+- id: database_password
+  name: Database Credentials (Blocked by Policy)
+  status: disabled_by_policy
+  transport_compatibility: OCI
+  required_fields:
+  - database_username
+  - password_secret_ref
+  optional_fields: []
+  hidden_fields: []
+default_endpoint: <ORACLE_HOST>
+default_secret: env://ORACLE_PASSWORD
+default_scope: platform_default
+default_config:
+  environment_scoped: true
+parameter_fields:
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: Oracle Database
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe
+- variable_name: driver_mode
+  label: Oracle Driver Mode
+  description: Thin uses python-oracledb without Oracle Client libraries; Thick requires the approved local client library profile.
+  value_type: string
+  default_value: thin
+  allowed_values:
+  - thin
+  - thick
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: connectivity
+  subcategory: protocol
+  icon: database
+  runtime_binding: oracle.driver_mode
+- variable_name: oracle_client_lib
+  label: Oracle Client Library Directory
+  description: Approved local Oracle Client/Instant Client directory for Thick mode. Hidden and unused in Thin mode.
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  required_when: driver_mode == 'thick'
+  visibility_condition:
+    field: driver_mode
+    equals: thick
+  ownership: project_only
+  category: connectivity
+  subcategory: endpoint
+  icon: folder
+  runtime_binding: oracle.oracle_client_lib
+- variable_name: connection_format
+  label: Oracle Connection Format
+  description: Authorized DSN shape used by the local connection test; arbitrary SQL remains unavailable.
+  value_type: string
+  default_value: dsn
+  allowed_values:
+  - dsn
+  - host_service
+  - tns_alias
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: connectivity
+  subcategory: protocol
+  icon: link
+  runtime_binding: oracle.connection_format

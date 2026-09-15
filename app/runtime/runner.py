@@ -17,8 +17,14 @@ from google.genai import types
 from app.agents.root import build_root_agent
 from app.capabilities.resolver import CapabilityResolver, required_connector_error
 from app.connectors.health import CheckStatus, ConnectorHealth
-from app.connectors.providers.registry import resolve_project_connector
+from app.connectors.providers.registry import (
+    build_connectors,
+    configured_connector_values,
+    configured_connector_secrets,
+    resolve_project_connector,
+)
 from app.configuration.platform import PlatformConfiguration
+from app.configuration.parameters import RUNTIME_FIELDS
 from app.configuration.models import ExecutionLimits
 from app.observability.otel import get_tracer
 from app.observability.mlflow_adapter import record_run_metrics
@@ -53,6 +59,8 @@ class ExecutionRunner:
         connector_secret_references=None,
         connector_allowed_hosts=None,
         connector_enabled_adapters=None,
+        parameter_store=None,
+        refresh_deployment_connectors=False,
     ):
         self.settings, self.registry, self.store, self.connectors = (
             settings,
@@ -62,6 +70,8 @@ class ExecutionRunner:
         )
         self.chat_artifacts = chat_artifacts
         self.connector_instance_store = connector_instance_store
+        self.parameter_store = parameter_store
+        self.refresh_deployment_connectors = refresh_deployment_connectors
         self.connector_secret_references = connector_secret_references
         self.connector_allowed_hosts = connector_allowed_hosts
         self.connector_enabled_adapters = connector_enabled_adapters
@@ -103,6 +113,12 @@ class ExecutionRunner:
             self.run_limiter = asyncio.Semaphore(new_limit)
             self._run_limit = new_limit
         self.settings = settings
+        # Harness Studio retains a service reference to runtime settings. Keep
+        # it aligned after an authenticated parameter edit so previews and
+        # catalogs cannot show startup values.
+        workspace = getattr(self, "harness_workspace", None)
+        if workspace is not None:
+            workspace.settings = settings
 
     async def health(self, connector_names=None, connectors=None):
         connectors = self.connectors if connectors is None else connectors
@@ -129,14 +145,36 @@ class ExecutionRunner:
             )
         )
 
-    async def _connectors_for_run(self, principal, connector_names, required_connectors=None):
+    async def _connectors_for_run(self, principal, connector_names, required_connectors=None, selections=None):
         """Overlay enabled, project-scoped instances onto deployment clients."""
+        selections = selections or {}
+        if set(selections) - set(connector_names):
+            raise PermissionError("Connector selection is outside the capability's allowed connectors")
         if self.connector_instance_store is None:
+            if selections:
+                raise PermissionError("Saved connector selections require the scoped connector store")
             return self.connectors, []
         instances = await self.connector_instance_store.list_project_connector_instances(
             principal.tenant_id, principal.project_id
         )
+        templates = getattr(self.platform, "connector_templates", ())
+        parameter_store = getattr(self, "parameter_store", None)
+        parameter_rows = []
+        if parameter_store is not None:
+            from app.configuration.connector_catalog import published_parameter_templates
+
+            templates = await published_parameter_templates(templates, self.connector_instance_store, parameter_store=parameter_store, tenant=principal.tenant_id)
+            parameter_rows = await parameter_store.resolve(
+                principal.tenant_id, principal.project_id, templates, self.platform.connector_options,
+            )
+        from app.connectors.providers.jira import JiraConnector
+        from app.connectors.providers.splunk import SplunkConnector
+        runtime_values = {
+            name: values for name, values in configured_connector_values(parameter_rows).items()
+            if name not in self.connectors or isinstance(self.connectors[name], (JiraConnector, SplunkConnector))
+        }
         managed: dict[str, list[dict]] = {}
+        template_by_instance: dict[int, object] = {}
         required_connectors = set(required_connectors or ())
         project = self.registry.inheritance.project(principal)
         active_project_environments = {
@@ -144,13 +182,64 @@ class ExecutionRunner:
             for environment in project.environments
             if environment.enabled
         } if project else set()
+        def template_for_instance(instance):
+            template_id = instance.get("template_id")
+            template_version = instance.get("template_version", "1.0.0")
+            return next(
+                (
+                    item for item in templates
+                    if (item.system_name == template_id or item.type == template_id)
+                    and getattr(item, "version", "1.0.0") == template_version
+                ),
+                None,
+            )
+
         for instance in instances:
-            adapter = instance.get("provider_adapter_id") or instance.get("template_id")
+            template = template_for_instance(instance)
+            adapter = (
+                instance.get("provider_adapter_id")
+                or getattr(template, "provider_adapter_id", None)
+                or instance.get("template_id")
+            )
             if adapter in connector_names:
                 managed.setdefault(adapter, []).append(instance)
+                if template is not None:
+                    template_by_instance[id(instance)] = template
 
-        resolved = dict(self.connectors)
+        for adapter, selection in selections.items():
+            if not any(item.get("instance_id") == selection.instance_id for item in managed.get(adapter, [])):
+                raise PermissionError("Selected connector instance is not assigned to the authenticated project")
+
+        inventory = getattr(self.platform, "connector_templates", ())
+        declared_adapters = {getattr(item, "provider_adapter_id", None) or item.system_name for item in inventory}
+        enabled_adapters = {getattr(item, "provider_adapter_id", None) or item.system_name for item in templates
+                            if item.availability == "published" and item.platform_enabled and item.is_enabled_by_policy}
+        unavailable = declared_adapters - enabled_adapters
+        resolved = {name: provider for name, provider in self.connectors.items() if name not in unavailable}
+        runtime_values = {name: values for name, values in runtime_values.items() if name not in unavailable}
         created = []
+
+        # Deployment clients are shared for health and startup work. Build a
+        # short-lived generation for a run when an authenticated parameter edit
+        # changes provider controls, so active clients are never mutated and a
+        # stale client cannot silently consume an old endpoint or limit.
+        if runtime_values and self.settings.mode == "live" and self.refresh_deployment_connectors:
+            refreshed = build_connectors(
+                self.platform.connector_options,
+                self.settings.mode,
+                None,
+                runtime_values=runtime_values,
+                secret_references=configured_connector_secrets(self.platform.connector_options, parameter_rows),
+            )
+            for name in runtime_values:
+                if name not in refreshed:
+                    resolved.pop(name, None)
+            for name, provider in refreshed.items():
+                if name in runtime_values:
+                    resolved[name] = provider
+                    created.append(provider)
+                else:
+                    await provider.aclose()
 
         async def close_created():
             await asyncio.gather(
@@ -159,17 +248,32 @@ class ExecutionRunner:
             )
 
         for adapter, candidates in managed.items():
-            is_required = adapter in required_connectors
-            template_id = candidates[0].get("template_id") if candidates else adapter
-            template_version = candidates[0].get("template_version", "1.0.0") if candidates else "1.0.0"
-            current_template = next(
-                (
-                    item for item in getattr(self.platform, "connector_templates", ())
-                    if (item.system_name == template_id or item.type == template_id)
-                    and getattr(item, "version", "1.0.0") == template_version
-                ),
-                None,
-            )
+            selection = selections.get(adapter)
+            is_required = adapter in required_connectors or selection is not None
+            if self.connector_enabled_adapters is not None and adapter not in self.connector_enabled_adapters:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' is disabled by deployment configuration"
+                )
+            enabled = [
+                item for item in candidates
+                if item.get("status") == "enabled" and item.get("enabled") is True
+                and (selection is None or item.get("instance_id") == selection.instance_id)
+            ]
+            if len(enabled) != 1:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' requires exactly one enabled project instance; "
+                    "an explicit authenticated selector is required for multiple instances"
+                )
+            instance = enabled[0]
+            current_template = template_by_instance.get(id(instance)) or template_for_instance(instance)
             if (
                 current_template is None
                 or getattr(current_template, "availability", "published") != "published"
@@ -183,28 +287,6 @@ class ExecutionRunner:
                 raise PermissionError(
                     f"Connector '{adapter}' uses an unavailable or mismatched template version"
                 )
-            if self.connector_enabled_adapters is not None and adapter not in self.connector_enabled_adapters:
-                if not is_required:
-                    resolved.pop(adapter, None)
-                    continue
-                await close_created()
-                raise PermissionError(
-                    f"Connector '{adapter}' is disabled by deployment configuration"
-                )
-            enabled = [
-                item for item in candidates
-                if item.get("status") == "enabled" and item.get("enabled") is True
-            ]
-            if len(enabled) != 1:
-                if not is_required:
-                    resolved.pop(adapter, None)
-                    continue
-                await close_created()
-                raise PermissionError(
-                    f"Connector '{adapter}' requires exactly one enabled project instance; "
-                    "an explicit authenticated selector is required for multiple instances"
-                )
-            instance = enabled[0]
             definition = instance.get("definition_json") or {}
             dependency = definition.get("environment_dependency") or instance.get("environment_dependency")
             bindings = [
@@ -229,8 +311,22 @@ class ExecutionRunner:
                 raise PermissionError(
                     f"Connector '{adapter}' references inactive or out-of-scope project environments: {invalid}"
                 )
-            environment_id = None
-            if dependency == "dependent":
+            if dependency != "dependent" and all_bindings and not bindings:
+                if not is_required:
+                    resolved.pop(adapter, None)
+                    continue
+                await close_created()
+                raise PermissionError(
+                    f"Connector '{adapter}' has no active environment binding"
+                )
+            environment_id = selection.environment_id if selection else None
+            if environment_id:
+                if environment_id not in active_project_environments or len([
+                    b for b in bindings if b.get("project_env_id") == environment_id
+                ]) != 1:
+                    await close_created()
+                    raise PermissionError("Selected environment is not an active assigned project binding")
+            elif dependency == "dependent":
                 if len(bindings) != 1 or not bindings[0].get("project_env_id"):
                     if not is_required:
                         resolved.pop(adapter, None)
@@ -241,13 +337,113 @@ class ExecutionRunner:
                         "an authenticated environment selector is required"
                     )
                 environment_id = bindings[0]["project_env_id"]
+            elif len(bindings) == 1 and bindings[0].get("project_env_id"):
+                # An explicitly assigned binding still selects the environment
+                # for instance-scoped parameter precedence, even when the
+                # connector itself is environment-independent.  Do not infer
+                # an environment when more than one active binding exists;
+                # provider resolution will fail closed below.
+                environment_id = bindings[0]["project_env_id"]
             try:
+                if parameter_store is not None:
+                    instance_rows = await parameter_store.resolve(
+                        principal.tenant_id,
+                        principal.project_id,
+                        templates,
+                        self.platform.connector_options,
+                        instance_id=instance.get("instance_id"),
+                        environment_id=environment_id,
+                    )
+                    instance = parameter_store.apply_instance_defaults(
+                        instance, instance_rows, current_template
+                    )
+                # Reuse the same published candidate contract which gates
+                # enablement and live tests. A row inserted outside the API
+                # must not bypass template/version, auth-profile, or route
+                # checks simply because it is marked enabled in the store.
+                from app.connectors.candidate_testing import validate_candidate_configuration
+
+                definition = dict(instance.get("definition_json") or {})
+                candidate = {
+                    **definition,
+                    "instance_id": instance.get("instance_id"),
+                    "template_id": instance.get("template_id"),
+                    "template_version": instance.get("template_version", "1.0.0"),
+                    "system_name": instance.get("system_name") or definition.get("system_name"),
+                    "environment_dependency": (
+                        definition.get("environment_dependency")
+                        or instance.get("environment_dependency")
+                    ),
+                    "tool_environment": (
+                        definition.get("tool_environment")
+                        or instance.get("tool_environment")
+                    ),
+                    "bindings": instance.get("bindings", []),
+                }
+                # Persisted binding rows are authoritative. Do not let a
+                # legacy inline alias in definition_json replace the scoped
+                # relation returned by the tenant/project store.
+                candidate.pop("environment_mappings", None)
+                if environment_id:
+                    selected_binding = next(
+                        (
+                            binding for binding in candidate["bindings"]
+                            if isinstance(binding, dict)
+                            and binding.get("project_env_id") == environment_id
+                            and binding.get("status", "active") == "active"
+                        ),
+                        None,
+                    )
+                    if selected_binding is not None:
+                        candidate["environment_id"] = environment_id
+                        candidate["external_resource"] = selected_binding.get("external_resource")
+                        candidate["tool_environment"] = (
+                            selected_binding.get("tool_env_id")
+                            or selected_binding.get("tool_environment")
+                            or candidate["tool_environment"]
+                        )
+                        from app.configuration.connection_records import apply_environment_connection
+                        conn_id = selected_binding.get("connection_id")
+                        connections = instance.get("environment_connections") or []
+                        if conn_id:
+                            matches = [c for c in connections if c.get("connection_id") == conn_id]
+                            if len(matches) != 1:
+                                raise PermissionError("Selected environment connection does not exist")
+                            candidate = apply_environment_connection(candidate, matches[0], require_enabled=True)
+                        elif connections:
+                            raise PermissionError("Environment binding requires an explicit connection ID")
+
+                template_contract = (
+                    current_template.model_dump(mode="json")
+                    if hasattr(current_template, "model_dump")
+                    else vars(current_template)
+                )
+                valid, errors = validate_candidate_configuration(candidate, template_contract)
+                if not valid:
+                    raise PermissionError(
+                        f"Connector '{adapter}' failed its published runtime contract: "
+                        + "; ".join(errors)
+                    )
+                adapter_id = getattr(current_template, "provider_adapter_id", None)
+                if adapter_id:
+                    # Provider selection belongs to the published template;
+                    # never let an instance payload invent an adapter path.
+                    instance = {**instance, "provider_adapter_id": adapter_id}
+                from app.connectors.providers.registry import connection_route
+                from app.connectors.providers.secrets import connection_secret_references
+                endpoint = candidate.get("endpoint") or ""
+                if connection_route(candidate, adapter) == "mcp":
+                    endpoint = candidate["mcp_configuration"]["endpoint"]
+                allowed_references = connection_secret_references(
+                    getattr(self.settings, "integration_secret_references", "{}"), endpoint,
+                    self.connector_secret_references or set(),
+                )
                 provider = resolve_project_connector(
                     instance,
                     environment_id=environment_id,
                     deployment_tenant_id=principal.tenant_id,
                     deployment_project_id=principal.project_id,
-                    allowed_secret_references=self.connector_secret_references,
+                    allowed_secret_references=allowed_references,
                     allowed_hosts=self.connector_allowed_hosts,
                 )
             except Exception:
@@ -351,8 +547,24 @@ class ExecutionRunner:
                 profile.tool_call_limit,
                 runtime["max_tool_calls"] or profile.tool_call_limit,
             )
+            jira_attachment_processing = "disabled"
+            if self.parameter_store is not None:
+                from app.configuration.connector_catalog import published_parameter_templates
+
+                templates = getattr(self.platform, "connector_templates", ())
+                templates = await published_parameter_templates(templates, getattr(self, "connector_instance_store", None), parameter_store=self.parameter_store, tenant=principal.tenant_id)
+                param_rows = await self.parameter_store.resolve(
+                    principal.tenant_id, principal.project_id, templates, self.platform.connector_options
+                )
+                for row in param_rows:
+                    if row.get("tool") == "itsm" and row.get("variable_name") == "attachment_processing":
+                        jira_attachment_processing = str(row.get("effective_value") or "disabled")
+                        break
+
             snapshot = {
                 "harness_revision": self.harness.revision,
+                "runtime_controls": {name: getattr(effective_settings, name) for name in RUNTIME_FIELDS},
+                "project_template": project.project_template.model_dump(mode="json") if project and project.project_template else None,
                 "harness_selection": project.harness.model_dump(mode="json") if project else {},
                 "workflow": runtime["workflow"].model_dump(mode="json"),
                 "preferences": runtime["preferences"].model_dump(mode="json"),
@@ -368,6 +580,7 @@ class ExecutionRunner:
                 },
                 "skill_resolution": resolved.skill_sources,
                 "allowed_actions": list(capability.allowed_actions),
+                "jira_attachment_processing": jira_attachment_processing,
                 "stages": {
                     k: v.model_dump(mode="json")
                     for k, v in self.profiles.resolve(capability.model_profile).items()
@@ -578,7 +791,7 @@ class ExecutionRunner:
             action.split(".", 1)[0] for action in capability.allowed_actions
         }
         runtime_connectors, created_connectors = await self._connectors_for_run(
-            principal, connector_names, capability.requires.connectors
+            principal, connector_names, capability.requires.connectors, contract.request.connector_selections
         )
         self._run_connectors[contract.run_id] = created_connectors
         health = await self.health(connector_names, runtime_connectors)
@@ -622,6 +835,18 @@ class ExecutionRunner:
             )
             governance.failures.extend(file.get("warnings", []))
         snapshot = json.loads(contract.model_config_json)
+        snapshot["connector_controls"] = {
+            name: {field: getattr(provider, field) for field in (
+                "max_response_bytes", "max_results", "max_window_seconds", "custom_field_mapping",
+            ) if hasattr(provider, field)} | {
+                "timeout_seconds": getattr(getattr(getattr(provider, "_client", None), "timeout", None), "read", None),
+            }
+            for name, provider in usable.items()
+        }
+        if "itsm" in snapshot["connector_controls"]:
+            snapshot["connector_controls"]["itsm"]["attachment_processing"] = snapshot.get(
+                "jira_attachment_processing", "disabled"
+            )
         snapshot["chat_history"] = await self.store.chat_context(
             contract, governance.settings.max_context_chars // 4
         )

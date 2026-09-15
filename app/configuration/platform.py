@@ -1,6 +1,7 @@
 """Load and validate the platform bundle once for the application lifetime."""
 
 from dataclasses import dataclass
+from typing import Any
 
 from app.capabilities.registry import CapabilityRegistry
 from app.configuration.yaml_data import load_yaml_data
@@ -97,11 +98,68 @@ class PlatformConfiguration:
     optimization: OptimizationConfig
 
     @classmethod
-    def load(cls, settings, registry=None):
+    async def load_async(cls, engine, settings, tenant_id=None, registry=None):
+        from sqlalchemy import select
+        from app.configuration.parameters import system_configurations
+
+        tenant = tenant_id or getattr(settings, "tenant_id", "default")
+        db_configs: dict[str, Any] = {}
+        try:
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        select(system_configurations).where(
+                            system_configurations.c.tenant_id == tenant
+                        )
+                    )
+                ).mappings().all()
+                for r in rows:
+                    db_configs[r["config_key"]] = r["content_json"]
+        except Exception:
+            db_configs = {}
+
+        return cls._load_internal(settings, registry=registry, db_configs=db_configs)
+
+    @classmethod
+    def load(cls, settings, registry=None, db_configs=None):
+        return cls._load_internal(settings, registry=registry, db_configs=db_configs)
+
+    @classmethod
+    def _load_internal(cls, settings, registry=None, db_configs=None):
+        configs = db_configs or {}
+
         def read(name):
+            key = name.removesuffix(".yaml")
+            if key in configs:
+                return configs[key]
             return load_yaml_data((settings.config_dir / name).read_text())
 
         def template_rows():
+            dir_path = settings.config_dir / "connector_templates"
+            yaml_files = sorted(dir_path.glob("*.yaml")) if dir_path.is_dir() else []
+            if yaml_files:
+                entries = []
+                seen_templates: dict[tuple[str, str], str] = {}
+                for file_path in yaml_files:
+                    try:
+                        doc = load_yaml_data(file_path.read_text())
+                    except Exception as err:
+                        raise ValueError(f"{file_path.name} failed YAML parsing: {err}") from err
+                    if not isinstance(doc, dict):
+                        raise ValueError(f"{file_path.name} must define a connector template object")
+                    try:
+                        template = ConnectorTemplate.model_validate(_normalize_legacy_connector_template(doc))
+                    except Exception as err:
+                        raise ValueError(f"{file_path.name} failed schema validation: {err}") from err
+                    key = (template.system_name, template.version)
+                    if key in seen_templates:
+                        raise ValueError(
+                            f"Duplicate connector template '{key[0]}:{key[1]}' defined in {file_path.name} (previously defined in {seen_templates[key]})"
+                        )
+                    seen_templates[key] = file_path.name
+                    entries.append(template)
+                return entries
+
             path = settings.config_dir / "connector_templates.yaml"
             if not path.exists():
                 return []

@@ -6,10 +6,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.api.dependencies import Principal
 from app.identity.principals import Role
 from app.settings import Settings
+from app.configuration.connector_catalog import published_parameter_templates
 from app.configuration.parameters import (
     ParameterConflict,
     ParameterDefinition,
     ParameterOverride,
+    TemplateParameterChanges,
 )
 
 router = APIRouter(prefix="/api/v1/parameters", tags=["parameters"])
@@ -24,6 +26,34 @@ async def invoke(operation):
         raise HTTPException(409, str(exc)) from None
     except ValueError:
         raise HTTPException(422, "Invalid parameter or value") from None
+
+
+async def parameter_templates(request: Request):
+    return await invoke(published_parameter_templates(
+        request.app.state.platform.connector_templates, request.app.state.platform_admin,
+        parameter_store=request.app.state.parameters, tenant=request.app.state.settings.tenant_id,
+    ))
+
+
+async def validate_shared_value(request, tool, name, value, definition=None):
+    if tool == "runtime":
+        return
+    templates = await parameter_templates(request)
+    try:
+        field = request.app.state.parameters.shared_fields(templates).get((tool, name))
+        if field is not None:
+            if definition is not None and (
+                definition.value_type != field.value_type
+                or definition.allow_project_override != field.allow_project_override
+                or (definition.scope != "platform_only") != field.visible_in_project
+                or definition.allowed_values != (list(field.allowed_values) if field.allowed_values else None)
+            ):
+                raise ValueError("Published shared parameter contract cannot be changed through a value edit")
+            field.validate_parameter_value(value)
+    except ParameterConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Invalid shared parameter value or definition") from None
 
 
 async def refresh_runtime(request: Request, principal: Principal):
@@ -79,12 +109,19 @@ async def get_parameter_taxonomy(principal: Principal):
 
 
 @router.get("")
-async def list_parameters(request: Request, principal: Principal, view: Literal["all", "project"] = "all"):
+async def list_parameters(request: Request, principal: Principal, view: Literal["all", "project", "template"] = "all"):
+    if view == "template":
+        if Role.PLATFORM_ADMIN not in principal.roles:
+            raise HTTPException(403, "Platform administrator required")
+        return await invoke(request.app.state.parameters.template_defaults(
+            principal.tenant_id, await parameter_templates(request),
+            request.app.state.platform.connector_options,
+        ))
     result = await invoke(
         request.app.state.parameters.resolve(
             principal.tenant_id,
             principal.project_id,
-            request.app.state.platform.connector_templates,
+            await parameter_templates(request),
             request.app.state.platform.connector_options,
         )
     )
@@ -97,6 +134,16 @@ async def list_parameters(request: Request, principal: Principal, view: Literal[
     return result
 
 
+@router.put("/{tool}/template")
+async def save_template_parameters(
+    tool: str, body: TemplateParameterChanges, request: Request, principal: Principal,
+):
+    return await invoke(request.app.state.parameters.save_template_defaults(
+        principal, tool, body, await parameter_templates(request),
+        request.app.state.platform.connector_options,
+    ))
+
+
 @router.put("/{tool}/{name}/definition")
 async def define_parameter(
     tool: str,
@@ -105,6 +152,7 @@ async def define_parameter(
     request: Request,
     principal: Principal,
 ):
+    await validate_shared_value(request, tool, name, body.default_value, body)
     ensure_runtime_editable(request, tool, name)
     if tool == "runtime":
         result = await mutate_runtime(request, principal, request.app.state.parameters.define(principal, tool, name, body), tool, name)
@@ -137,6 +185,7 @@ async def override_parameter(
     principal: Principal,
 ):
     ensure_runtime_editable(request, tool, name)
+    await validate_shared_value(request, tool, name, body.value)
     if tool == "runtime":
         result = await mutate_runtime(request, principal, request.app.state.parameters.set_override(principal, tool, name, body), tool, name)
     else:

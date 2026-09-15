@@ -104,6 +104,7 @@ class ConfigurationLayers:
                         "project_id",
                         "allow_user_overrides",
                         "allow_user_preferences",
+                        "project_template",
                     }
                     # Existing skill-only bundles retain their explicit skill grants.
                     allowed = set(self.policy.project_sections) | {"skills"}

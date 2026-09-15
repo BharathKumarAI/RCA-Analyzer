@@ -3,7 +3,7 @@
   system_name: itsm
   category: Ticketing
   description: Read-only Jira ticket lookup, comment fetch, and structured fields
-    extraction for incident workflows.
+    extraction for incident workflows via Jira Cloud REST API Version 3.
   integration_kind: native
   protocol: HTTPS
   auth_method: Basic API Token
@@ -14,13 +14,15 @@
   provider_adapter_id: itsm
   supported_operations:
   - get_ticket
+  - search_issues
+  - get_current_user
   known_limitations:
-  - Read-only ticket lookup; comment writes and issue mutations are unsupported.
-  - Native provider appends /rest/api/2/issue/{id}.
-  - JQL queue search requires backend search extension.
+  - Read-only ticket lookup; comment writes and issue mutations are governance-restricted.
+  - Uses Jira Cloud REST API Version 3 with Atlassian Document Format (ADF) rich-text support.
+  - JQL preview validates scoped queries; saved custom JQL does not enable queue execution.
   auth_profiles:
-  - id: basic_api_token
-    name: Basic Authentication (Email + API Token)
+  - id: basic_auth
+    name: Account email + API token
     status: active
     transport_compatibility: HTTPS
     required_fields:
@@ -30,8 +32,8 @@
     hidden_fields:
     - password_secret_ref
     - domain
-  - id: oauth2_client_credentials
-    name: OAuth 2.0 Client Credentials (Planned)
+  - id: oauth2_1
+    name: OAuth 2.0 authorization code (3LO)
     status: planned
     transport_compatibility: HTTPS
     required_fields:
@@ -43,10 +45,39 @@
     - scopes
     hidden_fields:
     - api_token_secret_ref
+  - id: api_token
+    name: Account API token (Basic)
+    status: active
+    transport_compatibility: HTTPS
+    required_fields:
+    - account_identifier
+    - api_token_secret_ref
+    optional_fields: []
+    hidden_fields: []
+  - id: jwt_app
+    name: JWT (App)
+    status: planned
+    transport_compatibility: HTTPS
+    required_fields:
+    - app_id
+    - private_key_ref
+    optional_fields:
+    - audience
+    hidden_fields: []
+  - id: webhook_ref
+    name: Webhook reference
+    status: planned
+    transport_compatibility: HTTPS
+    required_fields:
+    - webhook_url
+    - secret_token_ref
+    optional_fields: []
+    hidden_fields: []
   default_endpoint: https://<JIRA_WORKSPACE>.atlassian.net
   default_ui_base_url: https://<JIRA_WORKSPACE>.atlassian.net
+  default_mcp_url: https://mcp.atlassian.com/v2/mcp
   default_secret: env://JIRA_API_TOKEN
-  default_service_user: triage-bot@organization.internal
+  default_service_user: null
   default_scope: platform_default
   can_override: true
   default_timeout_seconds: 30
@@ -56,8 +87,24 @@
   default_config:
     project_key: ''
     timezone: UTC
-    polling_frequency: ''
+    polling_frequency: '*/15 * * * *'
+    monitoring_jql: ''
+    polling_schedule: '*/15 * * * *'
+    project_keys: []
+    reports: []
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -97,14 +144,27 @@
     ownership: project_only
     category: operational
     icon: globe
+  - variable_name: custom_jql
+    label: Custom JQL
+    description: Reusable JQL filter clause, up to 4096 characters. Leave empty for no additional filter. Saved configuration only; queue search and scheduled polling are not enabled.
+    template_editable: true
+    max_length: 4096
+    value_type: string
+    default_value: ''
+    allow_project_override: true
+    visible_in_project: true
+    ownership: project_override_allowed
+    category: query
+    icon: filter
   - variable_name: custom_field_mapping
     label: Jira Custom Field Mapping
     description: Verified Jira field IDs and project display mappings used when extracting issue evidence.
+    template_editable: true
     value_type: json
     default_value: {}
     allow_project_override: true
     visible_in_project: true
-    ownership: project_only
+    ownership: project_override_allowed
     category: query
     subcategory: field_mapping
     icon: list
@@ -112,6 +172,7 @@
   - variable_name: attachment_processing
     label: Attachment Processing
     description: Process files supplied through the project attachment service; Jira-hosted attachment downloads are not enabled.
+    template_editable: true
     value_type: string
     default_value: disabled
     allowed_values:
@@ -119,7 +180,7 @@
     - local_upload
     allow_project_override: true
     visible_in_project: true
-    ownership: project_only
+    ownership: project_override_allowed
     category: operational
     icon: paperclip
     runtime_binding: project.attachment_processing
@@ -169,6 +230,48 @@
     max_results: 100
     max_window_seconds: 86400
   parameter_fields:
+  - variable_name: max_response_bytes
+    runtime_binding: connector.max_response_bytes
+    description: Maximum response body size in bytes.
+    value_type: integer
+    default_value: 1048576
+    template_editable: true
+    minimum: 1024
+    maximum: 8388608
+    category: performance
+    ownership: project_override_allowed
+  - variable_name: max_window_seconds
+    runtime_binding: connector.max_window_seconds
+    description: Maximum search interval in seconds.
+    value_type: integer
+    default_value: 86400
+    template_editable: true
+    minimum: 60
+    maximum: 86400
+    category: performance
+    ownership: project_override_allowed
+  - variable_name: max_results
+    runtime_binding: connector.max_results
+    description: Maximum events returned by a bounded search.
+    value_type: integer
+    default_value: 100
+    template_editable: true
+    minimum: 1
+    maximum: 1000
+    category: performance
+    ownership: project_override_allowed
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -241,6 +344,18 @@
   default_secret: env://CONFLUENCE_TOKEN
   default_scope: platform_default
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -313,6 +428,18 @@
   default_secret: env://SIGNALFX_TOKEN
   default_scope: platform_default
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -384,6 +511,18 @@
   default_secret: env://QTEST_TOKEN
   default_scope: platform_default
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -455,6 +594,18 @@
   default_secret: env://GITLAB_TOKEN
   default_scope: platform_default
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -661,6 +812,18 @@
   default_config:
     environment_scoped: true
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.
@@ -764,6 +927,18 @@
   default_config:
     environment_scoped: true
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined system name. Defaults to Unix; enter Tuxedo here when that is the system being accessed.
@@ -913,6 +1088,18 @@
   default_config:
     environment_scoped: true
   parameter_fields:
+  - variable_name: timeout_seconds
+    label: Request Timeout
+    runtime_binding: connector.timeout_seconds
+    description: Maximum duration of a connector request in seconds.
+    value_type: integer
+    default_value: 30
+    template_editable: true
+    minimum: 1
+    maximum: 60
+    category: performance
+    subcategory: timeouts
+    ownership: project_override_allowed
   - variable_name: system_name
     label: System Name
     description: Project-defined connector instance name. Defaults to the connector name and remains editable.

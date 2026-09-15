@@ -67,11 +67,13 @@ class ConnectorMockServer:
                     status, body = 401, {"error": "Test credential rejected"}
                 elif owner.forced_status:
                     status, body = owner.forced_status, {"error": "Explicit mock failure scenario"}
-                elif parsed.path == "/rest/api/2/project/LOCAL":
+                elif parsed.path in ("/rest/api/3/project/LOCAL", "/rest/api/2/project/LOCAL"):
                     body = {"key": "LOCAL", "name": "Local connector test project"}
-                elif parsed.path == "/rest/api/2/field":
+                elif parsed.path in ("/rest/api/3/field", "/rest/api/2/field"):
                     body = [{"id": "customfield_10290", "name": "Support Queue"}]
-                elif parsed.path == "/rest/api/2/issue/LOCAL-1":
+                elif parsed.path in ("/rest/api/3/myself", "/rest/api/2/myself"):
+                    body = {"accountId": "test-user-123", "displayName": "Triage Bot", "emailAddress": owner.account}
+                elif parsed.path in ("/rest/api/3/issue/LOCAL-1", "/rest/api/2/issue/LOCAL-1"):
                     body = {"key": "LOCAL-1", "fields": {
                         "summary": "MOCK SERVER: bounded connector transport test",
                         "status": {"name": "Open"}, "description": "Local fixture evidence only.",

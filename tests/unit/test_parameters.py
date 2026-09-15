@@ -262,3 +262,101 @@ async def test_parameter_governance_inheritance_and_revisions():
         ]
     finally:
         await database.aclose()
+
+
+@pytest.mark.asyncio
+async def test_parameter_scope_precedence_hierarchy():
+    database = InvestigationStore("sqlite+aiosqlite:///:memory:")
+    try:
+        store = ParameterStore(database.engine)
+        await store.initialize()
+        admin = UserPrincipal(
+            subject="admin",
+            username="admin",
+            tenant_id="acme",
+            project_id="p1",
+            roles=(Role.PLATFORM_ADMIN,),
+        )
+        owner = admin.model_copy(update={"roles": (Role.PROJECT_OWNER,)})
+        async with store.engine.begin() as c:
+            await c.execute(
+                insert(projects).values(
+                    tenant_id="acme", project_id="p1", project_name="First"
+                )
+            )
+
+        param_def = ParameterDefinition(
+            value_type="integer",
+            description="ITSM timeout in seconds",
+            default_value=30,
+            allow_project_override=True,
+            icon="clock",
+            label="ITSM Timeout",
+            section="investigation",
+            expected_revision=0,
+        )
+        await store.define(admin, "itsm", "timeout_seconds", param_def)
+
+        # Level 5: Platform default (no overrides)
+        res = await store.resolve(admin.tenant_id, owner.project_id)
+        p_row = next(r for r in res if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row["effective_value"] == 30
+        assert p_row["scope_level"] == 5
+        assert p_row["source"] == "platform"
+
+        # Level 4: Project-wide override (instance=None, env=None)
+        await store.set_override(
+            owner,
+            "itsm",
+            "timeout_seconds",
+            ParameterOverride(value=40, expected_revision=0, expected_definition_revision=1),
+        )
+        res = await store.resolve(admin.tenant_id, owner.project_id)
+        p_row = next(r for r in res if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row["effective_value"] == 40
+        assert p_row["scope_level"] == 4
+        assert p_row["source"] == "project"
+
+        # Level 3: Project + Environment override (instance=None, env="staging")
+        await store.set_override(
+            owner,
+            "itsm",
+            "timeout_seconds",
+            ParameterOverride(value=45, expected_revision=0, expected_definition_revision=1, environment_id="staging"),
+        )
+        # Without env specified, Level 4 still wins
+        res = await store.resolve(admin.tenant_id, owner.project_id)
+        p_row = next(r for r in res if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row["effective_value"] == 40
+        # With env="staging", Level 3 wins
+        res_staging = await store.resolve(admin.tenant_id, owner.project_id, environment_id="staging")
+        p_row_staging = next(r for r in res_staging if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row_staging["effective_value"] == 45
+        assert p_row_staging["scope_level"] == 3
+
+        # Level 2: Project + Instance override (instance="jira_inst", env=None)
+        await store.set_override(
+            owner,
+            "itsm",
+            "timeout_seconds",
+            ParameterOverride(value=50, expected_revision=0, expected_definition_revision=1, instance_id="jira_inst"),
+        )
+        res_inst = await store.resolve(admin.tenant_id, owner.project_id, instance_id="jira_inst")
+        p_row_inst = next(r for r in res_inst if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row_inst["effective_value"] == 50
+        assert p_row_inst["scope_level"] == 2
+
+        # Level 1: Project + Instance + Environment override
+        await store.set_override(
+            owner,
+            "itsm",
+            "timeout_seconds",
+            ParameterOverride(value=55, expected_revision=0, expected_definition_revision=1, instance_id="jira_inst", environment_id="staging"),
+        )
+        res_both = await store.resolve(admin.tenant_id, owner.project_id, instance_id="jira_inst", environment_id="staging")
+        p_row_both = next(r for r in res_both if r["tool"] == "itsm" and r["variable_name"] == "timeout_seconds")
+        assert p_row_both["effective_value"] == 55
+        assert p_row_both["scope_level"] == 1
+    finally:
+        await database.aclose()
+

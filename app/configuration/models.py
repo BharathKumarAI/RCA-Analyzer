@@ -189,6 +189,10 @@ class ConnectorTemplateField(BaseModel):
     ] = "project_override_allowed"
     sensitivity: Literal["normal", "masked", "secret_reference"] = "normal"
     runtime_binding: str | None = None
+    template_editable: bool = False
+    minimum: float | None = Field(default=None, allow_inf_nan=False)
+    maximum: float | None = Field(default=None, allow_inf_nan=False)
+    max_length: int | None = Field(default=None, ge=1, le=100000)
     visibility_condition: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -222,9 +226,35 @@ class ConnectorTemplateField(BaseModel):
             raise ValueError("project_only fields must allow project overrides")
         if self.ui_control in {"select", "multi_select"} and not self.allowed_values:
             raise ValueError("Select controls require allowed_values")
+        if self.template_editable and (
+            self.ownership not in {"platform_locked", "project_override_allowed"}
+            or self.sensitivity != "normal" or self.value_type == "secret_ref"
+            or self.default_source != "static" or self.nullable
+        ):
+            raise ValueError("Shared template fields require nonsecret static defaults and shared ownership")
+        if (self.minimum is not None or self.maximum is not None) and self.value_type not in {"integer", "number"}:
+            raise ValueError("Numeric bounds require a numeric field")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("Minimum cannot exceed maximum")
+        if self.max_length is not None and self.value_type != "string":
+            raise ValueError("Text bounds require a string field")
+        self.validate_parameter_value(self.default_value)
         if self.validation_schema is not None and not isinstance(self.validation_schema, dict):
             raise ValueError("validation_schema must be an object")
         return self
+
+    def validate_parameter_value(self, value: Any) -> None:
+        _validate_parameter_typed_value(self.value_type, value, nullable=self.nullable)
+        if value is None:
+            return
+        if self.allowed_values is not None and value not in self.allowed_values:
+            raise ValueError("Value is not in allowed_values")
+        if self.minimum is not None and value < self.minimum:
+            raise ValueError("Value is below minimum")
+        if self.maximum is not None and value > self.maximum:
+            raise ValueError("Value exceeds maximum")
+        if self.max_length is not None and len(value) > self.max_length:
+            raise ValueError("Value exceeds maximum length")
 
 
 class ConnectorTemplate(BaseModel):
@@ -250,6 +280,7 @@ class ConnectorTemplate(BaseModel):
     default_rate_limit: str = "100 req/min"
     default_config: dict[str, Any] = Field(default_factory=dict)
     default_mcp: dict[str, Any] | None = None
+    default_mcp_url: str | None = None
     default_a2a: dict[str, Any] | None = None
     parameter_fields: Tuple[ConnectorTemplateField, ...] = Field(default_factory=tuple)
     version: str = "1.0.0"
@@ -269,6 +300,8 @@ class ConnectorTemplate(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("Connector template parameter_fields must use unique variable_name values")
         fields = {field.variable_name: field for field in self.parameter_fields}
+        if any(field.template_editable for field in self.parameter_fields) and not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.system_name):
+            raise ValueError("Shared parameter system names must use lowercase letters, digits and underscores")
         if self.availability == "published":
             required_project_fields = {
                 "system_name": ("string", "project_only"),
@@ -352,9 +385,18 @@ class ConnectorTemplate(BaseModel):
             hidden = profile.get("hidden_fields", [])
             if any(not isinstance(items, list) for items in (required, optional, hidden)):
                 raise ValueError("Auth profile field lists must be arrays")
-            groups = [set(required), set(optional), set(hidden)]
-            if any(any(not isinstance(item, str) or not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", item) for item in group) for group in groups):
+            if any(
+                any(
+                    not isinstance(item, str)
+                    or not re.fullmatch(r"[a-z][a-z0-9_]{1,127}", item)
+                    for item in items
+                )
+                for items in (required, optional, hidden)
+            ):
                 raise ValueError("Auth profile fields must be lowercase identifiers")
+            if any(len(items) != len(set(items)) for items in (required, optional, hidden)):
+                raise ValueError("Auth profile field lists must not contain duplicates")
+            groups = [set(required), set(optional), set(hidden)]
             if groups[0] & groups[1] or groups[0] & groups[2] or groups[1] & groups[2]:
                 raise ValueError("Auth profile fields cannot be both required, optional, or hidden")
         if (
@@ -429,6 +471,36 @@ class EnvironmentConfig(StrictModel):
     jira_env_name: str | None = Field(default=None, max_length=128)
 
 
+class EnvironmentConnectionRecord(StrictModel):
+    connection_id: str = Field(pattern=r"^[a-z0-9_-]{1,64}$")
+    connection_name: str = Field(min_length=1, max_length=128)
+    environment_name: str = Field(min_length=1, max_length=64)
+    enabled: bool = False
+    routing_mode: Literal["direct", "mcp", "hybrid"] = "direct"
+    auth_profile_id: str | None = None
+    target: dict[str, Any] = Field(default_factory=dict)
+    credentials: dict[str, Any] = Field(default_factory=dict)
+    mcp_configuration: dict[str, Any] = Field(default_factory=dict)
+    resource_scope: tuple[str, ...] = ()
+    status: Literal["draft", "active", "inactive"] = "draft"
+    test_status: Literal["not_tested", "passed", "failed", "missing_permissions", "expired"] = "not_tested"
+    last_tested_at: float | None = None
+
+
+class ToolAccessRule(StrictModel):
+    logical_capability: str = Field(min_length=1, max_length=128)
+    tool_id: str = Field(min_length=1, max_length=128)
+    tool_enabled: bool = False
+    access_route: Literal["direct", "mcp"] = "direct"
+    read_access: bool = False
+    write_access: bool = False
+    execution_access: bool = False
+    allowed_roles: tuple[Role, ...] = ()
+    allowed_environment_connections: tuple[str, ...] = ()
+    default_environment_connection: str | None = None
+    resource_scope: tuple[str, ...] = ()
+
+
 class HarnessSelection(StrictModel):
     agents: tuple[str, ...] = ()
     disabled_agents: tuple[str, ...] = ()
@@ -436,6 +508,21 @@ class HarnessSelection(StrictModel):
     disabled_plugins: tuple[str, ...] = ()
     disabled_skills: tuple[SkillId, ...] = ()
     disabled_capabilities: tuple[str, ...] = ()
+
+
+class ProjectTemplateProvenance(StrictModel):
+    """Server-owned record of the managed template that produced a project layer."""
+
+    source: Literal["platform.project_templates"] = "platform.project_templates"
+    template_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    template_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    template_checksum: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    template_revision: int = Field(ge=1)
+    project_revision: str = Field(pattern=r"^(?:|sha256:[0-9a-f]{64})$")
+    harness_revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    parameter_source: Literal["/api/v1/parameters"] = "/api/v1/parameters"
+    applied_at: float = Field(gt=0)
+    applied_by: str = Field(min_length=1, max_length=256)
 
 
 class ProjectLayer(StrictModel):
@@ -456,6 +543,10 @@ class ProjectLayer(StrictModel):
     allow_user_preferences: tuple[PreferenceName, ...] = ()
     environments: tuple[EnvironmentConfig, ...] = ()
     harness: HarnessSelection = Field(default_factory=HarnessSelection)
+    # This is written only by the managed project-template apply path.  It is
+    # persisted with the effective layer so provenance cannot get out of sync
+    # with the Harness selection or project policy.
+    project_template: ProjectTemplateProvenance | None = None
 
 
 class UserLayer(StrictModel):

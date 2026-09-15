@@ -117,6 +117,13 @@ def test_project_setup_and_validation_enforces_platform_rules():
             assert "stage_definitions" in data
             assert "template_yaml" in data
             assert len(data["stage_definitions"]) == 6
+            for stage in data["stage_definitions"]:
+                assert stage["agent_ids"]
+                assert stage["bindings"]
+                for binding in stage["bindings"]:
+                    configured = app.state.platform.profiles.stages[binding["stage_id"]]
+                    assert binding["model"] == configured.model
+                    assert binding["max_output_tokens"] == configured.max_output_tokens
 
             # 2. POST /api/v1/project/validate with valid YAML
             valid_yaml = (

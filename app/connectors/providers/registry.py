@@ -1,6 +1,7 @@
 """Deployment-owned connector inventory; credentials stay in providers."""
 
 from app.connectors.providers.secrets import environment_secret
+from app.configuration.connection_records import apply_environment_connection
 import re
 from typing import Literal
 from urllib.parse import urlsplit
@@ -31,6 +32,54 @@ class McpBinding(BaseModel):
     scope_argument: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
     arguments: dict = Field(default_factory=dict)
     argument_map: dict[str, str] = Field(default_factory=dict)
+
+
+class McpConnectionConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    endpoint: str = Field(min_length=1, max_length=2048)
+    token_secret_ref: str = Field(pattern=r"^env://[A-Z][A-Z0-9_]{0,127}$")
+    mcp_tools: dict[str, McpBinding]
+    operation_routes: dict[str, Literal["direct", "mcp"]] = Field(default_factory=dict)
+
+
+def connection_route(definition: dict, connector_id: str) -> str:
+    values = [definition[key] for key in ("access_mode", "transport", "routing_mode") if key in definition]
+    if any(not isinstance(value, str) for value in values):
+        raise ValueError("Connector access mode must be text")
+    modes = {"direct" if value.strip().lower() == "native" else value.strip().lower() for value in values}
+    if not modes:
+        return "direct"
+    if len(modes) != 1 or not modes <= {"direct", "mcp", "hybrid"}:
+        raise ValueError("Connector access mode must identify one consistent Direct, MCP, or Hybrid route")
+    mode = modes.pop()
+    if mode == "direct":
+        return mode
+    config = McpConnectionConfiguration.model_validate(definition.get("mcp_configuration") or {})
+    operation = {"itsm": "get_ticket", "log_search": "query_range"}.get(connector_id, "read_evidence")
+    if set(config.mcp_tools) != {operation}:
+        raise ValueError("MCP bindings must match the connector's governed read operation")
+    if mode == "hybrid":
+        if set(config.operation_routes) != {operation}:
+            raise ValueError("Hybrid requires an explicit route for every governed operation")
+        return config.operation_routes[operation]
+    return "mcp"
+
+
+def resolve_mcp_connection(connector_id, definition, *, allowed_hosts=None, allowed_secret_references=None):
+    config = McpConnectionConfiguration.model_validate(definition.get("mcp_configuration") or {})
+    _validate_endpoint_host(config.endpoint, allowed_hosts)
+    credentials = _resolve_instance_secrets({"token_secret_ref": config.token_secret_ref}, allowed_secret_references)
+    scope = definition.get("external_resource") or definition.get(_RUNTIME_SCOPE_FIELDS.get(connector_id, "scope"))
+    if not scope:
+        raise ValueError("MCP requires an explicit authorized resource scope")
+    return McpEvidenceConnector(
+        connector_id, endpoint=config.endpoint, token=credentials["token_secret_ref"],
+        scope=scope, mcp_tools=config.mcp_tools,
+        timeout_s=float(definition.get("timeout_seconds", 10)),
+        max_results=int(definition.get("max_results", 100)),
+        max_response_bytes=int(definition.get("max_response_bytes", 1048576)),
+        max_window_seconds=int(definition.get("max_window_seconds", 86400)),
+    )
 
 
 class ConnectorOptions(BaseModel):
@@ -66,12 +115,20 @@ NATIVE_RUNTIME_FIELDS = {
     "endpoint": "endpoint", "service_user": "user_email", "timeout_seconds": "timeout_s",
     "max_response_bytes": "max_response_bytes", "max_results": "max_results",
     "max_window_seconds": "max_window_seconds",
+    "custom_field_mapping": "custom_field_mapping",
 }
 
 _SECRET_REF_PATTERN = re.compile(r"^env://[A-Z][A-Z0-9_]{0,127}$")
 _SENSITIVE_FIELD = re.compile(r"(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)", re.I)
 _RUNTIME_AUTH_TYPES = {
-    "itsm": {"basic_api_token": {"account_identifier", "api_token_secret_ref"}},
+    "itsm": {
+        # Keep the legacy runtime spelling and the published template profile
+        # IDs equivalent; all three select the same Jira Basic API-token
+        # credential shape.
+        "basic_api_token": {"account_identifier", "api_token_secret_ref"},
+        "basic_auth": {"account_identifier", "api_token_secret_ref"},
+        "api_token": {"account_identifier", "api_token_secret_ref"},
+    },
     "log_search": {"bearer_token": {"token_secret_ref"}},
     "confluence": {"bearer_token": {"token_secret_ref"}},
     "signalfx": {"api_key_header": {"api_key_secret_ref"}},
@@ -96,19 +153,58 @@ _RUNTIME_SCOPE_FIELDS = {
     "unix": "path",
 }
 
+# Environment bindings select a destination and a credential binding. Their
+# optional narrowing filters must never become a second configuration channel
+# for endpoint, transport, authentication or runtime limits. Those fields are
+# resolved from the saved instance and published parameter contract instead.
+_PROTECTED_BINDING_FILTER_FIELDS = frozenset({
+    "endpoint", "base_url", "transport", "protocol", "auth_type",
+    "credentials", "credential_binding_id", "secret_reference", "secrets",
+    "provider_adapter_id", "template_id", "template_version", "system_name",
+    "tenant_id", "project_id", "instance_id", "enabled", "status",
+    "timeout_seconds", "max_results", "max_response_bytes",
+    "max_window_seconds", "custom_field_mapping", "access_mode",
+    "mcp_endpoint", "mcp_tools", "route_mapping", "capability_routes",
+})
+_ENVIRONMENT_BINDING_FIELDS = frozenset({
+    "connection_id",
+    "project_env_id", "tool_env_id", "external_resource",
+    "credential_binding_id", "narrowing_filters_json", "status",
+    # Scope-store metadata is persisted alongside the binding. It is
+    # server-owned and is never copied into the provider definition.
+    "tenant_id", "project_id", "instance_id", "created_at", "updated_at",
+})
+
+
+def configured_connector_secrets(platform_options: dict, parameter_rows):
+    defaults: dict[str, dict[str, str]] = {}
+    for name, options in platform_options.items():
+        secrets = getattr(options, "secrets", None) if not isinstance(options, dict) else options.get("secrets")
+        if isinstance(secrets, dict):
+            defaults[name] = {
+                key: value for key, value in secrets.items() if isinstance(key, str) and isinstance(value, str)
+            }
+    for row in parameter_rows or []:
+        tool = row.get("tool")
+        variable = row.get("variable_name")
+        value = row.get("effective_value")
+        if tool in defaults and isinstance(variable, str) and variable in defaults[tool]:
+            defaults[tool][variable] = value
+    return {tool: overrides for tool, overrides in defaults.items() if overrides}
+
 
 def configured_connector_values(parameter_rows):
-    """Use explicitly saved values, never sample catalog defaults, for live clients."""
+    """Apply shared limits; connection identity changes require an explicit edit."""
     result = {}
     for row in parameter_rows or []:
         tool, name = row["tool"], row["variable_name"]
         if tool not in {"itsm", "log_search"} or name not in NATIVE_RUNTIME_FIELDS:
             continue
-        if not row.get("override_revision") and row.get("revision", 1) <= 1:
+        if name in {"endpoint", "service_user"} and not row.get("override_revision") and row.get("revision", 1) <= 1:
             continue
         if tool == "itsm" and name in {"max_results", "max_window_seconds"}:
             continue
-        if tool == "log_search" and name == "service_user":
+        if tool == "log_search" and name in {"service_user", "custom_field_mapping"}:
             continue
         field = "base_url" if tool == "itsm" and name == "endpoint" else NATIVE_RUNTIME_FIELDS[name]
         result.setdefault(tool, {})[field] = row["effective_value"]
@@ -156,7 +252,8 @@ def build_connectors(raw_options, mode, cleanup, injected=None, secret_reference
                     raise ValueError("This connector requires MCP transport")
             except ValueError:
                 continue  # Missing deployment credentials remain unavailable.
-            cleanup.push_async_callback(provider.aclose)
+            if cleanup is not None:
+                cleanup.push_async_callback(provider.aclose)
             providers[name] = provider
     return providers
 
@@ -214,6 +311,9 @@ def resolve_connector_provider(
             raise ValueError(f"No native provider is registered for connector '{template_id}'")
         resolved = _resolve_instance_binding(instance_definition, environment_id)
         resolved = _apply_scope_binding(template_id, resolved)
+        if connection_route(resolved, template_id) == "mcp":
+            return resolve_mcp_connection(template_id, resolved, allowed_hosts=allowed_hosts,
+                                          allowed_secret_references=allowed_secret_references)
         endpoint = resolved.get("endpoint", "")
         if not isinstance(endpoint, str) or not endpoint.strip():
             raise ValueError("Connector endpoint is required on the saved project instance")
@@ -239,6 +339,7 @@ def resolve_connector_provider(
                 api_token=resolved_secrets.get("api_token_secret_ref", ""),
                 timeout_s=timeout_s,
                 custom_field_mapping=custom_field_mapping,
+                max_response_bytes=int(resolved.get("max_response_bytes", 1048576)),
             )
         elif template_id == "log_search":
             index = resolved.get("index") or resolved.get("external_resource")
@@ -249,7 +350,9 @@ def resolve_connector_provider(
                 token=resolved_secrets.get("token_secret_ref", ""),
                 index=index,
                 timeout_s=timeout_s,
-                max_results=int(instance_definition.get("max_results", 100)),
+                max_results=int(resolved.get("max_results", 100)),
+                max_window_seconds=int(resolved.get("max_window_seconds", 86400)),
+                max_response_bytes=int(resolved.get("max_response_bytes", 1048576)),
             )
         elif template_id in {"confluence", "gitlab", "qtest", "signalfx", "kubernetes"}:
             scope = resolved.get("external_resource") or resolved.get("scope")
@@ -338,6 +441,7 @@ def _normalise_saved_instance(instance_definition: dict) -> dict:
             "template_id",
             "template_version",
             "system_name",
+            "provider_adapter_id",
             "status",
             "enabled",
             "revision",
@@ -346,6 +450,7 @@ def _normalise_saved_instance(instance_definition: dict) -> dict:
     }
     flattened = {**stored_definition, **identity}
     flattened["bindings"] = instance_definition.get("bindings", [])
+    flattened["environment_connections"] = instance_definition.get("environment_connections", [])
     return flattened
 
 
@@ -353,27 +458,92 @@ def _resolve_instance_binding(instance_definition: dict, environment_id: str | N
     """Select one persisted environment binding before constructing a provider."""
     definition = dict(instance_definition)
     dependency = definition.get("environment_dependency")
-    bindings = definition.get("bindings") or definition.get("environment_mappings") or []
+    # A normalized store instance always has a ``bindings`` key. Prefer that
+    # authoritative relation even when it is empty; legacy inline mappings
+    # must never resurrect a deleted database binding.
+    bindings = (
+        definition["bindings"]
+        if "bindings" in definition
+        else definition.get("environment_mappings") or []
+    )
+    if bindings is None:
+        bindings = []
+    if not isinstance(bindings, list):
+        raise ValueError("Connector environment bindings must be a list")
+    if definition.get("environment_connections") and not bindings:
+        raise ValueError("Environment connections require an explicit project binding")
+
+    def apply(binding):
+        if not isinstance(binding, dict):
+            raise ValueError("Connector environment binding must be an object")
+        unknown = set(binding) - _ENVIRONMENT_BINDING_FIELDS
+        if unknown:
+            raise ValueError(
+                "Connector environment binding contains unsupported fields: "
+                + ", ".join(sorted(unknown))
+            )
+        project_env_id = binding.get("project_env_id")
+        external_resource = binding.get("external_resource")
+        if not isinstance(project_env_id, str) or not project_env_id.strip():
+            raise ValueError("Connector environment binding requires a project environment")
+        if not isinstance(external_resource, str) or not external_resource.strip():
+            raise ValueError("Connector environment binding requires an external resource")
+        filters = binding.get("narrowing_filters_json") or {}
+        if not isinstance(filters, dict):
+            raise ValueError("Connector environment binding narrowing filters must be an object")
+        protected = sorted(set(filters) & _PROTECTED_BINDING_FILTER_FIELDS)
+        if protected:
+            raise ValueError(
+                "Connector environment binding cannot override instance fields: "
+                + ", ".join(protected)
+            )
+        # Keep binding identity and resource scope authoritative. Provider
+        # adapters may consume a declared narrowing filter, but filters cannot
+        # retarget the endpoint or replace credentials.
+        definition.update({
+            key: binding[key]
+            for key in ("project_env_id", "tool_env_id", "external_resource", "credential_binding_id")
+            if key in binding
+        })
+        definition.update(filters)
+        connection_id = binding.get("connection_id")
+        connections = definition.get("environment_connections") or []
+        if connection_id:
+            matches = [c for c in connections if c.get("connection_id") == connection_id]
+            if len(matches) != 1:
+                raise ValueError("Selected environment connection does not exist")
+            resolved = apply_environment_connection(definition, matches[0], require_enabled=True)
+            definition.clear()
+            definition.update(resolved)
+        elif connections:
+            raise ValueError("Environment binding requires an explicit connection ID")
+
     if dependency == "dependent":
         if not environment_id:
             raise ValueError("Environment-dependent connector resolution requires an environment id")
-        matches = [b for b in bindings if b.get("project_env_id") == environment_id and b.get("status", "active") == "active"]
+        matches = [
+            b for b in bindings
+            if isinstance(b, dict)
+            and b.get("project_env_id") == environment_id
+            and b.get("status", "active") == "active"
+        ]
         if len(matches) != 1:
             raise ValueError("No unique active environment binding exists for the requested environment")
-        binding = matches[0]
-        definition.update(binding)
-        definition.update(binding.get("narrowing_filters_json") or {})
+        apply(matches[0])
     elif bindings:
-        active = [b for b in bindings if b.get("status", "active") == "active"]
+        active = [
+            b for b in bindings
+            if isinstance(b, dict) and b.get("status", "active") == "active"
+        ]
+        if not active:
+            raise ValueError("No active environment binding exists for the connector")
         if environment_id:
             matches = [b for b in active if b.get("project_env_id") == environment_id]
             if len(matches) != 1:
                 raise ValueError("No unique active environment binding exists for the requested environment")
-            definition.update(matches[0])
-            definition.update(matches[0].get("narrowing_filters_json") or {})
+            apply(matches[0])
         elif len(active) == 1:
-            definition.update(active[0])
-            definition.update(active[0].get("narrowing_filters_json") or {})
+            apply(active[0])
         elif len(active) > 1:
             raise ValueError("Multiple active environment bindings require an explicit environment id")
     return definition

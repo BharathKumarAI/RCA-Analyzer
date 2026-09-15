@@ -5,6 +5,7 @@ import asyncio
 from app.configuration.parameters import ParameterStore
 from app.configuration.integrations import IntegrationStore
 from app.configuration.database_bundle import load_effective_settings
+from app.configuration.connector_catalog import refresh_published_templates
 from app.persistence.platform_admin import PlatformAdminStore
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -22,26 +23,12 @@ from app.observability.otel import setup_telemetry
 from app.runtime.runner import ExecutionRunner
 from app.optimization.service import OptimizationService
 from app.settings import Settings
-from typing import Any
 
-from app.connectors.providers.registry import build_connectors, configured_connector_values
+from app.connectors.providers.registry import (
+    build_connectors, configured_connector_values,
+    configured_connector_secrets as _resolve_connector_secret_overrides,
+)
 
-
-def _resolve_connector_secret_overrides(platform_options: dict[str, Any], parameter_rows):
-    defaults: dict[str, dict[str, str]] = {}
-    for name, options in platform_options.items():
-        secrets = getattr(options, "secrets", None) if not isinstance(options, dict) else options.get("secrets")
-        if isinstance(secrets, dict):
-            defaults[name] = {
-                key: value for key, value in secrets.items() if isinstance(key, str) and isinstance(value, str)
-            }
-    for row in parameter_rows or []:
-        tool = row.get("tool")
-        variable = row.get("variable_name")
-        value = row.get("effective_value")
-        if tool in defaults and isinstance(variable, str) and variable in defaults[tool]:
-            defaults[tool][variable] = value
-    return {tool: overrides for tool, overrides in defaults.items() if overrides}
 
 
 def application_lifespan(settings=None, *, connectors=None, model_factory=None):
@@ -65,19 +52,36 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             await api.state.run_events.initialize()
             api.state.parameters = ParameterStore(api.state.store.engine)
             await api.state.parameters.initialize()
+            from app.configuration.project_templates import ProjectTemplateStore
+            api.state.project_templates = ProjectTemplateStore(api.state.store.engine)
+            await api.state.project_templates.initialize()
             api.state.integrations = IntegrationStore(api.state.store.engine)
             await api.state.integrations.initialize()
             api.state.platform_admin = PlatformAdminStore(api.state.store.engine)
             await api.state.platform_admin.initialize()
             api.state.integration_probe_limiter = asyncio.Semaphore(4)
             configured, parameters = await load_effective_settings(
-                api.state.store.engine, configured, cleanup
+                api.state.store.engine,
+                configured,
+                cleanup,
+                connector_template_store=api.state.platform_admin,
             )
             api.state.settings = configured
             api.state.upload_limiter = asyncio.Semaphore(
                 configured.max_concurrent_uploads
             )
-            platform = PlatformConfiguration.load(configured)
+            platform = await PlatformConfiguration.load_async(
+                api.state.store.engine,
+                configured,
+                tenant_id=configured.tenant_id,
+            )
+            # Persisted lifecycle records are the authoritative catalog for the
+            # running process. Keep every API, Harness, and runtime consumer on
+            # the same published version set as parameter resolution.
+            platform = await refresh_published_templates(
+                platform,
+                api.state.platform_admin,
+            )
             secret_references = _resolve_connector_secret_overrides(
                 platform_options=platform.connector_options,
                 parameter_rows=parameters,
@@ -138,8 +142,13 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             api.state.harness_workspace = HarnessWorkspaceService(
                 api.state.store.engine,
                 ConfigurationBlobStore(configured.artifact_uri("agent-configurations") + "/harness", 1048576, suffix=".json"),
-                platform, configured, api.state.configurations,
+                platform,
+                configured,
+                api.state.configurations,
+                parameter_store=api.state.parameters,
+                connector_instance_store=api.state.platform_admin,
             )
+            api.state.harness_workspace.project_templates = api.state.project_templates
             await api.state.harness_workspace.initialize()
             api.state.optimizations = OptimizationService(
                 api.state.store.engine,
@@ -161,6 +170,8 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 chat_artifacts=api.state.chat_artifacts,
                 platform=platform,
                 connector_instance_store=api.state.platform_admin,
+                parameter_store=api.state.parameters,
+                refresh_deployment_connectors=connectors is None,
                 connector_secret_references=project_secret_references,
                 connector_allowed_hosts=allowed_hosts or None,
                 connector_enabled_adapters=enabled_connector_adapters,

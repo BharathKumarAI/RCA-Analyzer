@@ -1,4 +1,5 @@
 """Scoped immutable bundle revisions and independent workflow review."""
+from collections import defaultdict
 import time
 import uuid
 
@@ -6,12 +7,14 @@ import yaml
 from sqlalchemy import Column, Float, MetaData, String, Table, and_, insert, select, update
 
 from app.capabilities.resolver import CapabilityResolver
+from app.configuration.connector_catalog import published_parameter_templates
 from app.configuration.harness_bundles import (
     BUILTINS, BundleInput, Workspace, Permissions, GraphNode, GraphEdge, canonical,
     compile_bundle, compatibility, enriched_graph,
 )
 from app.configuration.service import AUTHOR_ROLES, ADMIN_ROLES
 from app.configuration.harness_catalog import workspace_catalog
+from app.configuration.parameters import _normalize_parameter_name
 from app.configuration.workflow import available_builtins, default_workflow
 from app.persistence.database import initialize_tables
 from app.runtime.run_contract import content_hash
@@ -54,10 +57,42 @@ class HarnessConflict(ValueError):
 
 
 class HarnessWorkspaceService:
-    def __init__(self, engine, blob_store, platform, settings, configurations):
+    def __init__(
+        self,
+        engine,
+        blob_store,
+        platform,
+        settings,
+        configurations,
+        *,
+        parameter_store=None,
+        connector_instance_store=None,
+    ):
         self.engine, self.blob_store = engine, blob_store
         self.platform, self.settings, self.configurations = platform, settings, configurations
+        self.parameter_store = parameter_store
+        self.connector_instance_store = connector_instance_store
         self.registry, self.profiles = platform.registry, platform.profiles
+
+    # These are the bindings that have a concrete consumer in the current
+    # native providers. A declared binding alone is intentionally insufficient
+    # to claim that a field executes: this keeps planned adapters and fields
+    # such as project.attachment_processing visible without overstating them.
+    _CONSUMED_RUNTIME_BINDINGS = frozenset({
+        "connector.timeout_seconds",
+        "connector.max_response_bytes",
+        "connector.max_results",
+        "connector.max_window_seconds",
+        "jira.custom_field_mapping",
+        "project.attachment_processing",
+        "kafka.topic",
+        "unix.host",
+        "unix.port",
+        "unix.username",
+        "unix.private_key_ref",
+        "unix.known_hosts_ref",
+        "unix.log_path",
+    })
 
     async def initialize(self):
         await initialize_tables(self.engine, metadata)
@@ -77,6 +112,490 @@ class HarnessWorkspaceService:
     def require_delegated(self):
         if "harness" not in self.registry.inheritance.policy.project_sections:
             raise PermissionError("Harness customization is not delegated by the platform")
+
+    async def connector_context(self, p):
+        """Read the same published templates and parameter rows used at runtime."""
+        templates = tuple(getattr(self.platform, "connector_templates", ()) or ())
+        store = self.connector_instance_store
+        if store is not None and hasattr(store, "list_connector_templates"):
+            templates = await published_parameter_templates(templates, store, parameter_store=self.parameter_store, tenant=p.tenant_id)
+        rows = []
+        if self.parameter_store is not None:
+            rows = await self.parameter_store.resolve(
+                p.tenant_id,
+                p.project_id,
+                templates,
+                getattr(self.platform, "connector_options", {}),
+            )
+        instances = []
+        if store is not None and hasattr(store, "list_project_connector_instances"):
+            instances = await store.list_project_connector_instances(
+                p.tenant_id, p.project_id
+            )
+        return templates, rows, instances
+
+    @staticmethod
+    def _field_projection(field):
+        """Expose field contract metadata without copying credential material."""
+        values = {
+            "variable_name": field.variable_name,
+            "label": field.label or field.variable_name,
+            "description": field.description,
+            "value_type": field.value_type,
+            "category": field.category,
+            "subcategory": field.subcategory,
+            "allowed_values": list(field.allowed_values)
+            if field.allowed_values is not None
+            else None,
+            "allow_project_override": field.allow_project_override,
+            "visible_in_project": field.visible_in_project,
+            "required": field.required,
+            "required_when": field.required_when,
+            "nullable": field.nullable,
+            "disableable": field.disableable,
+            "default_source": field.default_source,
+            "ui_control": field.ui_control,
+            "ui_metadata": field.ui_metadata,
+            "unit": field.unit,
+            "ownership": field.ownership,
+            "sensitivity": field.sensitivity,
+            "runtime_binding": field.runtime_binding,
+            "template_editable": field.template_editable,
+            "minimum": field.minimum,
+            "maximum": field.maximum,
+            "max_length": field.max_length,
+            "visibility_condition": field.visibility_condition,
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
+    @staticmethod
+    def _safe_parameter_value(row, value, declarations):
+        """Never put secret references or hidden platform values in Harness JSON."""
+        sensitive = row.get("value_type") == "secret_ref" or any(
+            item.get("sensitivity") in {"masked", "secret_reference"}
+            or item.get("ownership") == "secret_reference"
+            for item in declarations
+        )
+        visible = bool(row.get("project_visible", True)) and (
+            not declarations or all(item.get("visible_in_project", True) for item in declarations)
+        )
+        if sensitive or not visible:
+            return None, True
+        return value, False
+
+    def _add_connector_parameter_projections(
+        self, graph, templates, parameter_rows, instances
+    ):
+        """Project template, effective parameter, and execution consumer lineage.
+
+        Harness is a read model here. It deliberately does not turn a declared
+        template binding into an execution claim: only bindings known to have a
+        provider consumer are marked ``runtime_bound``.
+        """
+        # The source is the resolved published catalog. It may come from the
+        # bundled platform configuration or a persisted immutable version.
+        template_source = "platform.connector_templates"
+        declarations = defaultdict(list)
+        template_nodes = {}
+
+        for template in templates:
+            template_key = (template.system_name, template.version)
+            template_node_id = f"connector-template:{template.system_name}@{template.version}"
+            template_nodes[template_key] = template_node_id
+            field_projections = []
+            declared_names = set()
+            for field in template.parameter_fields:
+                projection = self._field_projection(field)
+                declared_names.add(field.variable_name)
+                declarations[(template.system_name, field.variable_name)].append(
+                    {
+                        **projection,
+                        "template_id": template.system_name,
+                        "template_version": template.version,
+                        "declaration": "parameter_field",
+                    }
+                )
+                field_projections.append(projection)
+            for raw_name in template.default_config:
+                if not isinstance(raw_name, str):
+                    continue
+                name = _normalize_parameter_name(raw_name)
+                if name in declared_names:
+                    continue
+                declarations[(template.system_name, name)].append(
+                    {
+                        "variable_name": name,
+                        "label": name,
+                        "description": f"Connector default config: {raw_name}",
+                        "value_type": "configuration",
+                        "visible_in_project": True,
+                        "runtime_binding": None,
+                        "template_id": template.system_name,
+                        "template_version": template.version,
+                        "declaration": "default_config",
+                    }
+                )
+
+            # These base controls are synthesized by ParameterStore for every
+            # connector. Keep their visibility contract in the Harness read
+            # model too, otherwise hidden protocol/auth values could appear as
+            # effective values merely because they have no parameter-field row.
+            base_visibility = {
+                "endpoint": True,
+                "ui_base_url": True,
+                "protocol": False,
+                "auth_method": False,
+                "service_user": False,
+                "timeout_seconds": True,
+                "retry_attempts": True,
+                "retry_backoff_seconds": True,
+                "rate_limit": True,
+            }
+            for name, visible in base_visibility.items():
+                declarations.setdefault((template.system_name, name), []).append(
+                    {
+                        "variable_name": name,
+                        "label": name,
+                        "description": f"Connector base setting: {name}",
+                        "value_type": "configuration",
+                        "visible_in_project": visible,
+                        "runtime_binding": None,
+                        "template_id": template.system_name,
+                        "template_version": template.version,
+                        "declaration": "connector_base",
+                    }
+                )
+
+            template_instances = [
+                {
+                    "instance_id": item.get("instance_id"),
+                    "system_name": item.get("system_name"),
+                    "status": item.get("status"),
+                    "enabled": item.get("enabled"),
+                    "revision": item.get("revision"),
+                    "bindings": [
+                        {
+                            key: binding.get(key)
+                            for key in (
+                                "project_env_id",
+                                "tool_env_id",
+                                "external_resource",
+                                "status",
+                            )
+                            if binding.get(key) is not None
+                        }
+                        for binding in item.get("bindings", [])
+                        if isinstance(binding, dict)
+                    ],
+                }
+                for item in instances
+                if item.get("template_id") == template.system_name
+                and item.get("template_version", template.version) == template.version
+            ]
+            graph.nodes.append(
+                GraphNode(
+                    id=template_node_id,
+                    kind="connector_template",
+                    label=template.name,
+                    source=template_source,
+                    enabled=bool(template.platform_enabled and template.is_enabled_by_policy),
+                    reason=(
+                        "Published connector template resolved from the platform catalog"
+                        if template.platform_enabled and template.is_enabled_by_policy
+                        else "Disabled by platform connector policy"
+                    ),
+                    details={
+                        "template_id": template.system_name,
+                        "template_version": template.version,
+                        "status": template.availability,
+                        "provider_adapter_id": template.provider_adapter_id,
+                        "integration_kind": template.integration_kind,
+                        "protocol": template.protocol,
+                        "supported_operations": list(template.supported_operations),
+                        "known_limitations": list(template.known_limitations),
+                        "project_form": template.project_form,
+                        "fields": field_projections,
+                        "instances": template_instances,
+                        "provenance": {
+                            "source": template_source,
+                            "catalog_resolver": "app/configuration/connector_catalog.py",
+                            "lifecycle": "published",
+                        },
+                    },
+                )
+            )
+
+        tool_actions = defaultdict(list)
+        tool_refs = defaultdict(list)
+        agent_refs = defaultdict(list)
+        node_ids = {node.id for node in graph.nodes}
+        agent_ids = {
+            node.id for node in graph.nodes if node.kind in {"agent", "builtin"}
+        }
+        agent_enabled = {
+            node.id: node.enabled
+            for node in graph.nodes
+            if node.kind in {"agent", "builtin"}
+        }
+        connector_enabled = {
+            node.id: node.enabled
+            for node in graph.nodes
+            if node.kind == "connector"
+        }
+        for node in graph.nodes:
+            if node.kind != "tool":
+                continue
+            action = node.details.get("effective_value") or node.label
+            if not isinstance(action, str) or "." not in action:
+                continue
+            connector = action.split(".", 1)[0]
+            connector_node = "connector:" + connector
+            if not node.enabled or connector_enabled.get(connector_node, True) is False:
+                continue
+            tool_actions[connector].append(action)
+            tool_refs[connector].append(node.id)
+            for edge in graph.edges:
+                if (
+                    edge.target == node.id
+                    and edge.source in agent_ids
+                    and agent_enabled.get(edge.source, True)
+                ):
+                    agent_refs[connector].append(edge.source)
+
+        def add_edge(source, target, kind):
+            if not any(
+                edge.source == source and edge.target == target and edge.kind == kind
+                for edge in graph.edges
+            ):
+                graph.edges.append(GraphEdge(source=source, target=target, kind=kind))
+
+        def instance_values(tool, name, declaration_items):
+            result = []
+            for template_key, template_node_id in template_nodes.items():
+                if template_key[0] != tool:
+                    continue
+                for item in instances:
+                    if (
+                        item.get("template_id") != template_key[0]
+                        or item.get("template_version", template_key[1]) != template_key[1]
+                    ):
+                        continue
+                    definition = item.get("definition_json") or {}
+                    nested = definition.get("parameters") or {}
+                    if not isinstance(definition, dict) or not isinstance(nested, dict):
+                        continue
+                    value = definition.get(name, nested.get(name))
+                    if value is None:
+                        continue
+                    safe, redacted = self._safe_parameter_value(
+                        {"value_type": "string", "project_visible": True},
+                        value,
+                        declaration_items,
+                    )
+                    result.append(
+                        {
+                            "instance_id": item.get("instance_id"),
+                            "revision": item.get("revision"),
+                            "status": item.get("status"),
+                            "enabled": item.get("enabled"),
+                            "value": safe,
+                            "redacted": redacted,
+                            "source": "project_connector_instance",
+                            "template_id": template_key[0],
+                            "template_version": template_key[1],
+                            "template_node": template_node_id,
+                        }
+                    )
+            return result
+
+        seen_parameters = set()
+        for row in parameter_rows:
+            tool = row.get("tool")
+            name = row.get("variable_name")
+            if not isinstance(tool, str) or not isinstance(name, str):
+                continue
+            key = (tool, name)
+            if key in seen_parameters:
+                continue
+            seen_parameters.add(key)
+            declared = declarations.get(key, [])
+            binding = next(
+                (
+                    item.get("runtime_binding")
+                    for item in declared
+                    if item.get("runtime_binding")
+                ),
+                None,
+            )
+            actions = sorted(set(tool_actions.get(tool, ())))
+            tool_consumers = sorted(set(tool_refs.get(tool, ())))
+            agent_consumers = sorted(set(agent_refs.get(tool, ())))
+            if tool == "runtime":
+                execution_status = "runtime_control"
+                execution_consumers = ["governance"] if "governance" in node_ids else []
+            elif not binding:
+                execution_status = "configuration_only"
+                execution_consumers = []
+            elif binding not in self._CONSUMED_RUNTIME_BINDINGS or not actions:
+                execution_status = "declared_unconsumed"
+                execution_consumers = []
+            else:
+                execution_status = "runtime_bound"
+                execution_consumers = [*tool_consumers, *agent_consumers]
+
+            if not row.get("enabled", True):
+                execution_status = "disabled"
+                execution_consumers = []
+
+            template_keys = sorted(
+                {
+                    (item.get("template_id"), item.get("template_version"))
+                    for item in declared
+                    if item.get("template_id")
+                }
+            )
+            template_available = any(
+                graph_node.enabled
+                for template_key in template_keys
+                if (graph_node := next(
+                    (
+                        node
+                        for node in graph.nodes
+                        if node.id == template_nodes.get(template_key)
+                    ),
+                    None,
+                )) is not None
+            )
+            if template_keys and not template_available:
+                execution_status = "disabled"
+                execution_consumers = []
+
+            effective_value, effective_redacted = self._safe_parameter_value(
+                row, row.get("effective_value"), declared
+            )
+            default_value, default_redacted = self._safe_parameter_value(
+                row, row.get("default_value"), declared
+            )
+            parent = (
+                template_nodes.get(template_keys[0])
+                if template_keys
+                else "governance"
+                if tool == "runtime"
+                else None
+            )
+            parameter_id = f"parameter:{tool}.{name}"
+            consumers = [
+                *[
+                    {"id": value, "kind": "tool", "relationship": "configuration"}
+                    for value in tool_consumers
+                ],
+                *[
+                    {"id": value, "kind": "agent", "relationship": "configuration"}
+                    for value in agent_consumers
+                ],
+            ]
+            if tool == "runtime" and "governance" in node_ids:
+                consumers.append(
+                    {
+                        "id": "governance",
+                        "kind": "policy",
+                        "relationship": "runtime_control",
+                    }
+                )
+            details = {
+                "tool": tool,
+                "variable_name": name,
+                "label": next(
+                    (item.get("label") for item in declared if item.get("label")),
+                    name,
+                ),
+                "value_type": row.get("value_type"),
+                "description": row.get("description"),
+                "category": row.get("category"),
+                "subcategory": row.get("subcategory"),
+                "allowed_values": row.get("allowed_values"),
+                "effective_value": effective_value,
+                "default_value": default_value,
+                "redacted": effective_redacted or default_redacted,
+                "effective_state": row.get("effective_state"),
+                "enabled": row.get("enabled", True),
+                "project_visible": not (effective_redacted or default_redacted),
+                "scope": row.get("scope"),
+                "allow_project_override": row.get("allow_project_override"),
+                "runtime_binding": binding,
+                "execution_status": execution_status,
+                "execution_consumers": execution_consumers,
+                "consumer_resolution": (
+                    "enforced by runner execution pipeline during ticket triage"
+                    if binding == "project.attachment_processing"
+                    else "workflow graph dependency; connector readiness is checked at run preflight"
+                    if execution_status == "runtime_bound"
+                    else "No executing provider consumer is currently registered"
+                    if execution_status == "declared_unconsumed"
+                    else "Saved configuration is not an agent execution binding"
+                    if execution_status == "configuration_only"
+                    else "Runtime value is consumed by run governance"
+                    if execution_status == "runtime_control"
+                    else "Parameter is unavailable in the effective template or definition"
+                ),
+                "consumers": consumers,
+                "template_refs": [
+                    {"template_id": item[0], "template_version": item[1]}
+                    for item in template_keys
+                ],
+                "instance_provenance": instance_values(tool, name, declared),
+                "provenance": {
+                    "source": "project.parameter_overrides"
+                    if row.get("source") == "project"
+                    else "platform.parameter_definitions",
+                    "parameter_revision": row.get("revision"),
+                    "override_revision": row.get("override_revision"),
+                    "effective_source": row.get("source"),
+                    "template_source": template_source if template_keys else None,
+                },
+            }
+            if tool == "runtime":
+                active_value = getattr(self.settings, name, None)
+                details.update(
+                    {
+                        "active_value": active_value,
+                        "restart_required": active_value != row.get("effective_value"),
+                        "activation": (
+                            "disabled"
+                            if not row.get("enabled", True)
+                            else "active"
+                            if active_value == row.get("effective_value")
+                            else "pending_activation"
+                        ),
+                    }
+                )
+            graph.nodes.append(
+                GraphNode(
+                    id=parameter_id,
+                    kind="parameter",
+                    label=details["label"],
+                    parent=parent,
+                    source="app/configuration/parameters.py",
+                    enabled=bool(row.get("enabled", True)),
+                    reason=(
+                        "Supported runtime binding; connector availability is checked at run preflight"
+                        if execution_status == "runtime_bound"
+                        else "Declared template binding has no current executing consumer"
+                        if execution_status == "declared_unconsumed"
+                        else "Saved configuration is surfaced for provenance; it is not an agent execution binding"
+                        if execution_status == "configuration_only"
+                        else "Runtime control consumed by run governance"
+                        if execution_status == "runtime_control"
+                        else "Parameter is disabled by its source definition"
+                    ),
+                    details=details,
+                )
+            )
+            if parent:
+                add_edge(parent, parameter_id, "defines")
+            edge_kind = "runtime_binding" if execution_status == "runtime_bound" else "configuration"
+            for consumer in consumers:
+                add_edge(consumer["id"], parameter_id, edge_kind)
 
     async def default(self, p, capability):
         cap = self.capability(p, capability)
@@ -146,6 +665,10 @@ class HarnessWorkspaceService:
             approved, project.harness if project else None
         )
         self._add_approved_specialists(graph, cap, runtime, approved)
+        templates, parameter_rows, instances = await self.connector_context(p)
+        self._add_connector_parameter_projections(
+            graph, templates, parameter_rows, instances
+        )
         exclusions = self.registry.harness.exclusions(project.harness if project else None)
         for node in graph.nodes:
             if node.kind == "skill":
@@ -161,6 +684,16 @@ class HarnessWorkspaceService:
                 profile = node.id.removeprefix("model:")
                 if profile in self.profiles.profiles:
                     node.details["stages"] = {k: v.model_dump(mode="json") for k, v in self.profiles.resolve(profile).items()}
+        if getattr(self, "project_templates", None) is not None:
+            from app.configuration.project_templates import project_template_context
+            context = await project_template_context(
+                self.project_templates, p, project, self.registry.harness.revision,
+            )
+            graph.nodes.append(GraphNode(id="project-template", kind="project_template",
+                label="Project template", source="platform.project_templates", details=context))
+            if compilation.definition:
+                graph.edges.append(GraphEdge(source=compilation.definition.root,
+                    target="project-template", kind="configuration"))
         return Workspace(files=source.files, graph=graph,
             catalog=workspace_catalog(self, p, source, graph, runtime, can_edit),
             diagnostics=compilation.diagnostics, compatibility=compatibility(), revision=revision,

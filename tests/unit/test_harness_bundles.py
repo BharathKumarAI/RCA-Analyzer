@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 
@@ -16,6 +17,7 @@ from app.configuration.harness_bundles import (
 from app.configuration.harness_workspace import HarnessWorkspaceService
 from app.configuration.platform import PlatformConfiguration
 from app.identity.principals import Role, UserPrincipal
+from app.runtime.runner import ExecutionRunner
 from app.settings import Settings
 
 
@@ -180,3 +182,18 @@ async def test_default_graph_contains_valid_parallel_join(harness_context):
     assert "evidence_acquisition_join" in joins
     assert "evidence_acquisition_join" in node_ids
     assert any(edge.target == "evidence_acquisition_join" for edge in view.edges)
+
+
+def test_runtime_settings_update_refreshes_harness_workspace(harness_context):
+    settings, _platform, _principal, service = harness_context
+    runner = object.__new__(ExecutionRunner)
+    runner._run_limit = settings.max_concurrent_runs
+    runner.run_limiter = asyncio.Semaphore(settings.max_concurrent_runs)
+    runner.settings = settings
+    runner.harness_workspace = service
+
+    updated = settings.model_copy(update={"max_evidence_chars": settings.max_evidence_chars + 1})
+    runner.update_runtime_settings(updated)
+
+    assert runner.settings is updated
+    assert service.settings is updated

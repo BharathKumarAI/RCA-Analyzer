@@ -1,73 +1,50 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   CheckCircle2,
   Activity,
-  Search,
-  Settings,
   Plus,
-  X,
-  Shield,
   RefreshCw,
-  Info,
   Database,
   Layers,
   Terminal,
-  Check,
-  AlertCircle,
   ShieldAlert,
-  Edit3,
-  Trash2,
   Sparkles,
   Radio,
   BookOpen,
   GitBranch,
-  LayoutGrid,
-  Key,
-  ChevronLeft,
-  Clock,
-  ExternalLink,
-  Copy,
-  Eye,
-  EyeOff,
-  Play,
-  ChevronDown,
-  ChevronUp,
-  Sliders,
+  Search,
+  ShieldCheck,
   Lock,
-  Folder,
-  RotateCcw,
-  Save,
 } from 'lucide-react';
 import { NotificationBanner } from '../components/NotificationBanner';
 import {
   ToolDefinition,
   Principal,
   ParameterDefinitionRow,
-  CapabilityItem,
-  ConnectorHealthRecord,
   ConnectorTemplateItem,
   ProjectConnectorInstanceItem,
-  ConnectorAuthProfileItem,
+  CapabilityItem,
+  ConnectorsHealthResponse,
+  RuntimeConfig,
 } from '../types/api';
 import {
   fetchTools,
   fetchConnectorTemplates,
-  publishConnectorTemplate,
-  deprecateConnectorTemplate,
-  fetchParameters,
-  fetchCapabilities,
-  setProjectAvailability,
-  fetchConnectorHealthCheck,
-  testIntegration,
-  testConnectorCandidate,
-  setParameterOverride,
-  resetParameterOverride,
   fetchProjectConnectors,
-  saveProjectConnector,
+  fetchParameters,
   fetchProjectSetup,
-  discoverConnectorFields,
+  saveTemplateParameters,
+  fetchCapabilities,
+  fetchConnectorsHealth,
+  fetchConfig,
 } from '../services/api';
+import {
+  ConnectorsForm,
+} from '../components/connectors';
+import { ConnectorFieldGovernance } from '../components/connectors/ConnectorFieldGovernance';
+import { ConnectorInstanceEditor } from '../components/ConnectorInstanceEditor';
 import { IntegrationForm } from '../components/IntegrationForm';
+import '../styles/connector-editor.css';
 import '../styles/tools-workspace.css';
 import type { ActivePage } from '../components/Sidebar';
 
@@ -75,65 +52,6 @@ interface ToolsProps {
   tools: ToolDefinition[];
   principal: Principal;
   onNavigate?: (page: ActivePage) => void;
-}
-
-type StepperSection =
-  | '1. Connection'
-  | '2. Projects & Filters'
-  | '3. Field Mapping'
-  | '4. Investigation Settings'
-  | '5. Permissions'
-  | '6. Advanced'
-  | '7. Test & Save';
-
-interface FieldMappingEntry {
-  id: string;
-  sourceField: string;
-  fieldType: string;
-  targetField: string;
-  required: boolean;
-  defaultValue: string;
-}
-
-interface ConnectorFormState {
-  name: string;
-  type: string;
-  description: string;
-  owner: string;
-  tags: string[];
-  authMethod: string;
-  instanceUrl: string;
-  clientId: string;
-  clientSecret: string;
-  authUrl: string;
-  tokenUrl: string;
-  redirectUri: string;
-  scopes: string[];
-  defaultProject: string;
-  allowedProjects: string[];
-  defaultIssueTypes: string[];
-  savedFilters: string[];
-  fieldMappings: FieldMappingEntry[];
-  lookbackPeriod: string;
-  maxResults: number;
-  searchFields: string[];
-  includeAttachments: boolean;
-  includeComments: boolean;
-  includeSubtasks: boolean;
-  includeLinkedIssues: boolean;
-  includeHistorical: boolean;
-  queryTemplate: string;
-  accessLevel: string;
-  allowedGroups: string[];
-  readAccess: boolean;
-  writeAccess: boolean;
-  adminOnlyActions: boolean;
-  requestTimeout: number;
-  rateLimit: number;
-  retryAttempts: number;
-  cacheResults: number;
-  enableWebhooks: boolean;
-  enableAuditLogging: boolean;
 }
 
 // Unified Connector Item derived from real backend data
@@ -194,107 +112,95 @@ function getConnectorVisuals(systemName: string, category: string): { brandColor
   return { brandColor: `hsl(${hue}, 65%, 48%)`, iconType: 'custom' };
 }
 
-export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, onNavigate }) => {
+export interface ActionRegistryRow {
+  actionId: string;
+  actionName: string;
+  systemName: string;
+  connectorName: string;
+  brandColor: string;
+  stages: string[];
+  capabilities: { id: string; name: string }[];
+  minRole: string;
+  safetyProfile: string;
+  policyStatus: 'enabled' | 'restricted';
+  isCustom: boolean;
+}
+
+export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) => {
   // Live Backend Datasets
   const [toolsList, setToolsList] = useState<ToolDefinition[]>(initialTools);
   const [connectorTemplates, setConnectorTemplates] = useState<ConnectorTemplateItem[]>([]);
   const [projectConnectors, setProjectConnectors] = useState<ProjectConnectorInstanceItem[]>([]);
   const [parameters, setParameters] = useState<ParameterDefinitionRow[]>([]);
-  const [capabilities, setCapabilities] = useState<CapabilityItem[]>([]);
-  const [availableEnvironments, setAvailableEnvironments] = useState<Array<{ id: string; name: string }>>([]);
+  const [capabilitiesList, setCapabilitiesList] = useState<CapabilityItem[]>([]);
+  const [connectorsHealth, setConnectorsHealth] = useState<ConnectorsHealthResponse | null>(null);
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
 
-  // Selected Connector Key
+  // Selected Connector Key & UI Filter States
   const [selectedConnectorId, setSelectedConnectorId] = useState<string>('itsm');
-  const [activeStepper, setActiveStepper] = useState<StepperSection>('1. Connection');
-
-  // Selected Environment & Scope Project
-  const [selectedEnvironment, setSelectedEnvironment] = useState<string>('QLAB02');
-  const [selectedScope, setSelectedScope] = useState<string>(principal?.project_id || 'default');
-  const [discoveringFields, setDiscoveringFields] = useState<boolean>(false);
-
-  // Live Forms State indexed by connector id
-  const [formStates, setFormStates] = useState<Record<string, ConnectorFormState>>({});
-
-  // UI interaction states
-  const [isSecretVisible, setIsSecretVisible] = useState(false);
-  const [activeFieldTab, setActiveFieldTab] = useState<'Common' | 'Specific' | 'All'>('Common');
-  const [isEnvOverridesOpen, setIsEnvOverridesOpen] = useState(false);
-
-  // New tag/project/issue input values
-  const [newTagInput, setNewTagInput] = useState('');
-  const [newProjectInput, setNewProjectInput] = useState('');
-  const [newIssueTypeInput, setNewIssueTypeInput] = useState('');
-  const [newFilterInput, setNewFilterInput] = useState('');
-  const [newGroupInput, setNewGroupInput] = useState('');
-
-  // Probing & saving actions
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionProbeResult, setConnectionProbeResult] = useState<{
-    success: boolean;
-    timestamp: string;
-    message?: string;
-  }>({
-    success: true,
-    timestamp: 'Sep 10, 2025 10:24 AM (CDT)',
-  });
-
-  const [savingConfig, setSavingConfig] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'restricted' | 'saved' | 'custom'>('all');
+  const [actionsScope, setActionsScope] = useState<'selected' | 'all'>('selected');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [configuringCustomTool, setConfiguringCustomTool] = useState<ToolDefinition | null>(null);
   const [isCreatingCustom, setIsCreatingCustom] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState<ProjectConnectorInstanceItem | 'new' | null>(null);
+  const [environments, setEnvironments] = useState<{id: string; name: string}[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [templateDirty, setTemplateDirty] = useState(false);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const canManage = principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role));
+  const leaveEdits = () => (!dirty && !templateDirty) || window.confirm('Discard unsaved template changes?');
 
-  const canEdit =
-    principal.roles.includes('PLATFORM_ADMIN') ||
-    principal.roles.some(role => ['PROJECT_OWNER'].includes(role));
+  const isPlatformAdmin = principal.roles.includes('PLATFORM_ADMIN');
+  const canEdit = isPlatformAdmin;
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
   };
 
-  // Sync initialTools
-  useEffect(() => {
-    if (initialTools.length > 0) {
-      setToolsList(initialTools);
-    }
-  }, [initialTools]);
-
-  // Load live backend data directly from authentic APIs
-  const loadBackendData = async () => {
+  const handleSyncCatalog = async () => {
+    if (!leaveEdits()) return;
+    setIsSyncing(true);
     try {
-      const [fetchedParams, fetchedCaps, fetchedTemplates, fetchedTools] = await Promise.all([
-        fetchParameters().catch(() => []),
-        fetchCapabilities().catch(() => []),
-        fetchConnectorTemplates().catch(() => []),
-        fetchTools().catch(() => initialTools),
-      ]);
-      setParameters(fetchedParams);
-      setCapabilities(fetchedCaps);
-      setConnectorTemplates(fetchedTemplates);
-      setToolsList(fetchedTools);
-
-      if (principal?.project_id) {
-        const [conns, setup] = await Promise.all([
-          fetchProjectConnectors(principal.project_id).catch(() => []),
-          fetchProjectSetup().catch(() => null),
-        ]);
-        setProjectConnectors(conns);
-        const envs = setup?.runtime?.environments;
-        if (Array.isArray(envs) && envs.length > 0) {
-          setAvailableEnvironments(envs.map(e => ({ id: e.id, name: e.name || e.id })));
-          const firstEnv = envs[0];
-          if (firstEnv) {
-            setSelectedEnvironment(firstEnv.name || firstEnv.id || 'QLAB02');
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Failed loading live connector backend data', err);
+      await loadBackendData();
+      setRefreshRevision(revision => revision + 1);
+      setDirty(false); setTemplateDirty(false);
+      showToast('Synchronized with live connector templates and parameters.');
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Unable to refresh connectors.');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
+  const loadBackendData = useCallback(async () => {
+    const [fetchedParams, fetchedTemplates, fetchedTools, connections, setup, fetchedCaps, fetchedHealth, fetchedCfg] = await Promise.all([
+      fetchParameters(isPlatformAdmin ? 'template' : undefined),
+      fetchConnectorTemplates(),
+      fetchTools(),
+      fetchProjectConnectors(principal.project_id),
+      fetchProjectSetup(),
+      fetchCapabilities(true).catch(() => []),
+      fetchConnectorsHealth().catch(() => null),
+      fetchConfig().catch(() => null),
+    ]);
+    setParameters(fetchedParams);
+    setConnectorTemplates(fetchedTemplates);
+    setToolsList(fetchedTools);
+    setProjectConnectors(connections);
+    setEnvironments((setup.runtime.environments || []).filter(env => env.enabled !== false));
+    setCapabilitiesList(fetchedCaps);
+    setConnectorsHealth(fetchedHealth);
+    setRuntimeConfig(fetchedCfg);
+    setLoadError(null);
+  }, [isPlatformAdmin, principal.project_id]);
+
   useEffect(() => {
-    void loadBackendData();
-  }, [principal]);
+    void loadBackendData().catch(error => setLoadError(error instanceof Error ? error.message : 'Unable to load connectors.'))
+      .finally(() => setIsSyncing(false));
+  }, [loadBackendData]);
 
   // Dynamically derive all connectors from the real backend templates & tools
   const backendConnectors = useMemo<BackendConnectorItem[]>(() => {
@@ -314,8 +220,6 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
         status = 'disabled';
       } else if (matchingTool) {
         status = matchingTool.status;
-      } else if (tmpl.availability === 'published' || tmpl.availability === 'active') {
-        status = 'connected';
       }
 
       map.set(sys.toLowerCase(), {
@@ -364,15 +268,39 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
     });
   }, [connectorTemplates, toolsList, projectConnectors]);
 
-  // Ensure an active connector is selected
-  useEffect(() => {
-    if (backendConnectors.length > 0) {
-      const currentExists = backendConnectors.some(c => c.id === selectedConnectorId);
-      if (!currentExists) {
-        setSelectedConnectorId(backendConnectors[0]?.id || 'itsm');
+  // Derived filter counts for status chips
+  const enabledCount = useMemo(() => backendConnectors.filter(c => c.template?.is_enabled_by_policy !== false).length, [backendConnectors]);
+  const restrictedCount = useMemo(() => backendConnectors.filter(c => c.template?.is_enabled_by_policy === false).length, [backendConnectors]);
+  const withSavedCount = useMemo(() => backendConnectors.filter(c =>
+    projectConnectors.some(inst => inst.system_name.toLowerCase() === c.system_name.toLowerCase() || inst.template_id === c.template?.template_id)
+  ).length, [backendConnectors, projectConnectors]);
+  const customCount = useMemo(() => backendConnectors.filter(c => !c.template).length, [backendConnectors]);
+
+  // Filtered connectors based on search query and status filter
+  const visibleConnectors = useMemo(() => {
+    const query = search.toLowerCase().trim();
+    return backendConnectors.filter(conn => {
+      if (query && !`${conn.name} ${conn.category} ${conn.system_name}`.toLowerCase().includes(query)) {
+        return false;
       }
-    }
-  }, [backendConnectors, selectedConnectorId]);
+      if (statusFilter === 'enabled') {
+        return conn.template?.is_enabled_by_policy !== false;
+      }
+      if (statusFilter === 'restricted') {
+        return conn.template?.is_enabled_by_policy === false;
+      }
+      if (statusFilter === 'saved') {
+        return projectConnectors.some(inst =>
+          inst.system_name.toLowerCase() === conn.system_name.toLowerCase() ||
+          inst.template_id === conn.template?.template_id
+        );
+      }
+      if (statusFilter === 'custom') {
+        return !conn.template;
+      }
+      return true;
+    });
+  }, [backendConnectors, search, statusFilter, projectConnectors]);
 
   // Selected connector item
   const selectedConnector = useMemo<BackendConnectorItem | null>(() => {
@@ -384,506 +312,73 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
     );
   }, [backendConnectors, selectedConnectorId]);
 
-  // Helper to extract effective value for a parameter name from backend parameter rows
-  const getBackendParamValue = (toolKey: string, varName: string): any => {
-    const p = parameters.find(
-      row =>
-        row.tool.toLowerCase() === toolKey.toLowerCase() &&
-        (row.variable_name.toLowerCase() === varName.toLowerCase() ||
-          row.variable_name.toLowerCase().includes(varName.toLowerCase()))
-    );
-    return p?.effective_value;
-  };
-
-  // Generate initial form state for a connector dynamically from its backend template and instance
-  const buildConnectorFormState = (conn: BackendConnectorItem): ConnectorFormState => {
-    const tmpl = conn.template;
-    const inst = conn.projectInstance;
-    const def = inst?.definition_json || {};
-    const sys = conn.system_name;
-
-    const endpoint =
-      def.endpoint ||
-      getBackendParamValue(sys, 'endpoint') ||
-      getBackendParamValue(sys, 'url') ||
-      tmpl?.default_endpoint ||
-      conn.tool?.endpoint ||
-      '';
-
-    const authProfiles = tmpl?.auth_profiles || [];
-    const activeAuthName =
-      def.auth_type ||
-      (authProfiles.length > 0 ? authProfiles[0]?.name || 'OAuth 2.0' : tmpl?.auth_method || 'OAuth 2.0');
-
-    const timeout =
-      def.timeout_seconds ||
-      Number(getBackendParamValue(sys, 'timeout')) ||
-      tmpl?.default_timeout_seconds ||
-      conn.tool?.timeout_seconds ||
-      60;
-
-    const rateLimit =
-      Number(getBackendParamValue(sys, 'rate_limit')) ||
-      (tmpl?.default_rate_limit ? parseInt(tmpl.default_rate_limit) : 500) ||
-      500;
-
-    const lookback = `${tmpl?.default_config?.lookback_days || 7} days`;
-    const maxRes = def.max_results || tmpl?.default_config?.max_results || 50;
-
-    // Field mappings from definition or template parameter_fields
-    const mappings: FieldMappingEntry[] = [];
-    if (Array.isArray(def.custom_fields) && def.custom_fields.length > 0) {
-      for (const cf of def.custom_fields) {
-        mappings.push({
-          id: cf.id || String(Math.random()),
-          sourceField: cf.name || cf.id,
-          fieldType: cf.type || 'text',
-          targetField: cf.id,
-          required: false,
-          defaultValue: '-',
-        });
-      }
-    } else if (tmpl?.parameter_fields) {
-      const mappingFields = tmpl.parameter_fields.filter(
-        pf => pf.category === 'mapping' || pf.variable_name.includes('field')
-      );
-      for (const mf of mappingFields) {
-        mappings.push({
-          id: mf.variable_name,
-          sourceField: mf.label || mf.variable_name,
-          fieldType: mf.value_type || 'text',
-          targetField: mf.variable_name,
-          required: Boolean(mf.required),
-          defaultValue: String(mf.default_value ?? '-'),
-        });
-      }
+  // Shared parameters declared for the selected connector
+  const currentSharedParams = useMemo<ParameterDefinitionRow[]>(() => {
+    if (!selectedConnector) return [];
+    const sys = selectedConnector.system_name.toLowerCase();
+    if (selectedConnector.template?.shared_parameters && selectedConnector.template.shared_parameters.length > 0) {
+      return selectedConnector.template.shared_parameters;
     }
+    return parameters.filter(p => p.tool.toLowerCase() === sys);
+  }, [selectedConnector, parameters]);
 
+  const sharedParamMap = useMemo<Map<string, ParameterDefinitionRow>>(() => {
+    const map = new Map<string, ParameterDefinitionRow>();
+    for (const p of currentSharedParams) {
+      map.set(p.variable_name, p);
+    }
+    return map;
+  }, [currentSharedParams]);
 
-    // Default Query Template
-    let queryTmpl = def.query_template || '';
-    if (!queryTmpl) {
-      if (sys.includes('jira') || sys === 'itsm') {
-        queryTmpl = 'project = {project} AND (summary ~ "{query}" OR description ~ "{query}" OR comments ~ "{query}") AND updated >= -{lookback}';
-      } else if (sys.includes('splunk') || sys === 'log_search') {
-        queryTmpl = 'index={project} (error OR exception OR "{query}") earliest=-{lookback} | head {max_results} | stats count by sourcetype, host';
-      } else if (sys.includes('confluence')) {
-        queryTmpl = 'type = page AND space in ({project}) AND text ~ "{query}" order by lastModified desc';
-      } else if (sys.includes('signalfx')) {
-        queryTmpl = "data('{query}', filter=filter('service', '{project}')).publish()";
-      } else if (sys.includes('kafka')) {
-        queryTmpl = 'kafka-consumer-groups --bootstrap-server {endpoint} --describe --group {project}';
-      } else if (sys.includes('kube')) {
-        queryTmpl = 'kubectl get events -n {project} --field-selector type=Warning --sort-by=.metadata.creationTimestamp';
+  // Unified ConnectorsForm Template Adapter
+  const selectedConnectorRevision = currentSharedParams.map(row => `${row.variable_name}:${row.revision}`).join('|');
+
+  const handleFormSave = async (data: FormData) => {
+    if (!selectedConnector) return;
+    const targetTool = selectedConnector.system_name.toLowerCase();
+    const targetName = selectedConnector.name;
+    const fields = selectedConnector.template?.parameter_fields || [];
+    try {
+      const changes: Record<string, { value: unknown; expected_revision: number }> = {};
+      for (const field of fields) {
+        if (!field.template_editable || field.value_type === 'secret_ref') continue;
+        const parameter = sharedParamMap.get(field.variable_name);
+        if (!parameter) continue;
+
+        const raw = data.get(field.variable_name);
+        let value: unknown = raw === null ? (field.value_type === 'boolean' ? false : '') : String(raw);
+        if (field.value_type === 'boolean') value = value === true || value === 'true';
+        else if (field.value_type === 'integer') value = Number(value);
+        else if (field.value_type === 'number') value = Number(value);
+        else if (field.value_type === 'json') {
+          try {
+            value = JSON.parse(String(value));
+          } catch {
+            throw new Error(`${field.label || field.variable_name} must contain valid JSON.`);
+          }
+        }
+
+        const currentValue = parameter.active_value !== undefined
+          ? parameter.active_value
+          : parameter.effective_value !== undefined
+            ? parameter.effective_value
+            : parameter.default_value;
+        if (JSON.stringify(value) !== JSON.stringify(currentValue)) {
+          changes[field.variable_name] = { value, expected_revision: parameter.revision };
+        }
+      }
+
+      if (Object.keys(changes).length > 0) {
+        await saveTemplateParameters(targetTool, { changes });
+        await loadBackendData();
+        showToast(`Connector template '${targetName}' saved successfully.`);
       } else {
-        queryTmpl = '{query} --scope {project} --lookback {lookback}';
-      }
-    }
-
-    // Default Scopes
-    const scopes =
-      def.scopes ||
-      (Array.isArray(tmpl?.supported_operations) && tmpl.supported_operations.length > 0
-        ? tmpl.supported_operations.map(op => `${sys}:${op}`)
-        : [`read:${sys}-work`, `read:${sys}-data`, `read:${sys}-user`]);
-
-    return {
-      name: inst?.owner ? `${conn.name} - ${inst.owner}` : conn.name,
-      type: tmpl?.protocol ? `${conn.name} (${tmpl.protocol})` : 'Cloud Instance',
-      description: inst?.description || conn.description || '',
-      owner: inst?.owner || 'SAG Platform Team',
-      tags: inst?.tags && inst.tags.length > 0 ? inst.tags : [conn.category.toLowerCase(), sys, 'incident'],
-      authMethod: activeAuthName,
-      instanceUrl: endpoint,
-      clientId: `\${${sys.toUpperCase()}_CLIENT_ID}`,
-      clientSecret: '••••••••••••••••••••••••',
-      authUrl: endpoint ? `${endpoint}/oauth/authorize` : 'https://auth.corp.internal/authorize',
-      tokenUrl: endpoint ? `${endpoint}/oauth/token` : 'https://auth.corp.internal/token',
-      redirectUri: `https://prism.corp.internal/integrations/${sys}/callback`,
-      scopes,
-      defaultProject: sys === 'itsm' ? 'FE (Front End)' : sys === 'log_search' ? 'prod_apps' : 'default',
-      allowedProjects: inst?.usage && inst.usage.length > 0 ? inst.usage : (sys === 'itsm' ? ['FE', 'SAG', 'TDR', 'STDP'] : ['prod', 'staging', 'dev']),
-      defaultIssueTypes: sys === 'itsm' ? ['Incident', 'Bug', 'Task', 'Service Request'] : ['Error', 'Exception', 'Fatal', 'Timeout'],
-      savedFilters: sys === 'itsm' ? ['SAG Open Incidents', 'My Assigned Tickets', 'Recently Updated'] : ['Exceptions Past 24h', 'Latency Spikes'],
-      fieldMappings: mappings,
-      lookbackPeriod: lookback,
-      maxResults: maxRes,
-      searchFields: ['Summary', 'Description', 'Comments', 'Custom Fields'],
-      includeAttachments: true,
-      includeComments: true,
-      includeSubtasks: false,
-      includeLinkedIssues: true,
-      includeHistorical: true,
-      queryTemplate: queryTmpl,
-      accessLevel: 'Project Members',
-      allowedGroups: ['SAG Analysts', 'SAG Leads'],
-      readAccess: true,
-      writeAccess: true,
-      adminOnlyActions: false,
-      requestTimeout: timeout,
-      rateLimit: rateLimit,
-      retryAttempts: 3,
-      cacheResults: 10,
-      enableWebhooks: false,
-      enableAuditLogging: true,
-    };
-  };
-
-  // Resolve current active form state
-  const currentForm = useMemo<ConnectorFormState>(() => {
-    if (!selectedConnector) {
-      return {
-        name: '',
-        type: '',
-        description: '',
-        owner: '',
-        tags: [],
-        authMethod: 'OAuth 2.0',
-        instanceUrl: '',
-        clientId: '',
-        clientSecret: '',
-        authUrl: '',
-        tokenUrl: '',
-        redirectUri: '',
-        scopes: [],
-        defaultProject: '',
-        allowedProjects: [],
-        defaultIssueTypes: [],
-        savedFilters: [],
-        fieldMappings: [],
-        lookbackPeriod: '7 days',
-        maxResults: 50,
-        searchFields: [],
-        includeAttachments: true,
-        includeComments: true,
-        includeSubtasks: false,
-        includeLinkedIssues: true,
-        includeHistorical: true,
-        queryTemplate: '',
-        accessLevel: 'Project Members',
-        allowedGroups: [],
-        readAccess: true,
-        writeAccess: true,
-        adminOnlyActions: false,
-        requestTimeout: 60,
-        rateLimit: 500,
-        retryAttempts: 3,
-        cacheResults: 10,
-        enableWebhooks: false,
-        enableAuditLogging: true,
-      };
-    }
-    const existing = formStates[selectedConnector.id];
-    if (existing) return existing;
-    return buildConnectorFormState(selectedConnector);
-  }, [selectedConnector, formStates, parameters]);
-
-  const updateCurrentForm = (updater: Partial<ConnectorFormState> | ((prev: ConnectorFormState) => ConnectorFormState)) => {
-    if (!selectedConnector) return;
-    setFormStates(prev => {
-      const current = prev[selectedConnector.id] || buildConnectorFormState(selectedConnector);
-      const next = typeof updater === 'function' ? updater(current) : { ...current, ...updater };
-      return { ...prev, [selectedConnector.id]: next };
-    });
-  };
-
-  // Filtered field mappings based on active subtab
-  const filteredMappings = useMemo(() => {
-    if (!currentForm.fieldMappings) return [];
-    if (activeFieldTab === 'Common') {
-      const commonKeys = ['summary', 'description', 'time', 'raw', 'host', 'source', 'status', 'error', 'environment', 'application'];
-      return currentForm.fieldMappings.filter(m =>
-        commonKeys.some(k => m.sourceField.toLowerCase().includes(k) || m.targetField.toLowerCase().includes(k))
-      );
-    }
-    if (activeFieldTab === 'Specific') {
-      const commonKeys = ['summary', 'description', 'time', 'raw', 'host', 'source', 'status', 'error', 'environment', 'application'];
-      return currentForm.fieldMappings.filter(m =>
-        !commonKeys.some(k => m.sourceField.toLowerCase().includes(k) || m.targetField.toLowerCase().includes(k))
-      );
-    }
-    return currentForm.fieldMappings;
-  }, [currentForm.fieldMappings, activeFieldTab]);
-
-  // Test live connection reachability probe
-  const handleTestConnection = async () => {
-    if (!selectedConnector) return;
-    setTestingConnection(true);
-    try {
-      if (selectedConnector.system_name === 'oracle' || selectedConnector.template?.is_enabled_by_policy === false) {
-        throw new Error('Database access disabled by platform governance policy.');
-      }
-
-      // Live backend health probe
-      const health = await fetchConnectorHealthCheck(selectedConnector.system_name);
-      const isHealthy = health.overall === 'HEALTHY' || health.overall === 'DEGRADED';
-      const nowStr = new Date().toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
-      setConnectionProbeResult({
-        success: isHealthy,
-        timestamp: `${nowStr} (${health.latency_ms ? `${health.latency_ms.toFixed(0)}ms` : 'Healthy'})`,
-        message: health.message || `Connected via ${health.connectivity} path.`,
-      });
-      showToast(`Connection to ${selectedConnector.name} tested: ${health.overall}`);
-    } catch (err) {
-      const nowStr = new Date().toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
-      setConnectionProbeResult({
-        success: false,
-        timestamp: nowStr,
-        message: err instanceof Error ? err.message : 'Connection test failed.',
-      });
-      showToast(`Connection test failed: ${err instanceof Error ? err.message : 'Unable to connect'}`);
-    } finally {
-      setTestingConnection(false);
-    }
-  };
-
-  // Save live configuration to backend
-  const handleSaveConfiguration = async () => {
-    if (!selectedConnector) return;
-    setSavingConfig(true);
-    try {
-      if (selectedConnector.system_name === 'oracle') {
-        throw new Error('Oracle configuration cannot be saved: Direct database access is blocked by policy.');
-      }
-
-      const sys = selectedConnector.system_name;
-      const tmpl = selectedConnector.template;
-      const promises: Promise<any>[] = [];
-
-      // 1. Save live parameter overrides for this tool if matching rows exist
-      const timeoutParam = parameters.find(
-        p => p.tool.toLowerCase() === sys.toLowerCase() && p.variable_name.toLowerCase().includes('timeout')
-      );
-      if (timeoutParam && timeoutParam.allow_project_override) {
-        promises.push(
-          setParameterOverride(timeoutParam.tool, timeoutParam.variable_name, {
-            value: currentForm.requestTimeout,
-            expected_revision: timeoutParam.override_revision ?? 0,
-            expected_definition_revision: timeoutParam.revision,
-          }).catch(() => null)
-        );
-      }
-
-      const rateLimitParam = parameters.find(
-        p => p.tool.toLowerCase() === sys.toLowerCase() && p.variable_name.toLowerCase().includes('rate_limit')
-      );
-      if (rateLimitParam && rateLimitParam.allow_project_override) {
-        promises.push(
-          setParameterOverride(rateLimitParam.tool, rateLimitParam.variable_name, {
-            value: `${currentForm.rateLimit} req/min`,
-            expected_revision: rateLimitParam.override_revision ?? 0,
-            expected_definition_revision: rateLimitParam.revision,
-          }).catch(() => null)
-        );
-      }
-
-      // 2. Persist project connector instance to backend
-      if (principal?.project_id && tmpl) {
-        promises.push(
-          saveProjectConnector(principal.project_id, {
-            instance_id: selectedConnector.projectInstance?.instance_id || `${sys}-default`,
-            template_id: tmpl.template_id || sys,
-            template_version: tmpl.version || '1.0.0',
-            system_name: sys,
-            environment_dependency: 'independent',
-            tool_environment: selectedEnvironment,
-            owner: currentForm.owner,
-            description: currentForm.description,
-            tags: currentForm.tags,
-            usage: currentForm.allowedProjects,
-            enabled: true,
-            status: 'enabled',
-            definition_json: {
-              endpoint: currentForm.instanceUrl,
-              auth_type: currentForm.authMethod,
-              timeout_seconds: currentForm.requestTimeout,
-              max_results: currentForm.maxResults,
-              query_template: currentForm.queryTemplate,
-              scopes: currentForm.scopes,
-              custom_fields: currentForm.fieldMappings.map(f => ({
-                id: f.id,
-                name: f.sourceField,
-                type: f.fieldType,
-              })),
-            },
-          }).catch(err => {
-            console.warn('Project connector save notice:', err);
-          })
-        );
-      }
-
-      await Promise.all(promises);
-      await loadBackendData();
-      showToast(`Configuration for ${selectedConnector.name} saved to backend.`);
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Failed to save connector configuration.');
-    } finally {
-      setSavingConfig(false);
-    }
-  };
-
-  // Reset to live template defaults
-  const handleResetToDefaults = () => {
-    if (!selectedConnector) return;
-    const fresh = buildConnectorFormState(selectedConnector);
-    updateCurrentForm({ ...fresh });
-    showToast(`Reset ${selectedConnector.name} to template defaults.`);
-  };
-
-  // Tag helpers
-  const handleAddTag = () => {
-    const val = newTagInput.trim().toLowerCase();
-    if (val && !currentForm.tags.includes(val)) {
-      updateCurrentForm({ tags: [...currentForm.tags, val] });
-      setNewTagInput('');
-    }
-  };
-
-  const handleRemoveTag = (t: string) => {
-    updateCurrentForm({ tags: currentForm.tags.filter(item => item !== t) });
-  };
-
-  // Project helpers
-  const handleAddAllowedProject = () => {
-    const val = newProjectInput.trim().toUpperCase();
-    if (val && !currentForm.allowedProjects.includes(val)) {
-      updateCurrentForm({ allowedProjects: [...currentForm.allowedProjects, val] });
-      setNewProjectInput('');
-    }
-  };
-
-  const handleRemoveAllowedProject = (p: string) => {
-    updateCurrentForm({ allowedProjects: currentForm.allowedProjects.filter(item => item !== p) });
-  };
-
-  // Issue types helpers
-  const handleAddIssueType = () => {
-    const val = newIssueTypeInput.trim();
-    if (val && !currentForm.defaultIssueTypes.includes(val)) {
-      updateCurrentForm({ defaultIssueTypes: [...currentForm.defaultIssueTypes, val] });
-      setNewIssueTypeInput('');
-    }
-  };
-
-  const handleRemoveIssueType = (it: string) => {
-    updateCurrentForm({ defaultIssueTypes: currentForm.defaultIssueTypes.filter(item => item !== it) });
-  };
-
-  // Filter helpers
-  const handleAddFilter = () => {
-    const val = newFilterInput.trim();
-    if (val && !currentForm.savedFilters.includes(val)) {
-      updateCurrentForm({ savedFilters: [...currentForm.savedFilters, val] });
-      setNewFilterInput('');
-    }
-  };
-
-  const handleRemoveFilter = (f: string) => {
-    updateCurrentForm({ savedFilters: currentForm.savedFilters.filter(item => item !== f) });
-  };
-
-  // Scope helper
-  const handleRemoveScope = (sc: string) => {
-    updateCurrentForm({ scopes: currentForm.scopes.filter(item => item !== sc) });
-  };
-
-  // Group helpers
-  const handleAddGroup = () => {
-    const val = newGroupInput.trim();
-    if (val && !currentForm.allowedGroups.includes(val)) {
-      updateCurrentForm({ allowedGroups: [...currentForm.allowedGroups, val] });
-      setNewGroupInput('');
-    }
-  };
-
-  const handleRemoveGroup = (g: string) => {
-    updateCurrentForm({ allowedGroups: currentForm.allowedGroups.filter(item => item !== g) });
-  };
-
-  // Field mapping handlers
-  const handleAddFieldMapping = () => {
-    const newEntry: FieldMappingEntry = {
-      id: `field_${Date.now()}`,
-      sourceField: '',
-      fieldType: 'string',
-      targetField: '',
-      required: false,
-      defaultValue: '-',
-    };
-    updateCurrentForm(prev => ({
-      ...prev,
-      fieldMappings: [...prev.fieldMappings, newEntry],
-    }));
-  };
-
-  const handleRemoveFieldMapping = (id: string) => {
-    updateCurrentForm(prev => ({
-      ...prev,
-      fieldMappings: prev.fieldMappings.filter(m => m.id !== id),
-    }));
-  };
-
-  const handleDiscoverFields = async () => {
-    if (!selectedConnector || !principal?.project_id) return;
-    setDiscoveringFields(true);
-    try {
-      const instanceId = selectedConnector.projectInstance?.instance_id || `${selectedConnector.system_name}-default`;
-      const res = await discoverConnectorFields(principal.project_id, instanceId, selectedEnvironment);
-      if (res && Array.isArray(res.fields) && res.fields.length > 0) {
-        const newMappings: FieldMappingEntry[] = res.fields.map(f => ({
-          id: f.id,
-          sourceField: f.name || f.id,
-          fieldType: 'string',
-          targetField: f.id,
-          required: false,
-          defaultValue: '-',
-        }));
-        updateCurrentForm(prev => {
-          const existingIds = new Set(prev.fieldMappings.map(m => m.id));
-          const additions = newMappings.filter(m => !existingIds.has(m.id));
-          return {
-            ...prev,
-            fieldMappings: [...prev.fieldMappings, ...additions],
-          };
-        });
-        showToast(`Discovered ${res.fields.length} custom fields from ${selectedConnector.name}.`);
-      } else {
-        showToast(`No custom fields returned by ${selectedConnector.name} discovery endpoint.`);
+        showToast('No template parameter changes detected to save.');
       }
     } catch (err) {
-      showToast(`Field discovery notice: ${err instanceof Error ? err.message : 'Discovery unavailable for this connector'}`);
-    } finally {
-      setDiscoveringFields(false);
-    }
-  };
-
-  // Scroll to section smoothly
-  const handleScrollToSection = (section: StepperSection) => {
-    setActiveStepper(section);
-    let elemId = '';
-    if (section.includes('Connection')) elemId = 'section-connection';
-    else if (section.includes('Projects & Filters')) elemId = 'section-projects';
-    else if (section.includes('Field Mapping')) elemId = 'section-mapping';
-    else if (section.includes('Investigation Settings')) elemId = 'section-investigation';
-    else if (section.includes('Permissions')) elemId = 'section-permissions';
-    else if (section.includes('Advanced')) elemId = 'section-advanced';
-    else if (section.includes('Test & Save')) elemId = 'section-test-save';
-
-    if (elemId) {
-      const el = document.getElementById(elemId);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setLoadError(`Save failed: ${msg}`);
+      throw err;
     }
   };
 
@@ -967,1332 +462,426 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal, on
     );
   };
 
-  const isOracle = selectedConnector?.system_name === 'oracle';
+  // KPI telemetry metrics
+  const isDemoMode = (runtimeConfig?.mode || connectorsHealth?.mode || 'demo').toLowerCase() === 'demo';
+  const savedConnectionsCount = projectConnectors.length;
+  const allEnvConnections = useMemo(() => projectConnectors.flatMap(c => c.environment_connections || []), [projectConnectors]);
+  const testPassedCount = useMemo(() => allEnvConnections.filter(ec => ec.test_status === 'passed').length, [allEnvConnections]);
+  const testFailedCount = useMemo(() => allEnvConnections.filter(ec => ec.test_status === 'failed').length, [allEnvConnections]);
+  const testNotTestedCount = useMemo(() => allEnvConnections.filter(ec => !ec.test_status || ec.test_status === 'not_tested').length, [allEnvConnections]);
+
+  // Derived inventory of all ADK actions mapped to capability stages
+  const allActionRows = useMemo<ActionRegistryRow[]>(() => {
+    const rows: ActionRegistryRow[] = [];
+    const seenActions = new Set<string>();
+
+    for (const conn of backendConnectors) {
+      const sys = conn.system_name.toLowerCase();
+      const actionsForConn: string[] = [];
+      if (conn.tool?.actions && conn.tool.actions.length > 0) {
+        actionsForConn.push(...conn.tool.actions);
+      }
+      for (const cap of capabilitiesList) {
+        const req = (cap.required_connectors || []).map(c => c.toLowerCase());
+        const opt = (cap.optional_connectors || []).map(c => c.toLowerCase());
+        if (req.includes(sys) || opt.includes(sys)) {
+          for (const act of cap.permissions?.allowed_actions || []) {
+            if (act.startsWith(`${sys}.`) && !actionsForConn.includes(act)) {
+              actionsForConn.push(act);
+            }
+          }
+        }
+      }
+      if (actionsForConn.length === 0 && conn.tool?.id && conn.tool.id.includes('.')) {
+        actionsForConn.push(conn.tool.id);
+      }
+
+      for (const actionId of actionsForConn) {
+        if (seenActions.has(actionId)) continue;
+        seenActions.add(actionId);
+
+        const matchingCaps = capabilitiesList.filter(cap =>
+          (cap.permissions?.allowed_actions || []).includes(actionId) ||
+          ((cap.required_connectors || []).map(c => c.toLowerCase()).includes(sys) && (!cap.permissions?.allowed_actions || cap.permissions.allowed_actions.length === 0))
+        );
+
+        const stages = Array.from(new Set(matchingCaps.flatMap(c => c.agent_stages || [])));
+        if (stages.length === 0) {
+          if (sys === 'itsm') stages.push('triage');
+          else if (sys === 'log_search') stages.push('logs');
+          else stages.push('evidence');
+        }
+
+        const caps = matchingCaps.map(c => ({ id: c.id, name: c.name }));
+        const minRole = matchingCaps[0]?.permissions?.minimum_role || 'PROJECT_ANALYST';
+
+        let safetyProfile = 'Read-Only (Mutations Forbidden)';
+        const pii = matchingCaps[0]?.safety_profile?.pii_access;
+        if (pii === 'project_scoped') safetyProfile += ' · PII Scoped';
+        else if (pii === 'redacted') safetyProfile += ' · PII Redacted';
+
+        const isRestricted = conn.template?.is_enabled_by_policy === false;
+        const parts = actionId.split('.');
+        const method = parts.length > 1 ? parts.slice(1).join('.') : parts[0];
+        const actionLabel = method.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+        rows.push({
+          actionId,
+          actionName: actionLabel,
+          systemName: conn.system_name,
+          connectorName: conn.name,
+          brandColor: conn.brandColor,
+          stages,
+          capabilities: caps,
+          minRole,
+          safetyProfile,
+          policyStatus: isRestricted ? 'restricted' : 'enabled',
+          isCustom: !conn.template,
+        });
+      }
+    }
+    return rows;
+  }, [backendConnectors, capabilitiesList]);
+
+  const displayedActionRows = useMemo(() => {
+    if (actionsScope === 'all') return allActionRows;
+    if (!selectedConnector) return [];
+    const sys = selectedConnector.system_name.toLowerCase();
+    return allActionRows.filter(r => r.systemName.toLowerCase() === sys);
+  }, [allActionRows, actionsScope, selectedConnector]);
+
+  const selectedInstances = projectConnectors.filter(instance =>
+    instance.system_name === selectedConnector?.system_name || instance.template_id === selectedConnector?.template?.template_id);
+  const blocked = selectedConnector?.template?.is_enabled_by_policy === false;
 
   return (
-    <div className="view-container tools-page" style={{ padding: '16px 28px 76px', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div style={{ position: 'fixed', bottom: '80px', right: '28px', zIndex: 10000, maxWidth: '420px', width: 'calc(100% - 56px)' }}>
-          <NotificationBanner
-            type="success"
-            message={toastMessage}
-            onClose={() => setToastMessage(null)}
-            autoCloseMs={6000}
+    <div className="view-container tools-page connector-workspace">
+      <header className="connector-workspace-heading">
+        <div>
+          <h1>Connectors & Telemetry Integrations</h1>
+          <p>Manage shared templates, candidate connection testing, and active project integrations.</p>
+        </div>
+        <div className="connector-heading-actions">
+          <button className="btn btn-secondary" onClick={handleSyncCatalog} disabled={isSyncing}>
+            <RefreshCw size={15} aria-hidden="true" /> {isSyncing ? 'Refreshing…' : 'Refresh'}
+          </button>
+          {canEdit && <button className="btn btn-primary" onClick={() => setIsCreatingCustom(true)}><Plus size={15} aria-hidden="true" /> Custom integration</button>}
+        </div>
+      </header>
+
+      {/* Accurate Health & Telemetry Summary Strip */}
+      <div className="connector-telemetry-strip" role="region" aria-label="Connector telemetry summaries">
+        <div className="connector-stat-card">
+          <div className="connector-stat-card-header">
+            <span className="connector-stat-card-title"><Activity size={14} aria-hidden="true" /> Deployment Mode</span>
+            <span className={`telemetry-badge ${isDemoMode ? 'demo' : 'live'}`}>
+              {isDemoMode ? 'Demo Offline' : 'Live Active'}
+            </span>
+          </div>
+          <div className="connector-stat-card-value">{isDemoMode ? 'DEMO MODE' : 'LIVE MODE'}</div>
+          <div className="connector-stat-card-meta">
+            {isDemoMode
+              ? 'External probes & network calls simulated offline. Live traffic disabled by architectural design.'
+              : 'Live network probes active for authenticated connectors.'}
+          </div>
+        </div>
+
+        <div className="connector-stat-card">
+          <div className="connector-stat-card-header">
+            <span className="connector-stat-card-title"><ShieldCheck size={14} aria-hidden="true" /> Policy Availability</span>
+            <span className={`telemetry-badge ${restrictedCount > 0 ? 'restricted' : 'active'}`}>
+              {restrictedCount > 0 ? `${restrictedCount} Restricted` : 'All Permitted'}
+            </span>
+          </div>
+          <div className="connector-stat-card-value">
+            <span>{enabledCount}</span>
+            <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500 }}>of {backendConnectors.length} active</span>
+          </div>
+          <div className="connector-stat-card-meta">
+            Policy enablement grants agents permission to invoke tools; it does not indicate live target reachability.
+          </div>
+        </div>
+
+        <div className="connector-stat-card">
+          <div className="connector-stat-card-header">
+            <span className="connector-stat-card-title"><CheckCircle2 size={14} aria-hidden="true" /> Connection Tests</span>
+            <span className="telemetry-badge" style={{ background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0' }}>
+              {savedConnectionsCount} Saved
+            </span>
+          </div>
+          <div className="connector-stat-card-value">
+            <span style={{ color: '#166534' }}>{testPassedCount} Passed</span>
+            {testFailedCount > 0 && <span style={{ color: '#991b1b', margin: '0 6px' }}>· {testFailedCount} Failed</span>}
+            <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '6px' }}>({testNotTestedCount} untested)</span>
+          </div>
+          <div className="connector-stat-card-meta">
+            Target-specific candidate tests executed against configured environment endpoints.
+          </div>
+        </div>
+
+        <div className="connector-stat-card">
+          <div className="connector-stat-card-header">
+            <span className="connector-stat-card-title"><Lock size={14} aria-hidden="true" /> Credential Binding</span>
+            <span className="telemetry-badge" style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' }}>
+              env:// Scoped
+            </span>
+          </div>
+          <div className="connector-stat-card-value" style={{ fontSize: '14px' }}>Environment Variables</div>
+          <div className="connector-stat-card-meta">
+            Direct secret values are protected; references point to environment-scoped variables.
+          </div>
+        </div>
+      </div>
+
+      {loadError && <NotificationBanner type="error" message={loadError} autoCloseMs={0} onClose={() => setLoadError(null)} />}
+      {toastMessage && <NotificationBanner type="success" message={toastMessage} onClose={() => setToastMessage(null)} />}
+
+      <div className="connector-picker-bar">
+        <label className="connector-search">
+          <Search size={16} aria-hidden="true" />
+          <input
+            aria-label="Search connectors"
+            placeholder="Find a connector…"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
           />
-        </div>
-      )}
+        </label>
 
-      <div className="prism-connector-root">
-        {/* Dynamic Connector Selection Strip powered by authentic backend templates */}
-        <div className="prism-selector-bar" role="tablist" aria-label="Backend Platform Connectors">
-          <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginRight: '6px', whiteSpace: 'nowrap' }}>
-            CONNECTORS ({backendConnectors.length}):
-          </span>
-          {backendConnectors.map(conn => {
-            const isSelected = selectedConnector?.id === conn.id;
-            return (
-              <button
-                key={conn.id}
-                type="button"
-                role="tab"
-                aria-selected={isSelected}
-                className={`prism-selector-item ${isSelected ? 'is-selected' : ''}`}
-                onClick={() => setSelectedConnectorId(conn.id)}
-              >
-                <span className="prism-selector-icon" style={{ background: conn.brandColor }}>
-                  {conn.iconType === 'jira' ? 'J' : conn.name.slice(0, 1).toUpperCase()}
-                </span>
-                <span>{conn.name}</span>
-                {conn.system_name === 'oracle' && (
-                  <span style={{ fontSize: '9px', background: '#fee2e2', color: '#dc2626', padding: '1px 4px', borderRadius: '3px', fontWeight: 700 }}>
-                    BLOCKED
-                  </span>
-                )}
-              </button>
-            );
-          })}
-
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexShrink: 0 }}>
+        {/* Status Filter Chips */}
+        <div className="connector-filter-chips" role="group" aria-label="Filter connectors by status">
+          <button
+            type="button"
+            className={`connector-filter-chip ${statusFilter === 'all' ? 'is-active' : ''}`}
+            onClick={() => setStatusFilter('all')}
+          >
+            All <span className="connector-filter-chip-count">{backendConnectors.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`connector-filter-chip ${statusFilter === 'enabled' ? 'is-active' : ''}`}
+            onClick={() => setStatusFilter('enabled')}
+          >
+            Policy Enabled <span className="connector-filter-chip-count">{enabledCount}</span>
+          </button>
+          <button
+            type="button"
+            className={`connector-filter-chip ${statusFilter === 'restricted' ? 'is-active' : ''}`}
+            onClick={() => setStatusFilter('restricted')}
+          >
+            Restricted <span className="connector-filter-chip-count">{restrictedCount}</span>
+          </button>
+          <button
+            type="button"
+            className={`connector-filter-chip ${statusFilter === 'saved' ? 'is-active' : ''}`}
+            onClick={() => setStatusFilter('saved')}
+          >
+            With Saved Connections <span className="connector-filter-chip-count">{withSavedCount}</span>
+          </button>
+          {customCount > 0 && (
             <button
               type="button"
-              className="prism-refresh-icon-btn"
-              onClick={() => {
-                void loadBackendData();
-                showToast('Synchronized with live backend connectors and parameters.');
-              }}
-              title="Synchronize live catalog and parameters"
+              className={`connector-filter-chip ${statusFilter === 'custom' ? 'is-active' : ''}`}
+              onClick={() => setStatusFilter('custom')}
             >
-              <RefreshCw size={13} /> Sync Catalog
+              Custom MCP <span className="connector-filter-chip-count">{customCount}</span>
             </button>
-            <button
-              type="button"
-              className="prism-refresh-icon-btn"
-              onClick={() => setIsCreatingCustom(true)}
-              disabled={!canEdit}
-              title="Add custom MCP / A2A integration"
-            >
-              <Plus size={13} /> Add Custom MCP
-            </button>
-          </div>
+          )}
         </div>
 
-        {/* Breadcrumb Row */}
-        {selectedConnector && (
-          <div className="prism-breadcrumb-row">
-            <span>Connectors</span>
-            <span className="sep">&gt;</span>
-            <span>{selectedConnector.name}</span>
-            <span className="sep">&gt;</span>
-            <span className="current">Configuration</span>
-          </div>
-        )}
+        <label className="connector-picker-label">Connector
+          <select
+            value={visibleConnectors.some(conn => conn.id === selectedConnector?.id) ? selectedConnector?.id : ''}
+            onChange={event => {
+              if (leaveEdits()) {
+                setDirty(false);
+                setTemplateDirty(false);
+                setEditing(null);
+                setSelectedConnectorId(event.target.value);
+              }
+            }}
+          >
+            <option value="" disabled>{visibleConnectors.length ? 'Select a connector' : 'No matching connectors'}</option>
+            {visibleConnectors.map(conn => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
+          </select>
+        </label>
+        <label className="connector-picker-label">Project connection
+          <select
+            value={editing && editing !== 'new' ? editing.instance_id : ''}
+            onChange={event => {
+              if (leaveEdits()) {
+                setDirty(false);
+                setTemplateDirty(false);
+                setEditing(selectedInstances.find(instance => instance.instance_id === event.target.value) || null);
+              }
+            }}
+          >
+            <option value="">New connection</option>
+            {selectedInstances.map(instance => (
+              <option key={instance.instance_id} value={instance.instance_id}>
+                {instance.system_name} · {instance.status} · {instance.instance_id}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="connector-picker-count">{backendConnectors.length} connectors · {selectedInstances.length} saved</span>
+      </div>
 
-        {/* Main Header Row */}
-        {selectedConnector && (
-          <div className="prism-header-row">
-            <div className="prism-header-left">
-              {renderConnectorAvatar(selectedConnector, 44)}
-              <div className="prism-header-titles">
-                <div className="prism-header-title-line">
-                  <h1>{selectedConnector.name} Connector</h1>
-                  {isOracle ? (
-                    <span className="prism-status-badge disabled">
-                      <span style={{ color: '#dc2626' }}>●</span> Disabled by Policy
-                    </span>
-                  ) : (
-                    <span className="prism-status-badge active">
-                      <span style={{ color: '#059669' }}>●</span> Active
-                    </span>
-                  )}
+      <div className="connector-continuous-workspace" aria-busy={isSyncing}>
+        <section className="connector-detail" aria-label="Selected connector">
+          {selectedConnector ? <>
+            <header className="connector-detail-heading">
+              <div>
+                {renderConnectorAvatar(selectedConnector, 44)}
+                <div>
+                  <h2>{selectedConnector.name}</h2>
+                  <p>{selectedConnector.category.replaceAll('_', ' ')} · {selectedConnector.template ? `Version ${selectedConnector.template.version}` : 'Custom integration'}</p>
                 </div>
-                <p className="prism-header-subtitle">
-                  Configure connection, mapping, and investigation settings for {selectedConnector.name}
-                </p>
               </div>
-            </div>
-
-            <div className="prism-header-right">
-              {/* Scope / Project Dropdown */}
-              <div className="prism-scope-pill" title={`Tenant: ${principal?.tenant_id || 'Platform'} | Project: ${principal?.project_id || 'default'}`}>
-                <span className="scope-icon">
-                  <Folder size={14} />
-                </span>
-                <span>Project: <strong>{principal?.project_id || 'default'}</strong></span>
-                <span style={{ opacity: 0.65, fontSize: '11px', marginLeft: 2 }}>({principal?.tenant_id || 'Platform'})</span>
+              <span className={`connector-lifecycle ${blocked ? 'restricted' : ''}`}>
+                {blocked ? 'Restricted by policy' : selectedConnector.template?.status || selectedConnector.template?.availability || selectedConnector.status.replaceAll('_', ' ')}
+              </span>
+              <p>{selectedConnector.description}</p>
+            </header>
+            {blocked && (
+              <div className="connector-policy">
+                <ShieldAlert size={18} aria-hidden="true" />
+                <p>This connector is unavailable for execution under the current policy. You can review its template settings.</p>
               </div>
-
-              {/* Environment Dropdown */}
-              <div className="prism-scope-pill" title="Active deployment environment">
-                <span style={{ color: '#64748b' }}>Environment:</span>
-                <select
-                  aria-label="Target Environment"
-                  value={selectedEnvironment}
-                  onChange={e => setSelectedEnvironment(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', font: 'inherit', fontWeight: 600, outline: 'none', cursor: 'pointer' }}
-                >
-                  {availableEnvironments.length > 0 ? (
-                    availableEnvironments.map(env => (
-                      <option key={env.id} value={env.name}>
-                        {env.name}
-                      </option>
-                    ))
-                  ) : (
-                    <>
-                      <option value="QLAB02">QLAB02</option>
-                      <option value="Production">Production</option>
-                      <option value="Staging">Staging</option>
-                      <option value="Development">Development</option>
-                    </>
-                  )}
-                </select>
-              </div>
-
-              {/* View Documentation Link */}
-              <a
-                href="https://ai.google.dev/gemini-api/docs"
-                target="_blank"
-                rel="noreferrer"
-                className="prism-doc-btn"
-                title="Read Google ADK and Connector Integration Documentation"
-              >
-                <span>View Documentation</span>
-                <ExternalLink size={13} />
-              </a>
-            </div>
-          </div>
-        )}
-
-        {/* Policy Alert Banner (Oracle) */}
-        {isOracle && (
-          <div className="prism-policy-callout">
-            <ShieldAlert size={20} style={{ flexShrink: 0, marginTop: '2px' }} />
-            <div>
-              <h4>Database access disabled by policy</h4>
-              <p>
-                The Oracle database connector is strictly disabled by platform governance policy. Direct database
-                querying, schema inspection, or SQL execution is unsupported in this release.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Numbered Stepper Quick Navigation */}
-        <div className="prism-stepper-bar" role="tablist" aria-label="Configuration Sections">
-          {(
-            [
-              '1. Connection',
-              '2. Projects & Filters',
-              '3. Field Mapping',
-              '4. Investigation Settings',
-              '5. Permissions',
-              '6. Advanced',
-              '7. Test & Save',
-            ] as StepperSection[]
-          ).map(tab => {
-            const isActive = activeStepper === tab;
-            return (
-              <button
-                key={tab}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`prism-stepper-tab ${isActive ? 'is-active' : ''}`}
-                onClick={() => handleScrollToSection(tab)}
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* 2-Column Responsive Workspace Grid */}
-        {selectedConnector && (
-          <div className="prism-content-grid">
-            {/* =================================================================
-                LEFT COLUMN
-                ================================================================= */}
-            <div className="prism-grid-col">
-              {/* Card 1: Basic Information */}
-              <section id="section-connection" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Sliders size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Basic Information</h3>
-                      <p>General details about this {selectedConnector.name} connector</p>
-                    </div>
-                  </div>
-
-                  {/* Mini Connector Brand Badge */}
-                  <div className="prism-mini-brand-badge">
-                    {renderConnectorAvatar(selectedConnector, 24)}
-                    <div>
-                      <div className="brand-name">{selectedConnector.name}</div>
-                      <div className="brand-sub">{selectedConnector.category}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Connector Name <span className="prism-req">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.name}
-                      onChange={e => updateCurrentForm({ name: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Connector Type</label>
-                    <select
-                      className="prism-select"
-                      value={currentForm.type}
-                      onChange={e => updateCurrentForm({ type: e.target.value })}
-                    >
-                      <option value={currentForm.type}>{currentForm.type}</option>
-                      <option value={`${selectedConnector.name} (Cloud)`}>{selectedConnector.name} (Cloud)</option>
-                      <option value={`${selectedConnector.name} (Server)`}>{selectedConnector.name} (Server)</option>
-                      <option value={`${selectedConnector.name} (Enterprise)`}>{selectedConnector.name} (Enterprise)</option>
-                    </select>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Description</label>
-                    <textarea
-                      className="prism-textarea"
-                      value={currentForm.description}
-                      onChange={e => updateCurrentForm({ description: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Owner</label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.owner}
-                      placeholder={principal?.subject || 'Platform Operations'}
-                      onChange={e => updateCurrentForm({ owner: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Tags</label>
-                    <div className="prism-tags-container">
-                      {currentForm.tags.map(tag => (
-                        <span key={tag} className="prism-tag-pill">
-                          {tag}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveTag(tag)}
-                            aria-label={`Remove tag ${tag}`}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        type="text"
-                        className="prism-tag-input-inline"
-                        placeholder="Add tag… (Enter)"
-                        value={newTagInput}
-                        onChange={e => setNewTagInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddTag();
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* Card 2: Authentication */}
-              <section className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Lock size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Authentication</h3>
-                      <p>Configure how PRISM authenticates with {selectedConnector.name}</p>
-                    </div>
-                  </div>
-
-                  <span className="prism-status-badge active">
-                    <Check size={12} /> Configured
-                  </span>
-                </div>
-
-                {/* Segmented Bar for Auth Profiles */}
-                <div className="prism-segmented-bar" role="tablist">
-                  {['OAuth 2.0', 'API Token', 'Basic Auth', 'JWT (App)'].map(method => (
-                    <button
-                      key={method}
-                      type="button"
-                      role="tab"
-                      aria-selected={currentForm.authMethod === method}
-                      className={`prism-segmented-item ${currentForm.authMethod === method ? 'is-selected' : ''}`}
-                      onClick={() => updateCurrentForm({ authMethod: method })}
-                    >
-                      {method}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Inputs */}
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      {selectedConnector.name} Instance URL <span className="prism-req">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.instanceUrl}
-                      onChange={e => updateCurrentForm({ instanceUrl: e.target.value })}
-                    />
-                    <span className="prism-field-caption">
-                      Your {selectedConnector.name} Cloud or Server instance URL
-                    </span>
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Client ID <span className="prism-req">*</span>
-                    </label>
-                    <div className="prism-input-with-action">
-                      <input
-                        type="text"
-                        className="prism-input"
-                        value={currentForm.clientId}
-                        onChange={e => updateCurrentForm({ clientId: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="prism-input-action-btn"
-                        onClick={() => {
-                          navigator.clipboard.writeText(currentForm.clientId);
-                          showToast('Client ID copied to clipboard.');
-                        }}
-                        title="Copy Client ID"
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Client Secret <span className="prism-req">*</span>
-                    </label>
-                    <div className="prism-input-with-action">
-                      <input
-                        type={isSecretVisible ? 'text' : 'password'}
-                        className="prism-input"
-                        value={currentForm.clientSecret}
-                        onChange={e => updateCurrentForm({ clientSecret: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="prism-input-action-btn"
-                        onClick={() => setIsSecretVisible(!isSecretVisible)}
-                        title={isSecretVisible ? 'Hide secret' : 'Show secret'}
-                      >
-                        {isSecretVisible ? <EyeOff size={14} /> : <Eye size={14} />}
-                      </button>
-                    </div>
-                    <span className="prism-field-caption">Stored securely in platform vault</span>
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Authorization URL</label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.authUrl}
-                      onChange={e => updateCurrentForm({ authUrl: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Token URL</label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.tokenUrl}
-                      onChange={e => updateCurrentForm({ tokenUrl: e.target.value })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Redirect URI <span className="prism-req">*</span>
-                    </label>
-                    <div className="prism-input-with-action">
-                      <input
-                        type="text"
-                        className="prism-input"
-                        value={currentForm.redirectUri}
-                        onChange={e => updateCurrentForm({ redirectUri: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="prism-input-action-btn"
-                        onClick={() => {
-                          navigator.clipboard.writeText(currentForm.redirectUri);
-                          showToast('Redirect URI copied to clipboard.');
-                        }}
-                        title="Copy Redirect URI"
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">
-                      Scopes <span className="prism-req">*</span>
-                    </label>
-                    <div className="prism-tags-container">
-                      {currentForm.scopes.map(sc => (
-                        <span key={sc} className="prism-tag-pill">
-                          {sc}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveScope(sc)}
-                            aria-label={`Remove scope ${sc}`}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <span className="prism-field-caption">Select required OAuth scopes</span>
-                  </div>
-                </div>
-
-                {/* Test Connection Bar */}
-                <div id="section-test-save" className="prism-test-connection-strip">
-                  <button
-                    type="button"
-                    className="prism-test-btn"
-                    onClick={handleTestConnection}
-                    disabled={testingConnection || isOracle}
-                  >
-                    <Play size={13} className={testingConnection ? 'spin' : ''} />
-                    {testingConnection ? 'Testing…' : 'Test Connection'}
-                  </button>
-
-                  <div className={`prism-connection-status-box ${connectionProbeResult.success ? '' : 'degraded'}`}>
-                    {connectionProbeResult.success ? (
-                      <CheckCircle2 size={16} style={{ color: '#059669', flexShrink: 0 }} />
-                    ) : (
-                      <AlertCircle size={16} style={{ color: '#dc2626', flexShrink: 0 }} />
-                    )}
-                    <div className="status-text">
-                      <strong>{connectionProbeResult.success ? 'Connection successful' : 'Connection failed'}</strong>
-                      <span>
-                        {connectionProbeResult.message || `Last verified: ${connectionProbeResult.timestamp}`}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="prism-refresh-icon-btn"
-                    onClick={handleTestConnection}
-                    disabled={testingConnection}
-                    title="Refresh connection status"
-                  >
-                    <RefreshCw size={13} className={testingConnection ? 'spin' : ''} />
-                    Refresh
-                  </button>
-                </div>
-              </section>
-
-              {/* Card 3: Projects & Filters */}
-              <section id="section-projects" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Folder size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Projects &amp; Filters</h3>
-                      <p>Define which projects and filters are available for this connector</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Default Project Scope <span className="prism-req">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="prism-input"
-                      value={currentForm.defaultProject}
-                      placeholder={principal?.project_id || 'default'}
-                      onChange={e => updateCurrentForm({ defaultProject: e.target.value })}
-                    />
-                    <span className="prism-field-caption">Primary target project or namespace scope</span>
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Allowed Projects (Optional)</label>
-                    <div className="prism-tags-container">
-                      {currentForm.allowedProjects.map(p => (
-                        <span key={p} className="prism-tag-pill">
-                          {p}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveAllowedProject(p)}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        type="text"
-                        className="prism-tag-input-inline"
-                        placeholder="Add project… (Enter)"
-                        value={newProjectInput}
-                        onChange={e => setNewProjectInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddAllowedProject();
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">
-                      {selectedConnector.category === 'Observability'
-                        ? 'Default Indexes & Log Types'
-                        : selectedConnector.category === 'Knowledge'
-                        ? 'Default Spaces & Doc Types'
-                        : selectedConnector.category === 'Source Code'
-                        ? 'Default Branches & Pipelines'
-                        : 'Default Entity & Issue Types'}
-                    </label>
-                    <div className="prism-tags-container">
-                      {currentForm.defaultIssueTypes.map(it => (
-                        <span key={it} className="prism-tag-pill">
-                          {it}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveIssueType(it)}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        type="text"
-                        className="prism-tag-input-inline"
-                        placeholder="Add type… (Enter)"
-                        value={newIssueTypeInput}
-                        onChange={e => setNewIssueTypeInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddIssueType();
-                          }
-                        }}
-                      />
-                    </div>
-                    <span className="prism-field-caption">Entity targets recognized by agent triage</span>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">
-                      {selectedConnector.category === 'Observability'
-                        ? 'Saved Searches & SPL Macros'
-                        : selectedConnector.category === 'Knowledge'
-                        ? 'Saved CQL Queries'
-                        : 'Saved Filters & JQL Queries'}
-                    </label>
-                    <div className="prism-tags-container">
-                      {currentForm.savedFilters.map(f => (
-                        <span key={f} className="prism-tag-pill">
-                          {f}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveFilter(f)}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        type="text"
-                        className="prism-tag-input-inline"
-                        placeholder="Add filter… (Enter)"
-                        value={newFilterInput}
-                        onChange={e => setNewFilterInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddFilter();
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* Card 4: Field Mapping */}
-              <section id="section-mapping" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Layers size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Field Mapping</h3>
-                      <p>Map {selectedConnector.name} custom fields to PRISM fields</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Subtabs */}
-                <div className="prism-subtabs-row">
-                  <button
-                    type="button"
-                    className={`prism-subtab-btn ${activeFieldTab === 'Common' ? 'is-active' : ''}`}
-                    onClick={() => setActiveFieldTab('Common')}
-                  >
-                    Common Fields
-                  </button>
-                  <button
-                    type="button"
-                    className={`prism-subtab-btn ${activeFieldTab === 'Specific' ? 'is-active' : ''}`}
-                    onClick={() => setActiveFieldTab('Specific')}
-                  >
-                    {principal?.project_id ? principal.project_id.toUpperCase() : 'Project'} Custom Fields
-                  </button>
-                  <button
-                    type="button"
-                    className={`prism-subtab-btn ${activeFieldTab === 'All' ? 'is-active' : ''}`}
-                    onClick={() => setActiveFieldTab('All')}
-                  >
-                    All {selectedConnector.name} Fields ({currentForm.fieldMappings.length})
-                  </button>
-                </div>
-
-                {/* Field Mapping Table or Empty State */}
-                {filteredMappings.length === 0 ? (
-                  <div className="prism-empty-mapping-state">
-                    No field mappings {activeFieldTab !== 'All' ? `in the ${activeFieldTab} category` : 'configured'}. You can discover custom fields from the live provider or add custom mappings below.
-                  </div>
-                ) : (
-                  <div className="prism-table-wrap">
-                    <table className="prism-field-table">
-                      <thead>
-                        <tr>
-                          <th>{selectedConnector.name} Field</th>
-                          <th>Field Type</th>
-                          <th>PRISM Field</th>
-                          <th>Required</th>
-                          <th>Default Fallback</th>
-                          <th style={{ width: 36 }}></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredMappings.map(entry => (
-                          <tr key={entry.id}>
-                            <td>
-                              <input
-                                type="text"
-                                className="prism-input-compact"
-                                style={{ fontSize: '12px', padding: '4px 8px' }}
-                                value={entry.sourceField}
-                                placeholder="source_field_name"
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  updateCurrentForm(prev => ({
-                                    ...prev,
-                                    fieldMappings: prev.fieldMappings.map(m =>
-                                      m.id === entry.id ? { ...m, sourceField: val } : m
-                                    ),
-                                  }));
-                                }}
-                              />
-                            </td>
-                            <td>
-                              <select
-                                className="prism-select-compact"
-                                style={{ fontSize: '11.5px', padding: '4px 6px' }}
-                                value={entry.fieldType}
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  updateCurrentForm(prev => ({
-                                    ...prev,
-                                    fieldMappings: prev.fieldMappings.map(m =>
-                                      m.id === entry.id ? { ...m, fieldType: val } : m
-                                    ),
-                                  }));
-                                }}
-                              >
-                                <option value="string">string</option>
-                                <option value="integer">integer</option>
-                                <option value="number">number</option>
-                                <option value="boolean">boolean</option>
-                                <option value="json">json</option>
-                                <option value="textarea">textarea</option>
-                                <option value="timestamp">timestamp</option>
-                                <option value="secret_ref">secret_ref</option>
-                              </select>
-                            </td>
-                            <td>
-                              <input
-                                type="text"
-                                className="prism-input-compact"
-                                style={{ fontSize: '12px', padding: '4px 8px' }}
-                                value={entry.targetField}
-                                placeholder="target_field_name"
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  updateCurrentForm(prev => ({
-                                    ...prev,
-                                    fieldMappings: prev.fieldMappings.map(m =>
-                                      m.id === entry.id ? { ...m, targetField: val } : m
-                                    ),
-                                  }));
-                                }}
-                              />
-                            </td>
-                            <td>
-                              <label className="prism-toggle-switch">
-                                <input
-                                  type="checkbox"
-                                  checked={entry.required}
-                                  onChange={e => {
-                                    const checked = e.target.checked;
-                                    updateCurrentForm(prev => ({
-                                      ...prev,
-                                      fieldMappings: prev.fieldMappings.map(m =>
-                                        m.id === entry.id ? { ...m, required: checked } : m
-                                      ),
-                                    }));
-                                  }}
-                                />
-                                <span className="prism-toggle-slider" />
-                              </label>
-                            </td>
-                            <td>
-                              <input
-                                type="text"
-                                className="prism-input-compact"
-                                style={{ fontSize: '12px', padding: '4px 8px' }}
-                                value={entry.defaultValue}
-                                placeholder="-"
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  updateCurrentForm(prev => ({
-                                    ...prev,
-                                    fieldMappings: prev.fieldMappings.map(m =>
-                                      m.id === entry.id ? { ...m, defaultValue: val } : m
-                                    ),
-                                  }));
-                                }}
-                              />
-                            </td>
-                            <td style={{ textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                className="prism-remove-mapping-btn"
-                                title="Delete field mapping"
-                                onClick={() => handleRemoveFieldMapping(entry.id)}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '14px', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    className="prism-add-mapping-btn"
-                    onClick={handleAddFieldMapping}
-                  >
-                    <Plus size={13} /> Add Field Mapping
-                  </button>
-                  <button
-                    type="button"
-                    className="prism-btn-reset"
-                    style={{ padding: '6px 14px', fontSize: '12px' }}
-                    onClick={handleDiscoverFields}
-                    disabled={discoveringFields}
-                    title="Query live provider endpoint to discover fields"
-                  >
-                    <Sparkles size={13} className={discoveringFields ? 'spin' : ''} />
-                    {discoveringFields ? 'Discovering…' : 'Discover Fields from Provider'}
-                  </button>
-                </div>
-              </section>
-            </div>
-
-            {/* =================================================================
-                RIGHT COLUMN
-                ================================================================= */}
-            <div className="prism-grid-col">
-              {/* Card 5: Investigation Settings */}
-              <section id="section-investigation" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Settings size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Investigation Settings</h3>
-                      <p>Configure default parameters for investigations using {selectedConnector.name}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Default Lookback Period <span className="prism-req">*</span>
-                    </label>
-                    <select
-                      className="prism-select"
-                      value={currentForm.lookbackPeriod}
-                      onChange={e => updateCurrentForm({ lookbackPeriod: e.target.value })}
-                    >
-                      <option value="24 hours">24 hours</option>
-                      <option value="7 days">7 days</option>
-                      <option value="14 days">14 days</option>
-                      <option value="30 days">30 days</option>
-                    </select>
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">
-                      Max Results <span className="prism-req">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      className="prism-input"
-                      value={currentForm.maxResults}
-                      onChange={e => updateCurrentForm({ maxResults: Number(e.target.value) || 50 })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Search Fields</label>
-                    <div className="prism-tags-container">
-                      {currentForm.searchFields.map(sf => (
-                        <span key={sf} className="prism-tag-pill">
-                          {sf}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => {
-                              updateCurrentForm({
-                                searchFields: currentForm.searchFields.filter(f => f !== sf),
-                              });
-                            }}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Include in Search Toggles */}
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label" style={{ marginBottom: '6px' }}>
-                      Include in Search
-                    </label>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.includeAttachments}
-                          onChange={e => updateCurrentForm({ includeAttachments: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <span className="toggle-label">Attachments</span>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.includeComments}
-                          onChange={e => updateCurrentForm({ includeComments: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <span className="toggle-label">Comments</span>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.includeSubtasks}
-                          onChange={e => updateCurrentForm({ includeSubtasks: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <span className="toggle-label">Sub-tasks</span>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.includeLinkedIssues}
-                          onChange={e => updateCurrentForm({ includeLinkedIssues: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <span className="toggle-label">Linked Issues</span>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.includeHistorical}
-                          onChange={e => updateCurrentForm({ includeHistorical: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <span className="toggle-label">Historically Related Tickets</span>
-                    </div>
-                  </div>
-
-                  {/* Query Template Code Box */}
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Default Query Template</label>
-                    <div className="prism-template-box">
-                      <button
-                        type="button"
-                        className="prism-template-copy-btn"
-                        onClick={() => {
-                          navigator.clipboard.writeText(currentForm.queryTemplate);
-                          showToast('Query template copied to clipboard.');
-                        }}
-                        title="Copy template"
-                      >
-                        <Copy size={13} />
-                      </button>
-                      <pre className="prism-template-code">{currentForm.queryTemplate}</pre>
-                    </div>
-                    <span className="prism-field-caption">
-                      Use {'{project}'}, {'{query}'}, {'{lookback}'} as variables
-                    </span>
-                  </div>
-                </div>
-              </section>
-
-              {/* Card 6: Permissions & Access */}
-              <section id="section-permissions" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Shield size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Permissions &amp; Access</h3>
-                      <p>Control who can use this connector</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Access Level</label>
-                    <select
-                      className="prism-select"
-                      value={currentForm.accessLevel}
-                      onChange={e => updateCurrentForm({ accessLevel: e.target.value })}
-                    >
-                      <option value="Project Members">Project Members</option>
-                      <option value="All Platform Users">All Platform Users</option>
-                      <option value="Admins Only">Admins Only</option>
-                    </select>
-                    <span className="prism-field-caption">Who can use this connector</span>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <label className="prism-label">Allowed Groups</label>
-                    <div className="prism-tags-container">
-                      {currentForm.allowedGroups.map(grp => (
-                        <span key={grp} className="prism-tag-pill">
-                          {grp}
-                          <button
-                            type="button"
-                            className="remove-tag"
-                            onClick={() => handleRemoveGroup(grp)}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
-                      <input
-                        type="text"
-                        className="prism-tag-input-inline"
-                        placeholder="Add group… (Enter)"
-                        value={newGroupInput}
-                        onChange={e => setNewGroupInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddGroup();
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.readAccess}
-                          onChange={e => updateCurrentForm({ readAccess: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <div>
-                        <div className="toggle-label">Read Access</div>
-                        <div className="toggle-desc">Allow searching and reading tickets/logs</div>
-                      </div>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.writeAccess}
-                          onChange={e => updateCurrentForm({ writeAccess: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <div>
-                        <div className="toggle-label">Write Access</div>
-                        <div className="toggle-desc">Allow creating comments and updates</div>
-                      </div>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.adminOnlyActions}
-                          onChange={e => updateCurrentForm({ adminOnlyActions: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <div>
-                        <div className="toggle-label">Admin Only Actions</div>
-                        <div className="toggle-desc">Restrict sensitive actions to admins (e.g., delete)</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* Card 7: Advanced Settings */}
-              <section id="section-advanced" className="prism-card">
-                <div className="prism-card-header">
-                  <div className="prism-card-header-left">
-                    <div className="prism-card-icon-bubble">
-                      <Sliders size={16} />
-                    </div>
-                    <div className="prism-card-titles">
-                      <h3>Advanced Settings</h3>
-                      <p>Additional configuration options</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="prism-form-grid-2">
-                  <div className="prism-form-group">
-                    <label className="prism-label">Request Timeout (seconds)</label>
-                    <input
-                      type="number"
-                      className="prism-input"
-                      value={currentForm.requestTimeout}
-                      onChange={e => updateCurrentForm({ requestTimeout: Number(e.target.value) || 60 })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Rate Limit (requests/min)</label>
-                    <input
-                      type="number"
-                      className="prism-input"
-                      value={currentForm.rateLimit}
-                      onChange={e => updateCurrentForm({ rateLimit: Number(e.target.value) || 500 })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Retry Attempts</label>
-                    <input
-                      type="number"
-                      className="prism-input"
-                      value={currentForm.retryAttempts}
-                      onChange={e => updateCurrentForm({ retryAttempts: Number(e.target.value) || 3 })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group">
-                    <label className="prism-label">Cache Results (minutes)</label>
-                    <input
-                      type="number"
-                      className="prism-input"
-                      value={currentForm.cacheResults}
-                      onChange={e => updateCurrentForm({ cacheResults: Number(e.target.value) || 10 })}
-                    />
-                  </div>
-
-                  <div className="prism-form-group full-width">
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.enableWebhooks}
-                          onChange={e => updateCurrentForm({ enableWebhooks: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <div>
-                        <div className="toggle-label">Enable Webhooks</div>
-                        <div className="toggle-desc">Receive {selectedConnector.name} webhooks for real-time updates</div>
-                      </div>
-                    </div>
-
-                    <div className="prism-toggle-item-row">
-                      <label className="prism-toggle-switch">
-                        <input
-                          type="checkbox"
-                          checked={currentForm.enableAuditLogging}
-                          onChange={e => updateCurrentForm({ enableAuditLogging: e.target.checked })}
-                        />
-                        <span className="prism-toggle-slider" />
-                      </label>
-                      <div>
-                        <div className="toggle-label">Enable Audit Logging</div>
-                        <div className="toggle-desc">Log all connector activities</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* Card 8: Environment Overrides (Accordion) */}
-              <section className="prism-card" style={{ padding: '16px 22px' }}>
-                <button
-                  type="button"
-                  className="prism-accordion-header"
-                  onClick={() => setIsEnvOverridesOpen(!isEnvOverridesOpen)}
-                  aria-expanded={isEnvOverridesOpen}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div className="prism-card-icon-bubble" style={{ width: 30, height: 30 }}>
-                      <Database size={15} />
-                    </div>
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
-                        Environment Overrides
-                      </h3>
-                      <p style={{ margin: '1px 0 0', fontSize: '11.5px', color: '#64748b' }}>
-                        Override settings for specific environments
-                      </p>
-                    </div>
-                  </div>
-                  <div style={{ color: '#64748b' }}>
-                    {isEnvOverridesOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-                  </div>
+            )}
+            {selectedConnector.template ? <ConnectorInstanceEditor
+              key={`${selectedConnector.id}:${editing && editing !== 'new' ? editing.instance_id : 'new'}:${refreshRevision}`}
+              projectId={principal.project_id} principal={principal} template={selectedConnector.template}
+              instance={editing && editing !== 'new' ? editing : undefined} availableEnvironments={environments}
+              readOnly={!canManage || blocked} templateDirty={templateDirty} onDirtyChange={setDirty}
+              onSave={async saved => { setEditing(saved); await loadBackendData(); }}
+              templateDefaults={<><ConnectorsForm key={`${selectedConnector.id}:${selectedConnectorRevision}:${refreshRevision}`} view="defaults"
+                parameterFields={selectedConnector.template.parameter_fields || []} sharedParameters={currentSharedParams}
+                readOnly={!canEdit} hideHeader connectorName={selectedConnector.name}
+                onDirtyChange={setTemplateDirty} onSave={handleFormSave} />
+                {canEdit && <ConnectorFieldGovernance template={selectedConnector.template} disabled={dirty || templateDirty} onSaved={loadBackendData} />}
+              </>}
+            /> : (
+              <div className="connector-empty-large">
+                <h3>Custom integration</h3>
+                <p>{selectedConnector.description}</p>
+                <button className="btn btn-secondary" disabled={!canEdit} onClick={() => setIsCreatingCustom(true)}>
+                  Manage custom integrations
                 </button>
+              </div>
+            )}
 
-                {isEnvOverridesOpen && (
-                  <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                      {['QLAB02', 'Staging', 'Production'].map(env => (
-                        <span
-                          key={env}
-                          style={{
-                            fontSize: '11.5px',
-                            fontWeight: 600,
-                            padding: '4px 10px',
-                            borderRadius: '4px',
-                            background: env === selectedEnvironment ? '#fdf2f8' : '#f1f5f9',
-                            color: env === selectedEnvironment ? '#be185d' : '#64748b',
-                            border: '1px solid',
-                            borderColor: env === selectedEnvironment ? '#fbcfe8' : '#e2e8f0',
-                          }}
-                        >
-                          {env}
-                        </span>
+            {/* ADK Tool Actions & Capability Assignments Registry Table */}
+            <div className="connector-actions-registry" aria-label="Tool actions and capabilities">
+              <div className="connector-actions-header">
+                <div>
+                  <h3><Terminal size={16} aria-hidden="true" /> ADK Tool Actions & Capability Assignments</h3>
+                  <p>
+                    Authorized tool action signatures mapped to Google ADK LlmAgent workflows, stage lifecycles, and RBAC permission boundaries.
+                  </p>
+                </div>
+                <div className="connector-actions-toggle" role="group" aria-label="Toggle action scope">
+                  <button
+                    type="button"
+                    className={actionsScope === 'selected' ? 'is-active' : ''}
+                    onClick={() => setActionsScope('selected')}
+                  >
+                    Selected ({selectedConnector.name})
+                  </button>
+                  <button
+                    type="button"
+                    className={actionsScope === 'all' ? 'is-active' : ''}
+                    onClick={() => setActionsScope('all')}
+                  >
+                    All Actions ({allActionRows.length})
+                  </button>
+                </div>
+              </div>
+
+              <div className="connector-actions-table-wrapper">
+                {displayedActionRows.length > 0 ? (
+                  <table className="connector-actions-table">
+                    <thead>
+                      <tr>
+                        <th>Action Signature</th>
+                        <th>Provider Connector</th>
+                        <th>Assigned Stages</th>
+                        <th>Bound Capabilities</th>
+                        <th>Access Boundary</th>
+                        <th>Safety Constraints</th>
+                        <th>Policy State</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayedActionRows.map(row => (
+                        <tr key={row.actionId}>
+                          <td>
+                            <div style={{ fontWeight: 700, color: 'var(--tx)' }}>{row.actionName}</div>
+                            <code style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'monospace' }}>{row.actionId}</code>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: row.brandColor }} />
+                              <span style={{ fontWeight: 600 }}>{row.connectorName}</span>
+                              {row.isCustom && <span className="telemetry-badge demo">MCP</span>}
+                            </div>
+                          </td>
+                          <td>
+                            {row.stages.map(st => (
+                              <span key={st} className={`stage-badge ${st}`}>{st}</span>
+                            ))}
+                          </td>
+                          <td>
+                            {row.capabilities.length > 0 ? (
+                              row.capabilities.map(cap => (
+                                <span key={cap.id} className="capability-pill" title={cap.id}>
+                                  {cap.name}
+                                </span>
+                              ))
+                            ) : (
+                              <span style={{ fontSize: '11px', color: 'var(--muted)', fontStyle: 'italic' }}>Platform Specialist Bound</span>
+                            )}
+                          </td>
+                          <td>
+                            <span style={{ fontWeight: 600, fontSize: '11px', color: 'var(--tx)' }}>{row.minRole}+</span>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>{row.safetyProfile}</span>
+                          </td>
+                          <td>
+                            <span className={`telemetry-badge ${row.policyStatus === 'enabled' ? 'active' : 'restricted'}`}>
+                              {row.policyStatus === 'enabled' ? 'Permitted' : 'Restricted'}
+                            </span>
+                          </td>
+                        </tr>
                       ))}
-                    </div>
-                    <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>
-                      Active environment is synchronized with project runtime setup. Override parameters are
-                      automatically scoped to <code>{selectedEnvironment}</code>.
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                    <p style={{ margin: 0 }}>
+                      No ADK action signatures are bound directly to <strong>{selectedConnector.name}</strong>.
+                    </p>
+                    <p style={{ margin: '6px 0 0', fontSize: '11px' }}>
+                      This connector operates as an external telemetry provider or planned data source. Switch to <em>All Actions</em> to review the full ADK catalog.
                     </p>
                   </div>
                 )}
-              </section>
+              </div>
             </div>
-          </div>
-        )}
+          </> : (
+            <div className="connector-empty-large">
+              <Layers size={28} />
+              <h2>{isSyncing ? 'Loading your library' : 'Select a connector'}</h2>
+              <p>{loadError ? 'Refresh to try loading your connector library again.' : 'Templates and saved connections will appear here.'}</p>
+            </div>
+          )}
+        </section>
       </div>
-
-      {/* Sticky Bottom Footer Bar */}
-      <div className="prism-sticky-footer-bar">
-        <div className="footer-left">
-          <button
-            type="button"
-            className="prism-btn-reset"
-            onClick={handleResetToDefaults}
-          >
-            <RotateCcw size={13} />
-            Reset to Defaults
-          </button>
-        </div>
-
-        <div className="footer-right">
-          <button
-            type="button"
-            className="prism-btn-cancel"
-            onClick={() => {
-              if (onNavigate) onNavigate('overview');
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="prism-btn-save"
-            onClick={handleSaveConfiguration}
-            disabled={savingConfig || !canEdit || isOracle}
-          >
-            <Save size={14} className={savingConfig ? 'spin' : ''} />
-            {savingConfig ? 'Saving…' : 'Save Configuration'}
-          </button>
-        </div>
-      </div>
-
-      {/* Custom MCP Integration Modal */}
       {isCreatingCustom && (
         <IntegrationForm
           principal={principal}
           onClose={() => setIsCreatingCustom(false)}
-          onSaved={async () => {
-            await loadBackendData();
-            setIsCreatingCustom(false);
-          }}
-        />
-      )}
-
-      {/* Edit Existing Custom Integration Modal */}
-      {configuringCustomTool && (
-        <IntegrationForm
-          tool={configuringCustomTool}
-          principal={principal}
-          onClose={() => setConfiguringCustomTool(null)}
-          onSaved={async () => {
-            await loadBackendData();
-            setConfiguringCustomTool(null);
-          }}
+          onSaved={async () => { await loadBackendData(); setIsCreatingCustom(false); }}
         />
       )}
     </div>

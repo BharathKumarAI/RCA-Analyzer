@@ -126,11 +126,21 @@ def test_template_draft_publish_and_immutability():
 def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
     monkeypatch.setenv("JIRA_API_TOKEN", "mock-token-secret")
 
+    reject_jql = False
+
     async def jira_probe(request):
-        if request.url.path == "/rest/api/2/project/PAY":
+        if request.url.path in ("/rest/api/2/project/PAY", "/rest/api/3/project/PAY"):
             return httpx2.Response(200, json={"key": "PAY", "name": "Payments"})
-        if request.url.path == "/rest/api/2/field":
-            return httpx2.Response(200, json=[{"id": "customfield_1", "name": "Queue"}])
+        if request.url.path in ("/rest/api/2/jql/autocompletedata", "/rest/api/3/jql/autocompletedata"):
+            return httpx2.Response(200, json={"visibleFieldNames": [{"cfid": "cf[1]", "operators": ["=", "in", "is", "is not"]}]})
+        if request.url.path in ("/rest/api/2/jql/parse", "/rest/api/3/jql/parse"):
+            assert request.method == "POST"
+            assert request.url.params["validation"] == "strict"
+            if reject_jql:
+                return httpx2.Response(200, json={"queries": [{"errors": ["Unknown value"]}]})
+            return httpx2.Response(200, json={"queries": [{"structure": {"where": {}}, "errors": []}]})
+        if request.url.path in ("/rest/api/2/field", "/rest/api/3/field"):
+            return httpx2.Response(200, json=[{"id": "customfield_1", "name": "Queue", "searchable": True, "schema": {"type": "option"}}])
         return httpx2.Response(404, json={"error": "missing"})
 
     def controlled_jira(**kwargs):
@@ -329,6 +339,22 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
             )
             assert fields_res.status_code == 200
             assert fields_res.json()["fields"] == [{"id": "customfield_1", "name": "Queue"}]
+            preview_path = "/api/v1/projects/payments/connectors/jira_main/jql/preview"
+            preview = client.post(preview_path, headers=headers, json={"filters": [
+                {"field": "customfield_1", "operator": "IN", "value": ["Operations", "Support"]},
+            ]})
+            assert preview.status_code == 200, preview.text
+            assert preview.json()["jql"] == 'project = "PAY" AND (cf[1] IN ("Operations", "Support"))'
+            assert preview.json()["execution_enabled"] is False
+            assert preview.json()["validation"] == "jira_strict"
+            assert preview.json()["instance_revision"] == 1
+            reject_jql = True
+            assert client.post(preview_path, headers=headers, json={}).status_code == 422
+            reject_jql = False
+            assert client.post(preview_path, headers=headers, json={"project_id": "OTHER"}).status_code == 422
+            assert client.post(preview_path, headers=token("viewer"), json={}).status_code == 403
+            assert client.post(preview_path.replace("/payments/", "/other/"), headers=headers, json={}).status_code == 403
+            assert client.post(preview_path + "?environment_id=staging", headers=headers, json={}).status_code == 422
             invalid_fields_environment = client.get(
                 "/api/v1/projects/payments/connectors/jira_main/fields?environment_id=staging",
                 headers=headers,

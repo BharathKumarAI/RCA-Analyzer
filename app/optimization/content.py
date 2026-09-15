@@ -12,17 +12,22 @@ from app.policy.sources import enforcement_sources
 from app.runtime.run_contract import content_hash
 
 
-def read_platform(settings, registry=None):
+def read_platform(settings, registry=None, prompts_override=None):
     registry = registry or CapabilityRegistry(
         str(settings.content_root / "capabilities"), settings.projects_root
     )
-    prompts = load_yaml_data((settings.config_dir / "prompts.yaml").read_text())
+    if prompts_override is not None:
+        prompts = prompts_override
+    elif getattr(settings, "platform_prompts", None):
+        prompts = settings.platform_prompts
+    else:
+        prompts = load_yaml_data((settings.config_dir / "prompts.yaml").read_text())
     if not isinstance(prompts, dict) or set(prompts) != STAGES:
         raise ValueError("Invalid platform prompts")
     bundle = {"prompts": prompts, "skills": dict(registry.skill_contents)}
     files = {}
     for prefix, directory, pattern in [
-        ("config", settings.config_dir, "*.yaml"),
+        ("config", settings.config_dir, "**/*.yaml"),
         ("capabilities", settings.content_root / "capabilities", "**/*.yaml"),
         ("skills", settings.content_root / "skills", "*/SKILL.md"),
     ]:

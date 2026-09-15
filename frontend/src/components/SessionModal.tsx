@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { KeyRound, ShieldAlert, X } from 'lucide-react';
 import { Principal } from '../types/api';
-import { getSessionToken, setSessionToken, fetchPrincipal } from '../services/api';
+import { ApiError, getSessionToken, setSessionToken, fetchPrincipal } from '../services/api';
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -64,7 +64,13 @@ export const SessionModal: React.FC<SessionModalProps> = ({
     }
     setSessionToken(tokenInput);
     try { const next = await fetchPrincipal(); onAuthenticated?.(next); onSessionChanged?.(); setTokenInput(''); onClose(); }
-    catch (reason) { const message = reason instanceof Error ? reason.message : 'Session verification failed'; setSessionToken(null); setTokenInput(''); setError(message); onSignedOut?.(message); }
+    catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Session verification failed';
+      setSessionToken(null);
+      if (!(reason instanceof ApiError && reason.status === 0)) setTokenInput('');
+      setError(message);
+      onSignedOut?.(message);
+    }
     finally { setLoading(false); }
   };
 

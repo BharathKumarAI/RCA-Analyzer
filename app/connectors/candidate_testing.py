@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 import time
 from typing import Any, Dict, List, Tuple, Set
@@ -22,6 +23,7 @@ from app.connectors.providers.evidence import (
 )
 from app.connectors.providers.infrastructure import KafkaConnector, UnixConnector
 from app.connectors.providers.secrets import environment_secret
+from app.connectors.providers.registry import connection_route, resolve_mcp_connection, McpConnectionConfiguration, _unix_host
 from app.connectors.health import CheckStatus
 
 # Concurrency semaphore for active test probes
@@ -46,7 +48,7 @@ _SCOPE_FIELDS = {
 # but candidate testing constructs native providers only. Keep that distinction
 # explicit so an active MCP profile cannot be reported as a native success.
 _NATIVE_AUTH_TYPES = {
-    "itsm": {"basic_api_token"},
+    "itsm": {"basic_api_token", "basic_auth", "api_token"},
     "log_search": {"bearer_token"},
     "confluence": {"bearer_token"},
     "signalfx": {"api_key_header"},
@@ -80,6 +82,9 @@ def _sensitive_key(name: str) -> bool:
 def _validate_secret_fields(credentials: dict, errors: List[str]) -> None:
     """Reject values that would put a credential in a candidate or result."""
     for name, value in credentials.items():
+        if not isinstance(name, str):
+            errors.append("Credential field names must be strings.")
+            continue
         if isinstance(value, dict):
             _validate_secret_fields(value, errors)
             continue
@@ -147,13 +152,33 @@ def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _hybrid_candidates(candidate: dict) -> dict[str, dict]:
+    if not any(isinstance(candidate.get(key), str) and candidate[key].strip().lower() == "hybrid"
+               for key in ("access_mode", "transport", "routing_mode")):
+        return {}
+    return {route: {**{k: v for k, v in candidate.items() if k not in {"access_mode", "transport", "routing_mode"}},
+                    "access_mode": route} for route in ("direct", "mcp")}
+
+
 def compute_candidate_hash(candidate: Dict[str, Any]) -> str:
     """Compute deterministic SHA-256 hash of candidate configuration."""
+    if not isinstance(candidate, dict):
+        candidate = {"_invalid_candidate_type": type(candidate).__name__}
     env_dep = candidate.get("environment_dependency")
     if env_dep is None and "environment_dependent" in candidate:
         env_dep = "dependent" if candidate["environment_dependent"] else "independent"
     elif env_dep is None and "env_dependent" in candidate:
         env_dep = "dependent" if candidate["env_dependent"] else "independent"
+
+    raw_credentials = candidate.get("credentials", {})
+    if isinstance(raw_credentials, dict):
+        canonical_credentials = {
+            key: value
+            for key, value in raw_credentials.items()
+            if isinstance(key, str) and not key.startswith("_")
+        }
+    else:
+        canonical_credentials = {"_invalid_type": type(raw_credentials).__name__}
 
     canonical = {
         "template_id": candidate.get("template_id"),
@@ -163,10 +188,7 @@ def compute_candidate_hash(candidate: Dict[str, Any]) -> str:
         "tool_environment": candidate.get("tool_environment") or "Shared",
         "endpoint": candidate.get("endpoint"),
         "auth_type": candidate.get("auth_type"),
-        "credentials": {
-            k: v for k, v in candidate.get("credentials", {}).items()
-            if not k.startswith("_")
-        },
+        "credentials": canonical_credentials,
         "scope": {
             key: candidate.get(key)
             for key in ("project_key", "index", "topic", "topic_filter", "path", "external_resource")
@@ -216,10 +238,13 @@ def compute_candidate_hash(candidate: Dict[str, Any]) -> str:
                 "path",
                 "timeout_seconds",
                 "max_results",
+                "environment_connections",
+                "connection_name",
             }
             and not key.startswith("_")
         },
     }
+
     dumped = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
 
@@ -230,34 +255,85 @@ def validate_candidate_configuration(
     """Validate candidate configuration structurally and conditionally against template rules."""
     errors: List[str] = []
 
+    if not isinstance(candidate, dict):
+        return False, ["Candidate configuration must be an object."]
+    if not isinstance(template, dict):
+        return False, ["Connector template must be an object."]
+
+    # The caller must validate the same immutable template version that will be
+    # used to construct the provider.  Without this check a direct caller could
+    # validate one contract and execute another.
+    template_ids = {
+        value
+        for value in (
+            template.get("type"),
+            template.get("system_name"),
+            template.get("provider_adapter_id"),
+        )
+        if isinstance(value, str) and value
+    }
+    candidate_template_id = candidate.get("template_id")
+    if not isinstance(candidate_template_id, str) or candidate_template_id not in template_ids:
+        errors.append("Candidate template_id does not match the selected template.")
+    expected_version = template.get("version", "1.0.0")
+    if candidate.get("template_version", "1.0.0") != expected_version:
+        errors.append("Candidate template_version does not match the selected template.")
+
+    connector_type = template.get("provider_adapter_id") or template.get("type")
+    try:
+        selected_route = connection_route(candidate, connector_type)
+    except ValueError:
+        errors.append("Connector access_mode and transport must identify the same route; MCP requires an approved MCP test route and Hybrid requires explicit operation routing.")
+        selected_route = "direct"
+
+    if not errors and (routes := _hybrid_candidates(candidate)):
+        for route, routed_candidate in routes.items():
+            _, route_errors = validate_candidate_configuration(routed_candidate, template)
+            errors.extend(f"{route}: {error}" for error in route_errors)
+        return not errors, errors
+
     # Mandatory Project-Only Identity Fields:
     # 1. System Name
-    system_name = str(candidate.get("system_name") or "").strip()
-    if not system_name:
+    system_name_value = candidate.get("system_name")
+    system_name = system_name_value.strip() if isinstance(system_name_value, str) else ""
+    if not isinstance(system_name_value, str) or not system_name:
         errors.append("System Name is mandatory (cannot be blank).")
 
     # 2. Environment Dependent / Independent
     env_dep = candidate.get("environment_dependency")
-    if env_dep is None and "environment_dependent" in candidate:
-        env_dep = "dependent" if candidate["environment_dependent"] else "independent"
-    elif env_dep is None and "env_dependent" in candidate:
-        env_dep = "dependent" if candidate["env_dependent"] else "independent"
+    if env_dep is None:
+        legacy_key = next(
+            (key for key in ("environment_dependent", "env_dependent") if key in candidate),
+            None,
+        )
+        if legacy_key is not None:
+            legacy_value = candidate[legacy_key]
+            if type(legacy_value) is bool:
+                env_dep = "dependent" if legacy_value else "independent"
+            else:
+                env_dep = legacy_value
     if env_dep is None:
         errors.append("Environment Dependent/Independent choice is mandatory ('dependent' or 'independent').")
-    elif env_dep not in {"dependent", "independent"}:
+    elif not isinstance(env_dep, str) or env_dep not in {"dependent", "independent"}:
         errors.append(f"Invalid environment dependency '{env_dep}'. Must be 'dependent' or 'independent'.")
 
     # 3. Tool Environment
-    tool_env = str(candidate.get("tool_environment") or "").strip()
-    if not tool_env:
+    tool_env_value = candidate.get("tool_environment")
+    tool_env = tool_env_value.strip() if isinstance(tool_env_value, str) else ""
+    if not isinstance(tool_env_value, str) or not tool_env:
         errors.append("Tool Environment is mandatory (e.g. 'Shared' for independent, or specific target environment).")
 
     if env_dep == "dependent":
         mappings = candidate.get("environment_mappings") or candidate.get("bindings") or []
         if not mappings:
             errors.append("Environment Dependent connectors require at least one environment mapping row.")
+        elif not isinstance(mappings, list):
+            errors.append("Environment mappings must be a list of binding objects.")
         else:
             for idx, m in enumerate(mappings):
+                if not isinstance(m, dict):
+                    errors.append(f"Environment mapping row #{idx + 1} must be an object.")
+                    continue
                 if not m.get("project_env_id"):
                     errors.append(f"Environment mapping row #{idx + 1} is missing Project Environment.")
                 if not m.get("external_resource"):
@@ -270,17 +346,46 @@ def validate_candidate_configuration(
         errors.append("Database querying and Oracle execution are disabled by policy.")
         return False, errors
 
+    # Check tool access rules and enforce release policy restrictions
+    tool_rules = candidate.get("tool_access_rules") or candidate.get("tool_rules") or []
+    if isinstance(tool_rules, list):
+        for idx, rule in enumerate(tool_rules):
+            if not isinstance(rule, dict):
+                continue
+            if not rule.get("tool_enabled", False):
+                continue
+            cap = rule.get("logical_capability") or rule.get("tool_id") or f"rule #{idx+1}"
+            # Write and execution capabilities are strictly restricted by release policy
+            if rule.get("write_access") or rule.get("execution_access"):
+                errors.append(
+                    f"Write and execution capabilities are restricted by release policy; cannot enable write/execution access for '{cap}'."
+                )
+            # Validate hybrid routing mapping
+            mode = candidate.get("access_mode") or candidate.get("routing_mode")
+            if mode == "hybrid":
+                route = rule.get("access_route")
+                if route not in {"direct", "mcp"}:
+                    errors.append(f"Hybrid access mode requires an explicit route ('direct' or 'mcp') for '{cap}'.")
+                elif route == "mcp" and not candidate.get("mcp_configuration") and not candidate.get("mcp_endpoint"):
+                    errors.append(f"Tool '{cap}' is routed to MCP but no MCP configuration is defined.")
+
+
     # Check endpoint presence
     endpoint = candidate.get("endpoint")
     if not isinstance(endpoint, str):
         endpoint = ""
     endpoint = endpoint.strip()
     connector_type = template.get("provider_adapter_id") or template.get("type")
+    if selected_route == "mcp":
+        endpoint = candidate["mcp_configuration"]["endpoint"]
     if not endpoint and connector_type not in {"oracle"}:
         errors.append("Endpoint is required.")
     elif endpoint:
         parsed = urlparse(endpoint)
-        if connector_type == "kafka":
+        if selected_route == "mcp":
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                errors.append("MCP requires an approved HTTPS endpoint without embedded credentials.")
+        elif connector_type == "kafka":
             if not _validate_kafka_endpoint(endpoint):
                 errors.append("Kafka endpoint must be a bounded broker list without credentials or paths.")
         elif connector_type == "unix":
@@ -302,32 +407,63 @@ def validate_candidate_configuration(
             errors.append(f"{field} and external_resource must identify the same configured scope.")
 
     # Check timeout and bounds
+    if "port" in candidate and (type(candidate["port"]) is not int or not 1 <= candidate["port"] <= 65535):
+        errors.append("port must be an integer between 1 and 65535.")
     timeout_s = candidate.get("timeout_seconds", 30)
-    if not isinstance(timeout_s, (int, float)) or timeout_s < 1 or timeout_s > 120:
+    if (
+        type(timeout_s) not in {int, float}
+        or (isinstance(timeout_s, float) and not math.isfinite(timeout_s))
+        or timeout_s < 1
+        or timeout_s > 120
+    ):
         errors.append("timeout_seconds must be between 1 and 120 seconds.")
 
     max_results = candidate.get("max_results", 100)
-    if not isinstance(max_results, int) or max_results < 1 or max_results > 1000:
+    if type(max_results) is not int or max_results < 1 or max_results > 1000:
         errors.append("max_results must be an integer between 1 and 1000.")
 
     credentials = candidate.get("credentials", {})
     if not isinstance(credentials, dict):
         errors.append("credentials must be a mapping of credential fields.")
         return False, errors
+    if any(not isinstance(name, str) for name in credentials):
+        errors.append("Credential field names must be strings.")
+        return False, errors
 
     # Secret references are checked before auth-type validation so incomplete
     # drafts cannot persist plaintext credentials.
     _validate_secret_fields(credentials, errors)
 
+    if selected_route == "mcp":
+        config = McpConnectionConfiguration.model_validate(candidate["mcp_configuration"])
+        _validate_secret_fields(config.model_dump(), errors)
+        return not errors, errors
+
     # Check auth type and the template-owned profile contract.
     auth_type = candidate.get("auth_type")
-    if not auth_type:
+    if not isinstance(auth_type, str) or not auth_type.strip():
         errors.append("auth_type is required.")
         return False, errors
 
-    profiles = [profile for profile in template.get("auth_profiles", []) if isinstance(profile, dict)]
+    raw_profiles = template.get("auth_profiles", [])
+    if raw_profiles is None:
+        raw_profiles = []
+    if not isinstance(raw_profiles, (list, tuple)):
+        errors.append("Connector template auth_profiles must be an array.")
+        raw_profiles = []
+    profiles = [profile for profile in raw_profiles if isinstance(profile, dict)]
     allowed_profiles = [profile.get("id") for profile in profiles]
-    profile = next((item for item in profiles if item.get("id") == auth_type), None)
+    if not profiles:
+        errors.append("Selected connector template does not declare an authentication profile.")
+    profile = next(
+        (
+            item for item in profiles
+            if item.get("id") == auth_type
+            or (auth_type == "basic_api_token" and item.get("id") == "basic_auth")
+            or (auth_type == "basic_auth" and item.get("id") == "basic_api_token")
+        ),
+        None,
+    )
     if allowed_profiles and profile is None:
         errors.append(f"auth_type '{auth_type}' is not supported by template '{template.get('type')}'. Permitted: {', '.join(allowed_profiles)}.")
     if profile is not None:
@@ -335,7 +471,14 @@ def validate_candidate_configuration(
             errors.append(f"Auth type '{auth_type}' is not active for live connection testing.")
         required_fields = profile.get("required_fields") or []
         optional_fields = profile.get("optional_fields") or []
-        undeclared = set(credentials) - set(required_fields) - set(optional_fields)
+        hidden_fields = profile.get("hidden_fields") or []
+        submitted_hidden = sorted(set(credentials) & set(hidden_fields))
+        if submitted_hidden:
+            errors.append(
+                "Credential fields are inactive for the selected auth profile: "
+                + ", ".join(submitted_hidden)
+            )
+        undeclared = set(credentials) - set(required_fields) - set(optional_fields) - set(hidden_fields)
         if undeclared:
             errors.append(
                 "Credential fields are not declared by the selected auth profile: "
@@ -374,14 +517,19 @@ async def execute_candidate_test(
     allowed_endpoint_hosts: Set[str] | None = None,
 ) -> Dict[str, Any]:
     """Execute live candidate test using isolated temporary provider client."""
-    candidate_hash = compute_candidate_hash(candidate)
     now = time.time()
     t_start = time.perf_counter()
 
     valid, errors = validate_candidate_configuration(candidate, template)
-    endpoint = candidate.get("endpoint") if isinstance(candidate.get("endpoint"), str) else ""
+    candidate_hash = compute_candidate_hash(candidate)
+    endpoint = candidate.get("endpoint") if isinstance(candidate, dict) and isinstance(candidate.get("endpoint"), str) else ""
+    selected_route = "direct"
+    if valid:
+        selected_route = connection_route(candidate, template.get("provider_adapter_id") or template.get("type"))
+        if selected_route == "mcp":
+            endpoint = candidate["mcp_configuration"]["endpoint"]
     if valid and allowed_endpoint_hosts is not None:
-        hosts = _endpoint_hosts(endpoint, template.get("provider_adapter_id") or template.get("type"))
+        hosts = _endpoint_hosts(endpoint, "mcp" if selected_route == "mcp" else template.get("provider_adapter_id") or template.get("type"))
         allowed_hosts = {item.lower() for item in allowed_endpoint_hosts}
         if not hosts or any(host.lower() not in allowed_hosts for host in hosts):
             valid = False
@@ -405,10 +553,32 @@ async def execute_candidate_test(
             "tested_at": now,
         }
 
+    if routes := _hybrid_candidates(candidate):
+        outcomes = await asyncio.gather(*(
+            execute_candidate_test(
+                routed_candidate, template, operation if route == selected_route else "test_connection",
+                allowed_secret_references=allowed_secret_references,
+                allowed_endpoint_hosts=allowed_endpoint_hosts,
+            ) for route, routed_candidate in routes.items()
+        ))
+        by_route = dict(zip(routes, outcomes, strict=True))
+        passed = all(result["overall_result"] == "PASSED" for result in outcomes)
+        selected = by_route[selected_route]
+        return {
+            **selected, "candidate_hash": candidate_hash,
+            "overall_result": "PASSED" if passed else "FAILED",
+            "error_message": "" if passed else "Both Hybrid connection identities must pass validation",
+            "latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+            "stage_results": {**selected["stage_results"], **{
+                f"route_{route}": {"status": result["overall_result"], "detail": result["error_message"] or "Connection validated"}
+                for route, result in by_route.items()
+            }},
+        }
+
     template_type = template.get("type")
     endpoint = candidate.get("endpoint", "")
-    credentials = candidate.get("credentials", {})
-    auth_type = candidate.get("auth_type")
+    credentials = {} if selected_route == "mcp" else candidate.get("credentials", {})
+    auth_type = "mcp_bearer_token" if selected_route == "mcp" else candidate.get("auth_type")
     timeout_s = float(candidate.get("timeout_seconds", 10))
     scope = _scope_value(candidate, template_type)
 
@@ -458,7 +628,12 @@ async def execute_candidate_test(
         client = None
         try:
             # Build isolated temporary client
-            if template_type == "itsm":
+            if selected_route == "mcp":
+                client = resolve_mcp_connection(
+                    template_type, candidate, allowed_hosts=allowed_endpoint_hosts,
+                    allowed_secret_references=allowed_secret_references,
+                )
+            elif template_type == "itsm":
                 project_key = _text(candidate.get("project_key")) or scope
                 if not project_key:
                     raise ValueError("Jira project scope is required")
@@ -530,7 +705,8 @@ async def execute_candidate_test(
                 )
             elif template_type == "unix":
                 client = UnixConnector(
-                    host=endpoint,
+                    host=_unix_host(endpoint),
+                    port=candidate.get("port", 22),
                     username=credentials.get("username", ""),
                     private_key_path=resolved_secrets.get("private_key_ref", ""),
                     known_hosts=resolved_secrets.get("known_hosts_ref", ""),

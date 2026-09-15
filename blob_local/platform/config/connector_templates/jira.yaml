@@ -1,0 +1,186 @@
+type: itsm
+name: Jira Cloud Incident Triage
+system_name: itsm
+category: Ticketing
+description: Read-only Jira ticket lookup, comment fetch, and structured fields
+  extraction for incident workflows via Jira Cloud REST API Version 3.
+integration_kind: native
+protocol: HTTPS
+auth_method: Basic API Token
+version: 1.0.0
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
+provider_adapter_id: itsm
+supported_operations:
+- get_ticket
+- search_issues
+- get_current_user
+known_limitations:
+- Read-only ticket lookup; comment writes and issue mutations are governance-restricted.
+- Uses Jira Cloud REST API Version 3 with Atlassian Document Format (ADF) rich-text support.
+- JQL preview validates scoped queries; saved custom JQL does not enable queue execution.
+auth_profiles:
+- id: basic_auth
+  name: Account email + API token
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - account_identifier
+  - api_token_secret_ref
+  optional_fields: []
+  hidden_fields:
+  - password_secret_ref
+  - domain
+- id: oauth2_1
+  name: OAuth 2.0 authorization code (3LO)
+  status: planned
+  transport_compatibility: HTTPS
+  required_fields:
+  - oauth_provider_profile
+  - client_id
+  - client_secret_ref
+  optional_fields:
+  - audience
+  - scopes
+  hidden_fields:
+  - api_token_secret_ref
+- id: api_token
+  name: Account API token (Basic)
+  status: active
+  transport_compatibility: HTTPS
+  required_fields:
+  - account_identifier
+  - api_token_secret_ref
+  optional_fields: []
+  hidden_fields: []
+- id: jwt_app
+  name: JWT (App)
+  status: planned
+  transport_compatibility: HTTPS
+  required_fields:
+  - app_id
+  - private_key_ref
+  optional_fields:
+  - audience
+  hidden_fields: []
+- id: webhook_ref
+  name: Webhook reference
+  status: planned
+  transport_compatibility: HTTPS
+  required_fields:
+  - webhook_url
+  - secret_token_ref
+  optional_fields: []
+  hidden_fields: []
+default_endpoint: https://<JIRA_WORKSPACE>.atlassian.net
+default_ui_base_url: https://<JIRA_WORKSPACE>.atlassian.net
+default_mcp_url: https://mcp.atlassian.com/v2/mcp
+default_secret: env://JIRA_API_TOKEN
+default_service_user: null
+default_scope: platform_default
+can_override: true
+default_timeout_seconds: 30
+default_retry_attempts: 3
+default_retry_backoff: 5
+default_rate_limit: 100 req/min
+default_config:
+  project_key: ''
+  timezone: UTC
+  polling_frequency: '*/15 * * * *'
+  monitoring_jql: ''
+  polling_schedule: '*/15 * * * *'
+  project_keys: []
+  reports: []
+parameter_fields:
+- variable_name: timeout_seconds
+  label: Request Timeout
+  runtime_binding: connector.timeout_seconds
+  description: Maximum duration of a connector request in seconds.
+  value_type: integer
+  default_value: 30
+  template_editable: true
+  minimum: 1
+  maximum: 60
+  category: performance
+  subcategory: timeouts
+  ownership: project_override_allowed
+- variable_name: system_name
+  label: System Name
+  description: Project-defined connector instance name. Defaults to the connector name and remains editable.
+  value_type: string
+  default_value: Jira Cloud Incident Triage
+  required: true
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: tag
+- variable_name: environment_dependency
+  label: Environment Dependent/Independent
+  description: Explicit project choice between Environment Dependent (environment
+    mappings) and Environment Independent (shared external system).
+  value_type: string
+  default_value: independent
+  required: true
+  allowed_values:
+  - dependent
+  - independent
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: layers
+- variable_name: tool_environment
+  label: Tool Environment
+  description: Authorized external environment name (e.g. Shared for independent,
+    or target tool environment).
+  value_type: string
+  default_value: Shared
+  required: true
+  required_when: environment_dependency == 'dependent'
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_only
+  category: operational
+  icon: globe
+- variable_name: custom_jql
+  label: Custom JQL
+  description: Reusable JQL filter clause, up to 4096 characters. Leave empty for no additional filter. Saved configuration only; queue search and scheduled polling are not enabled.
+  template_editable: true
+  max_length: 4096
+  value_type: string
+  default_value: ''
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_override_allowed
+  category: query
+  icon: filter
+- variable_name: custom_field_mapping
+  label: Jira Custom Field Mapping
+  description: Verified Jira field IDs and project display mappings used when extracting issue evidence.
+  template_editable: true
+  value_type: json
+  default_value: {}
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_override_allowed
+  category: query
+  subcategory: field_mapping
+  icon: list
+  runtime_binding: jira.custom_field_mapping
+- variable_name: attachment_processing
+  label: Attachment Processing
+  description: Process files supplied through the project attachment service; Jira-hosted attachment downloads are not enabled.
+  template_editable: true
+  value_type: string
+  default_value: disabled
+  allowed_values:
+  - disabled
+  - local_upload
+  allow_project_override: true
+  visible_in_project: true
+  ownership: project_override_allowed
+  category: operational
+  icon: paperclip
+  runtime_binding: project.attachment_processing

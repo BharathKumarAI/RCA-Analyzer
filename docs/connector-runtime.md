@@ -75,3 +75,42 @@ enabling it does not provision credentials or activate an arbitrary MCP registra
 The [capability resolver](../app/configuration/layers.py) removes disabled connector
 actions and blocks capabilities with disabled required connectors. Changes apply to
 subsequent resolution/preflight; they do not cancel already-running investigations.
+
+
+## Saved environment connections and run selection
+
+Platform administrators manage each connection’s target, active authentication profile,
+credential references, allowed resources and MCP configuration through the
+[connector API](../app/api/routes/connectors_api.py). Project administrators select approved
+connection IDs in project environment bindings. A missing ID never falls back to another
+connection or to the legacy instance identity. Each connection save disables it and clears
+its validation result. Test and enable it before enabling the parent connector. Activation
+requires a passing test within 15 minutes; edits invalidate in-flight results.
+
+`POST /api/v1/projects/{project_id}/connectors/{instance_id}/test?environment_id={id}`
+tests the saved configuration without exposing its credential references to the caller.
+For a connection shared across environments, each selected project binding is tested
+separately. The existing `test_all_environments` operation covers all submitted saved
+bindings. Native/MCP probes and results retain the existing timeout and size limits.
+
+A saved connection's `mcp_configuration` contains `endpoint`, `token_secret_ref`,
+`mcp_tools` (the same governed binding contract above), and `operation_routes`.
+Hybrid requires exactly one route for the connector’s registered operation:
+`get_ticket`, `query_range`, or `read_evidence`. The route is `direct` or `mcp`;
+there is no automatic fallback. Hybrid tests validate both configured identities; a successful MCP probe cannot conceal a failing native login. MCP-only execution resolves only the MCP credential.
+Additional per-environment references can be approved for a host through the existing deployment-owned `RCA_INTEGRATION_SECRET_REFERENCES` mapping. They are resolved only for that host in addition to the connector’s deployment defaults. Currently this path supports HTTPS Streamable HTTP with Bearer authentication.
+Native authentication options remain those reported by `native_auth_profile_ids`.
+This does not implement OAuth consent/refresh or every profile in the proposed forms.
+
+The [run request](../app/runtime/run_contract.py) accepts an optional
+`connector_selections` map keyed by connector adapter ID. Each value contains a saved
+`instance_id` and optional `environment_id`. These are record selectors, not target or
+scope definitions. [Runtime resolution](../app/runtime/runner.py) checks the authenticated
+project, capability, published template, deployment enablement and active environment
+binding before constructing a provider. Omit selectors only when the saved configuration
+is unambiguous. Selected identities are captured in the persisted run request.
+
+[Record and selection tests](../tests/integration/test_connection_record_contract.py)
+cover persistence, stale tests, scope rejection, credential visibility and multiple
+instances. [Transport tests](../tests/integration/test_connector_transports.py) exercise
+saved Hybrid configuration with a real local TLS MCP server and repository content.
