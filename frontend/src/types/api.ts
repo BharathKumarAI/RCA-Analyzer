@@ -756,6 +756,7 @@ export interface ProjectValidationResult {
 }
 
 export interface ProjectSetupResponse {
+  project_revision: string;
   generated_at: number;
   scope: ProjectSetupScope;
   runtime: ProjectRuntimeSection;
@@ -1199,4 +1200,21 @@ export interface PlatformConfigurationSnapshot {
   content_hash: string;
   activation: string;
   pending_restart: boolean;
+}
+
+export interface ProjectTemplateItem {
+  template_id: string;
+  version: string;
+  name: string;
+  revision: number;
+  checksum: string;
+  status: 'draft' | 'published' | 'deprecated';
+  definition: Record<string, unknown>;
+}
+export interface ProjectTemplateBinding {
+  project_revision: string;
+  harness_revision: string;
+  status: string;
+  binding: { template_id: string; template_version: string } | null;
+  templates: ProjectTemplateItem[];
 }

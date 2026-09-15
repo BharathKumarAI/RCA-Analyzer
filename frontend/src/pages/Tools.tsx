@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   CheckCircle2,
   Activity,
+  Wrench,
   Plus,
   RefreshCw,
   Database,
@@ -41,7 +42,6 @@ import {
 import {
   ConnectorsForm,
 } from '../components/connectors';
-import { ConnectorFieldGovernance } from '../components/connectors/ConnectorFieldGovernance';
 import { ConnectorInstanceEditor } from '../components/ConnectorInstanceEditor';
 import { IntegrationForm } from '../components/IntegrationForm';
 import '../styles/connector-editor.css';
@@ -137,7 +137,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
 
   // Selected Connector Key & UI Filter States
-  const [selectedConnectorId, setSelectedConnectorId] = useState<string>('itsm');
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'restricted' | 'saved' | 'custom'>('all');
   const [actionsScope, setActionsScope] = useState<'selected' | 'all'>('selected');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -256,14 +256,11 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
       }
     }
 
-    // Sort: itsm (Jira), log_search (Splunk), confluence first, then alphabetical
-    const priority = ['itsm', 'log_search', 'confluence', 'signalfx', 'qtest', 'unix', 'oracle', 'kafka', 'kubernetes', 'gitlab'];
+    // Dynamic sort: policy-enabled first, then alphabetical by name
     return Array.from(map.values()).sort((a, b) => {
-      const idxA = priority.indexOf(a.id);
-      const idxB = priority.indexOf(b.id);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      if (idxA !== -1) return -1;
-      if (idxB !== -1) return 1;
+      const aDisabled = a.template?.is_enabled_by_policy === false;
+      const bDisabled = b.template?.is_enabled_by_policy === false;
+      if (aDisabled !== bDisabled) return aDisabled ? 1 : -1;
       return a.name.localeCompare(b.name);
     });
   }, [connectorTemplates, toolsList, projectConnectors]);
@@ -502,23 +499,31 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
 
         const matchingCaps = capabilitiesList.filter(cap =>
           (cap.permissions?.allowed_actions || []).includes(actionId) ||
-          ((cap.required_connectors || []).map(c => c.toLowerCase()).includes(sys) && (!cap.permissions?.allowed_actions || cap.permissions.allowed_actions.length === 0))
+          ((cap.required_connectors || []).map(c => c.toLowerCase()).includes(sys)) ||
+          ((cap.requires?.connectors || []).map(c => c.toLowerCase()).includes(sys)) ||
+          ((cap.optional_connectors || []).map(c => c.toLowerCase()).includes(sys)) ||
+          ((cap.optional?.connectors || []).map(c => c.toLowerCase()).includes(sys))
         );
 
+        // Stages directly from live backend capability definition
         const stages = Array.from(new Set(matchingCaps.flatMap(c => c.agent_stages || [])));
-        if (stages.length === 0) {
-          if (sys === 'itsm') stages.push('triage');
-          else if (sys === 'log_search') stages.push('logs');
-          else stages.push('evidence');
-        }
 
         const caps = matchingCaps.map(c => ({ id: c.id, name: c.name }));
-        const minRole = matchingCaps[0]?.permissions?.minimum_role || 'PROJECT_ANALYST';
+        const minRole = matchingCaps[0]?.permissions?.minimum_role || '';
 
-        let safetyProfile = 'Read-Only (Mutations Forbidden)';
-        const pii = matchingCaps[0]?.safety_profile?.pii_access;
-        if (pii === 'project_scoped') safetyProfile += ' · PII Scoped';
-        else if (pii === 'redacted') safetyProfile += ' · PII Redacted';
+        // Safety profile directly derived from capability safety_profile
+        const safety = matchingCaps[0]?.safety_profile;
+        const safetyParts: string[] = [];
+        if (safety?.tool_mutations) {
+          safetyParts.push(safety.tool_mutations === 'forbidden' ? 'Read-Only (Mutations Forbidden)' : `Mutations: ${safety.tool_mutations}`);
+        }
+        if (safety?.pii_access) {
+          safetyParts.push(`PII: ${safety.pii_access.replace(/_/g, ' ')}`);
+        }
+        if (safety?.external_network) {
+          safetyParts.push(`Network: ${safety.external_network.replace(/_/g, ' ')}`);
+        }
+        const safetyProfile = safetyParts.length > 0 ? safetyParts.join(' · ') : 'Standard Execution';
 
         const isRestricted = conn.template?.is_enabled_by_policy === false;
         const parts = actionId.split('.');
@@ -556,18 +561,44 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
 
   return (
     <div className="view-container tools-page connector-workspace">
-      <header className="connector-workspace-heading">
-        <div>
-          <h1>Connectors & Telemetry Integrations</h1>
-          <p>Manage shared templates, candidate connection testing, and active project integrations.</p>
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
+            <Wrench size={22} color="var(--acc)" />
+            Connectors & <span>Telemetry Integrations</span>
+          </h1>
+          <p className="hero-lede">
+            Manage shared templates, candidate connection testing, and active project integrations.
+          </p>
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip">
+              <Activity size={12} /> <b>{backendConnectors.length}</b> Templates
+            </span>
+            <span className="hero-stat-chip highlight">
+              <span className={`dot ${isDemoMode ? '' : 'pulse'}`} /> <b>{enabledCount}</b> Active
+            </span>
+            <span className="hero-stat-chip">
+              <ShieldCheck size={12} /> <b>{restrictedCount}</b> Restricted
+            </span>
+            <span className="hero-stat-chip">
+              Mode: <b>{isDemoMode ? 'Demo' : 'Live'}</b>
+            </span>
+          </div>
         </div>
-        <div className="connector-heading-actions">
-          <button className="btn btn-secondary" onClick={handleSyncCatalog} disabled={isSyncing}>
-            <RefreshCw size={15} aria-hidden="true" /> {isSyncing ? 'Refreshing…' : 'Refresh'}
-          </button>
-          {canEdit && <button className="btn btn-primary" onClick={() => setIsCreatingCustom(true)}><Plus size={15} aria-hidden="true" /> Custom integration</button>}
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <button className="btn btn-secondary" onClick={handleSyncCatalog} disabled={isSyncing}>
+              <RefreshCw size={13} aria-hidden="true" className={isSyncing ? 'spin' : ''} /> {isSyncing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            {canEdit && (
+              <button className="btn btn-primary" onClick={() => setIsCreatingCustom(true)}>
+                <Plus size={13} aria-hidden="true" /> Custom integration
+              </button>
+            )}
+          </div>
         </div>
-      </header>
+      </section>
 
       {/* Accurate Health & Telemetry Summary Strip */}
       <div className="connector-telemetry-strip" role="region" aria-label="Connector telemetry summaries">
@@ -578,11 +609,14 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
               {isDemoMode ? 'Demo Offline' : 'Live Active'}
             </span>
           </div>
-          <div className="connector-stat-card-value">{isDemoMode ? 'DEMO MODE' : 'LIVE MODE'}</div>
+          <div className="connector-stat-card-value">
+            {runtimeConfig?.mode?.toUpperCase() || connectorsHealth?.mode?.toUpperCase() || (isDemoMode ? 'DEMO MODE' : 'LIVE MODE')}
+          </div>
           <div className="connector-stat-card-meta">
             {isDemoMode
-              ? 'External probes & network calls simulated offline. Live traffic disabled by architectural design.'
-              : 'Live network probes active for authenticated connectors.'}
+              ? (connectorsHealth?.connectors && Object.values(connectorsHealth.connectors)[0]?.message) ||
+                'External network calls simulated offline by architectural configuration.'
+              : 'Live network connectivity active for authenticated connectors.'}
           </div>
         </div>
 
@@ -598,7 +632,9 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
             <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500 }}>of {backendConnectors.length} active</span>
           </div>
           <div className="connector-stat-card-meta">
-            Policy enablement grants agents permission to invoke tools; it does not indicate live target reachability.
+            {connectorsHealth?.disabled && connectorsHealth.disabled.length > 0
+              ? `Restricted by policy: ${connectorsHealth.disabled.join(', ')}.`
+              : 'All registered platform connectors permitted under active project policy.'}
           </div>
         </div>
 
@@ -615,7 +651,9 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
             <span style={{ color: '#64748b', fontSize: '12px', marginLeft: '6px' }}>({testNotTestedCount} untested)</span>
           </div>
           <div className="connector-stat-card-meta">
-            Target-specific candidate tests executed against configured environment endpoints.
+            {savedConnectionsCount > 0
+              ? `${allEnvConnections.length} environment endpoint configurations tested for candidate reachability.`
+              : 'No saved connection instances configured for this project yet.'}
           </div>
         </div>
 
@@ -626,9 +664,12 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
               env:// Scoped
             </span>
           </div>
-          <div className="connector-stat-card-value" style={{ fontSize: '14px' }}>Environment Variables</div>
+          <div className="connector-stat-card-value" style={{ fontSize: '14px' }}>
+            <span>{parameters.length} Parameters</span>
+            <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500 }}>declared</span>
+          </div>
           <div className="connector-stat-card-meta">
-            Direct secret values are protected; references point to environment-scoped variables.
+            Environment variables resolve credentials securely at runtime; secrets avoid plaintext database persistence.
           </div>
         </div>
       </div>
@@ -636,148 +677,267 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
       {loadError && <NotificationBanner type="error" message={loadError} autoCloseMs={0} onClose={() => setLoadError(null)} />}
       {toastMessage && <NotificationBanner type="success" message={toastMessage} onClose={() => setToastMessage(null)} />}
 
-      <div className="connector-picker-bar">
-        <label className="connector-search">
-          <Search size={16} aria-hidden="true" />
-          <input
-            aria-label="Search connectors"
-            placeholder="Find a connector…"
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-          />
-        </label>
-
-        {/* Status Filter Chips */}
-        <div className="connector-filter-chips" role="group" aria-label="Filter connectors by status">
-          <button
-            type="button"
-            className={`connector-filter-chip ${statusFilter === 'all' ? 'is-active' : ''}`}
-            onClick={() => setStatusFilter('all')}
-          >
-            All <span className="connector-filter-chip-count">{backendConnectors.length}</span>
-          </button>
-          <button
-            type="button"
-            className={`connector-filter-chip ${statusFilter === 'enabled' ? 'is-active' : ''}`}
-            onClick={() => setStatusFilter('enabled')}
-          >
-            Policy Enabled <span className="connector-filter-chip-count">{enabledCount}</span>
-          </button>
-          <button
-            type="button"
-            className={`connector-filter-chip ${statusFilter === 'restricted' ? 'is-active' : ''}`}
-            onClick={() => setStatusFilter('restricted')}
-          >
-            Restricted <span className="connector-filter-chip-count">{restrictedCount}</span>
-          </button>
-          <button
-            type="button"
-            className={`connector-filter-chip ${statusFilter === 'saved' ? 'is-active' : ''}`}
-            onClick={() => setStatusFilter('saved')}
-          >
-            With Saved Connections <span className="connector-filter-chip-count">{withSavedCount}</span>
-          </button>
-          {customCount > 0 && (
-            <button
-              type="button"
-              className={`connector-filter-chip ${statusFilter === 'custom' ? 'is-active' : ''}`}
-              onClick={() => setStatusFilter('custom')}
-            >
-              Custom MCP <span className="connector-filter-chip-count">{customCount}</span>
-            </button>
-          )}
-        </div>
-
-        <label className="connector-picker-label">Connector
-          <select
-            value={visibleConnectors.some(conn => conn.id === selectedConnector?.id) ? selectedConnector?.id : ''}
-            onChange={event => {
-              if (leaveEdits()) {
-                setDirty(false);
-                setTemplateDirty(false);
-                setEditing(null);
-                setSelectedConnectorId(event.target.value);
-              }
-            }}
-          >
-            <option value="" disabled>{visibleConnectors.length ? 'Select a connector' : 'No matching connectors'}</option>
-            {visibleConnectors.map(conn => <option key={conn.id} value={conn.id}>{conn.name}</option>)}
-          </select>
-        </label>
-        <label className="connector-picker-label">Project connection
-          <select
-            value={editing && editing !== 'new' ? editing.instance_id : ''}
-            onChange={event => {
-              if (leaveEdits()) {
-                setDirty(false);
-                setTemplateDirty(false);
-                setEditing(selectedInstances.find(instance => instance.instance_id === event.target.value) || null);
-              }
-            }}
-          >
-            <option value="">New connection</option>
-            {selectedInstances.map(instance => (
-              <option key={instance.instance_id} value={instance.instance_id}>
-                {instance.system_name} · {instance.status} · {instance.instance_id}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="connector-picker-count">{backendConnectors.length} connectors · {selectedInstances.length} saved</span>
-      </div>
-
-      <div className="connector-continuous-workspace" aria-busy={isSyncing}>
-        <section className="connector-detail" aria-label="Selected connector">
-          {selectedConnector ? <>
-            <header className="connector-detail-heading">
-              <div>
-                {renderConnectorAvatar(selectedConnector, 44)}
-                <div>
-                  <h2>{selectedConnector.name}</h2>
-                  <p>{selectedConnector.category.replaceAll('_', ' ')} · {selectedConnector.template ? `Version ${selectedConnector.template.version}` : 'Custom integration'}</p>
-                </div>
+      {/* Modern Master-Detail Studio Layout */}
+      <div className="connector-studio-layout" aria-busy={isSyncing}>
+        {/* LEFT SIDEBAR: Master Connector Catalog */}
+        <aside className="connector-studio-sidebar" aria-label="Connector catalog navigation">
+          <div className="connector-sidebar-header">
+            <div className="connector-sidebar-heading-row">
+              <div className="connector-sidebar-title">
+                <Layers size={16} className="connector-sidebar-icon" />
+                <span>Connectors</span>
               </div>
-              <span className={`connector-lifecycle ${blocked ? 'restricted' : ''}`}>
-                {blocked ? 'Restricted by policy' : selectedConnector.template?.status || selectedConnector.template?.availability || selectedConnector.status.replaceAll('_', ' ')}
-              </span>
-              <p>{selectedConnector.description}</p>
-            </header>
-            {blocked && (
-              <div className="connector-policy">
-                <ShieldAlert size={18} aria-hidden="true" />
-                <p>This connector is unavailable for execution under the current policy. You can review its template settings.</p>
-              </div>
-            )}
-            {selectedConnector.template ? <ConnectorInstanceEditor
-              key={`${selectedConnector.id}:${editing && editing !== 'new' ? editing.instance_id : 'new'}:${refreshRevision}`}
-              projectId={principal.project_id} principal={principal} template={selectedConnector.template}
-              instance={editing && editing !== 'new' ? editing : undefined} availableEnvironments={environments}
-              readOnly={!canManage || blocked} templateDirty={templateDirty} onDirtyChange={setDirty}
-              onSave={async saved => { setEditing(saved); await loadBackendData(); }}
-              templateDefaults={<><ConnectorsForm key={`${selectedConnector.id}:${selectedConnectorRevision}:${refreshRevision}`} view="defaults"
-                parameterFields={selectedConnector.template.parameter_fields || []} sharedParameters={currentSharedParams}
-                readOnly={!canEdit} hideHeader connectorName={selectedConnector.name}
-                onDirtyChange={setTemplateDirty} onSave={handleFormSave} />
-                {canEdit && <ConnectorFieldGovernance template={selectedConnector.template} disabled={dirty || templateDirty} onSaved={loadBackendData} />}
-              </>}
-            /> : (
-              <div className="connector-empty-large">
-                <h3>Custom integration</h3>
-                <p>{selectedConnector.description}</p>
-                <button className="btn btn-secondary" disabled={!canEdit} onClick={() => setIsCreatingCustom(true)}>
-                  Manage custom integrations
+              <span className="connector-sidebar-badge">{backendConnectors.length} total</span>
+            </div>
+
+            {/* Compact Search Bar */}
+            <div className="connector-sidebar-search-wrap">
+              <Search size={14} className="connector-sidebar-search-icon" aria-hidden="true" />
+              <input
+                type="text"
+                className="connector-sidebar-search-input"
+                placeholder="Filter connectors…"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                aria-label="Search connectors"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="connector-sidebar-search-clear"
+                  onClick={() => setSearch('')}
+                  aria-label="Clear search"
+                >
+                  ×
                 </button>
+              )}
+            </div>
+
+            {/* Status Filter Tabs / Chips inside sidebar */}
+            <div className="connector-sidebar-filter-tabs" role="group" aria-label="Filter connectors by status">
+              <button
+                type="button"
+                className={`sidebar-filter-tab ${statusFilter === 'all' ? 'is-active' : ''}`}
+                onClick={() => setStatusFilter('all')}
+              >
+                All <span className="tab-count">{backendConnectors.length}</span>
+              </button>
+              <button
+                type="button"
+                className={`sidebar-filter-tab ${statusFilter === 'enabled' ? 'is-active' : ''}`}
+                onClick={() => setStatusFilter('enabled')}
+              >
+                Enabled <span className="tab-count">{enabledCount}</span>
+              </button>
+              <button
+                type="button"
+                className={`sidebar-filter-tab ${statusFilter === 'restricted' ? 'is-active' : ''}`}
+                onClick={() => setStatusFilter('restricted')}
+              >
+                Restricted <span className="tab-count">{restrictedCount}</span>
+              </button>
+              <button
+                type="button"
+                className={`sidebar-filter-tab ${statusFilter === 'saved' ? 'is-active' : ''}`}
+                onClick={() => setStatusFilter('saved')}
+              >
+                Saved <span className="tab-count">{withSavedCount}</span>
+              </button>
+              {customCount > 0 && (
+                <button
+                  type="button"
+                  className={`sidebar-filter-tab ${statusFilter === 'custom' ? 'is-active' : ''}`}
+                  onClick={() => setStatusFilter('custom')}
+                >
+                  MCP <span className="tab-count">{customCount}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Scrollable Connector Cards List */}
+          <div className="connector-sidebar-items" role="listbox" aria-label="Available connectors">
+            {visibleConnectors.length === 0 ? (
+              <div className="connector-sidebar-empty-state">
+                <p>No connectors match the filter criteria.</p>
               </div>
+            ) : (
+              visibleConnectors.map(conn => {
+                const isSelected = conn.id === selectedConnector?.id;
+                const isRestricted = conn.template?.is_enabled_by_policy === false;
+                const savedInstancesForConn = projectConnectors.filter(
+                  c => c.system_name === conn.system_name || c.template_id === conn.template?.template_id
+                );
+
+                return (
+                  <button
+                    key={conn.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={`connector-sidebar-item ${isSelected ? 'is-selected' : ''} ${isRestricted ? 'is-restricted' : ''}`}
+                    onClick={() => {
+                      if (isSelected) return;
+                      if (leaveEdits()) {
+                        setDirty(false);
+                        setTemplateDirty(false);
+                        setEditing(null);
+                        setSelectedConnectorId(conn.id);
+                      }
+                    }}
+                  >
+                    <div className="sidebar-item-avatar">
+                      {renderConnectorAvatar(conn, 34)}
+                    </div>
+                    <div className="sidebar-item-meta">
+                      <div className="sidebar-item-top">
+                        <span className="sidebar-item-name">{conn.name}</span>
+                        <span
+                          className={`sidebar-item-status-dot ${isRestricted ? 'dot-restricted' : conn.status === 'connected' ? 'dot-ready' : 'dot-available'}`}
+                          title={isRestricted ? 'Restricted by policy' : conn.status}
+                        />
+                      </div>
+                      <div className="sidebar-item-bottom">
+                        <span className="sidebar-item-cat">{conn.category.replaceAll('_', ' ')}</span>
+                        {savedInstancesForConn.length > 0 && (
+                          <span className="sidebar-item-saved-badge">
+                            {savedInstancesForConn.length} saved
+                          </span>
+                        )}
+                        {isRestricted && (
+                          <span className="sidebar-item-policy-tag">Restricted</span>
+                        )}
+                      </div>
+                    </div>
+                    {isSelected && <div className="sidebar-item-active-bar" />}
+                  </button>
+                );
+              })
             )}
+          </div>
+        </aside>
+
+        {/* RIGHT MAIN AREA: Selected Connector Detail & Form Workspace */}
+        <main className="connector-studio-main" aria-label="Connector detail workspace">
+          {selectedConnector ? (
+            <div className="connector-studio-detail">
+              {/* Selected Connector Hero Header */}
+              <header className="connector-detail-heading connector-studio-hero">
+                <div className="connector-hero-header-row">
+                  <div className="connector-hero-left">
+                    {renderConnectorAvatar(selectedConnector, 46)}
+                    <div className="connector-hero-info">
+                      <div className="connector-hero-title-row">
+                        <h2>{selectedConnector.name}</h2>
+                        <span className={`connector-lifecycle ${blocked ? 'restricted' : ''}`}>
+                          {blocked ? 'Restricted by policy' : selectedConnector.template?.status || selectedConnector.template?.availability || selectedConnector.status.replaceAll('_', ' ')}
+                        </span>
+                      </div>
+                      <div className="connector-hero-meta-pills">
+                        <span className="hero-meta-pill">Category: <strong>{selectedConnector.category.replaceAll('_', ' ')}</strong></span>
+                        <span className="hero-meta-pill">Provider: <strong>{selectedConnector.system_name}</strong></span>
+                        <span className="hero-meta-pill">{selectedConnector.template ? `Template v${selectedConnector.template.version}` : 'Custom Integration'}</span>
+                        <span className="hero-meta-pill">Binding: <strong>env:// credentials</strong></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Project Connection Instance Selector (Clean top-right bar) */}
+                  <div className="connector-instance-selector-bar">
+                    <label htmlFor="project-connection-select" className="instance-selector-label">
+                      Project connection:
+                    </label>
+                    <div className="instance-selector-dropdown-wrap">
+                      <select
+                        id="project-connection-select"
+                        value={editing && editing !== 'new' ? editing.instance_id : ''}
+                        onChange={event => {
+                          if (leaveEdits()) {
+                            setDirty(false);
+                            setTemplateDirty(false);
+                            setEditing(selectedInstances.find(instance => instance.instance_id === event.target.value) || null);
+                          }
+                        }}
+                        className="instance-selector-select"
+                      >
+                        <option value="">+ New connection draft</option>
+                        {selectedInstances.map(instance => (
+                          <option key={instance.instance_id} value={instance.instance_id}>
+                            {instance.system_name} · {instance.status} ({instance.instance_id.slice(0, 10)}…)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+                <p className="connector-hero-description">{selectedConnector.description}</p>
+              </header>
+
+              {blocked && (
+                <div className="connector-policy">
+                  <ShieldAlert size={18} aria-hidden="true" />
+                  <p>This connector is unavailable for execution under the current policy. You can review its template settings.</p>
+                </div>
+              )}
+
+              {/* The Continuous Form Grid */}
+              <div className="connector-continuous-workspace">
+                {selectedConnector.template ? (
+                  <ConnectorInstanceEditor
+                    key={`${selectedConnector.id}:${editing && editing !== 'new' ? editing.instance_id : 'new'}:${refreshRevision}`}
+                    projectId={principal.project_id}
+                    principal={principal}
+                    template={selectedConnector.template}
+                    instance={editing && editing !== 'new' ? editing : undefined}
+                    availableEnvironments={environments}
+                    readOnly={!canManage || blocked}
+                    templateDirty={templateDirty}
+                    onDirtyChange={setDirty}
+                    onSave={async saved => { setEditing(saved); await loadBackendData(); }}
+                    onGovernanceSaved={loadBackendData}
+                    templateDefaults={
+                      <ConnectorsForm
+                        key={`${selectedConnector.id}:${selectedConnectorRevision}:${refreshRevision}`}
+                        view="defaults"
+                        parameterFields={selectedConnector.template.parameter_fields || []}
+                        sharedParameters={currentSharedParams}
+                        fieldGovernance={selectedConnector.template.field_governance || []}
+                        governanceRevision={selectedConnector.template.governance_revision || 0}
+                        templateSystemName={selectedConnector.template.system_name}
+                        isPlatformAdmin={isPlatformAdmin}
+                        onGovernanceSaved={loadBackendData}
+                        readOnly={!canEdit}
+                        hideHeader
+                        connectorName={selectedConnector.name}
+                        onDirtyChange={setTemplateDirty}
+                        onSave={handleFormSave}
+                      />
+                    }
+                  />
+                ) : (
+                  <div className="connector-empty-large">
+                    <h3>Custom integration</h3>
+                    <p>{selectedConnector.description}</p>
+                    <button className="btn btn-secondary" disabled={!canEdit} onClick={() => setIsCreatingCustom(true)}>
+                      Manage custom integrations
+                    </button>
+                  </div>
+                )}
+              </div>
 
             {/* ADK Tool Actions & Capability Assignments Registry Table */}
             <div className="connector-actions-registry" aria-label="Tool actions and capabilities">
               <div className="connector-actions-header">
-                <div>
-                  <h3><Terminal size={16} aria-hidden="true" /> ADK Tool Actions & Capability Assignments</h3>
-                  <p>
-                    Authorized tool action signatures mapped to Google ADK LlmAgent workflows, stage lifecycles, and RBAC permission boundaries.
-                  </p>
+                <div className="connector-actions-title-wrap">
+                  <div className="connector-actions-icon-badge">
+                    <Terminal size={18} aria-hidden="true" />
+                  </div>
+                  <div>
+                    <h3>ADK Tool Actions & Capability Assignments</h3>
+                    <p>
+                      Authorized tool action signatures mapped to Google ADK LlmAgent workflows, stage lifecycles, and RBAC permission boundaries.
+                    </p>
+                  </div>
                 </div>
                 <div className="connector-actions-toggle" role="group" aria-label="Toggle action scope">
                   <button
@@ -816,7 +976,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
                         <tr key={row.actionId}>
                           <td>
                             <div style={{ fontWeight: 700, color: 'var(--tx)' }}>{row.actionName}</div>
-                            <code style={{ fontSize: '11px', color: 'var(--muted)', fontFamily: 'monospace' }}>{row.actionId}</code>
+                            <span className="action-signature-tag">{row.actionId}</span>
                           </td>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -826,9 +986,13 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
                             </div>
                           </td>
                           <td>
-                            {row.stages.map(st => (
-                              <span key={st} className={`stage-badge ${st}`}>{st}</span>
-                            ))}
+                            {row.stages.length > 0 ? (
+                              row.stages.map(st => (
+                                <span key={st} className={`stage-badge ${st}`}>{st}</span>
+                              ))
+                            ) : (
+                              <span style={{ fontSize: '11px', color: 'var(--muted)', fontStyle: 'italic' }}>Unassigned</span>
+                            )}
                           </td>
                           <td>
                             {row.capabilities.length > 0 ? (
@@ -842,7 +1006,11 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
                             )}
                           </td>
                           <td>
-                            <span style={{ fontWeight: 600, fontSize: '11px', color: 'var(--tx)' }}>{row.minRole}+</span>
+                            {row.minRole ? (
+                              <span className="role-boundary-chip">{row.minRole}+</span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: 'var(--muted)' }}>—</span>
+                            )}
                           </td>
                           <td>
                             <span style={{ fontSize: '11px', color: 'var(--muted)' }}>{row.safetyProfile}</span>
@@ -868,14 +1036,15 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
                 )}
               </div>
             </div>
-          </> : (
-            <div className="connector-empty-large">
-              <Layers size={28} />
-              <h2>{isSyncing ? 'Loading your library' : 'Select a connector'}</h2>
-              <p>{loadError ? 'Refresh to try loading your connector library again.' : 'Templates and saved connections will appear here.'}</p>
+          </div>
+          ) : (
+            <div className="connector-studio-empty">
+              <Layers size={36} />
+              <h2>{isSyncing ? 'Loading connector library…' : 'No connector selected'}</h2>
+              <p>{loadError ? 'Refresh to retry loading connectors.' : 'Choose a connector from the catalog on the left to configure settings.'}</p>
             </div>
           )}
-        </section>
+        </main>
       </div>
       {isCreatingCustom && (
         <IntegrationForm

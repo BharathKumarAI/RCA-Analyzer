@@ -31,6 +31,14 @@ globalThis.fetch = async (path, init = {}) => {
 function response(data) { return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }); }
 function responseError(status, detail) { return new Response(JSON.stringify({ detail }), { status, headers: { 'content-type': 'application/json' } }); }
 
+for (const invalid of ['token\nsecond-line', 'token\rheader', 'token\u0000', 'token\u200b', '“token”', 'token extra']) {
+  assert.throws(() => api.setSessionToken(invalid), error => error instanceof api.ApiError && error.status === 400 && /one line/.test(error.message));
+  assert.equal(api.getSessionToken(), null);
+}
+api.setSessionToken(' Bearer token-123 ');
+assert.equal(api.getSessionToken(), 'token-123');
+assert.doesNotThrow(() => new Headers({ Authorization: `Bearer ${api.getSessionToken()}` }));
+api.setSessionToken(null);
 api.setSessionToken('  token-123  ');
 assert.equal(storage.has('rca_auth_token'), false);
 const principal = await api.fetchPrincipal();

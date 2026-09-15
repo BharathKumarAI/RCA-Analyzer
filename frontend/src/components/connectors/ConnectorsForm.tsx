@@ -7,12 +7,14 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Check, Info, KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
+import { Check, Info, KeyRound, LockKeyhole, ShieldCheck, Shield, Lock, RefreshCw } from "lucide-react";
 import type {
   ConnectorAuthProfileItem,
   ConnectorTemplateField,
   ParameterDefinitionRow,
+  GovernanceTier,
 } from "../../types/api";
+import { saveConnectorFieldGovernance } from "../../services/api";
 import "./ConnectorsForm.css";
 
 /** Kept for callers that still import the old label type. */
@@ -86,6 +88,11 @@ export type ConnectorsFormProps = {
     description: string;
     endpoints: BackendReferenceEndpoint[];
   };
+  fieldGovernance?: Array<{ variable_name: string; label: string; tier: GovernanceTier; editable_allowed: boolean; description?: string }>;
+  governanceRevision?: number;
+  templateSystemName?: string;
+  isPlatformAdmin?: boolean;
+  onGovernanceSaved?: () => Promise<void>;
 };
 
 function Section({
@@ -163,11 +170,58 @@ export default function ConnectorsForm({
   connectorType = "Connector",
   connectorBadge,
   brandSubtitle = "Connectors",
+  fieldGovernance = [],
+  governanceRevision = 0,
+  templateSystemName,
+  isPlatformAdmin = false,
+  onGovernanceSaved,
 }: ConnectorsFormProps) {
   const form = useRef<HTMLFormElement>(null);
   const [busy, setBusy] = useState<"save" | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  // Inline governance state
+  const [govOverrides, setGovOverrides] = useState<Record<string, GovernanceTier>>({});
+  const [currentGovRev, setCurrentGovRev] = useState(governanceRevision);
+  const [savingGovField, setSavingGovField] = useState<string | null>(null);
+  const [govFeedback, setGovFeedback] = useState<{ field: string; text: string; type: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    setCurrentGovRev(governanceRevision);
+  }, [governanceRevision]);
+
+  const handleGovChange = async (fieldName: string, newTier: GovernanceTier) => {
+    if (!templateSystemName) return;
+    setSavingGovField(fieldName);
+    setGovFeedback(null);
+    try {
+      const res = await saveConnectorFieldGovernance(templateSystemName, currentGovRev, { [fieldName]: newTier });
+      setCurrentGovRev(res.revision);
+      setGovOverrides(prev => ({ ...prev, [fieldName]: newTier }));
+      const label = newTier === 'platform_only' ? 'Platform Only' : newTier === 'project_locked' ? 'Project Non-Editable' : 'Project Editable';
+      setGovFeedback({ field: fieldName, text: `Set to ${label}`, type: 'success' });
+      setTimeout(() => setGovFeedback(null), 3000);
+      if (onGovernanceSaved) {
+        await onGovernanceSaved();
+      }
+    } catch (err) {
+      setGovFeedback({ field: fieldName, text: err instanceof Error ? err.message : 'Failed to update access', type: 'error' });
+      setTimeout(() => setGovFeedback(null), 4000);
+    } finally {
+      setSavingGovField(null);
+    }
+  };
+
+  const getTierForField = (fieldName: string): GovernanceTier => {
+    if (govOverrides[fieldName]) return govOverrides[fieldName];
+    const gov = fieldGovernance.find(g => g.variable_name === fieldName);
+    if (gov) return gov.tier;
+    const pf = parameterFields.find(f => f.variable_name === fieldName);
+    if (pf?.visible_in_project === false) return 'platform_only';
+    if (pf?.allow_project_override === false || pf?.ownership === 'platform_locked') return 'project_locked';
+    return 'project_editable';
+  };
 
   const rowsByName = useMemo(
     () => new Map(sharedParameters.map((row) => [row.variable_name, row])),
@@ -216,6 +270,66 @@ export default function ConnectorsForm({
     setValues((current) => ({ ...current, [name]: value }));
   }
 
+  function renderGovernanceControl(name: string) {
+    const tier = getTierForField(name);
+    const isSaving = savingGovField === name;
+    const feedback = govFeedback?.field === name ? govFeedback : null;
+
+    if (isPlatformAdmin && !readOnly) {
+      return (
+        <div className="prism-field-gov-control" title="Field Access & Control: Click to change project visibility and editing">
+          <div className={`prism-gov-select-pill ${tier} ${isSaving ? 'is-saving' : ''}`}>
+            <span className="prism-gov-pill-icon">
+              {isSaving ? (
+                <RefreshCw size={10} className="spin" />
+              ) : tier === 'platform_only' ? (
+                <Shield size={10} />
+              ) : tier === 'project_locked' ? (
+                <Lock size={10} />
+              ) : (
+                <Check size={10} />
+              )}
+            </span>
+            <select
+              aria-label={`${name.replace(/_/g, ' ')} access control`}
+              value={tier}
+              disabled={isSaving}
+              onChange={(e) => void handleGovChange(name, e.target.value as GovernanceTier)}
+              className="prism-gov-inline-select"
+            >
+              <option value="platform_only">Platform Only</option>
+              <option value="project_editable">Project Editable</option>
+              <option value="project_locked">Project Non-Editable</option>
+            </select>
+          </div>
+          {feedback && (
+            <span className={`prism-gov-inline-feedback ${feedback.type}`} role="status">
+              {feedback.text}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <span
+        className={`prism-gov-badge ${tier}`}
+        title={
+          tier === 'platform_only'
+            ? 'Platform Only — Invisible to standard project users'
+            : tier === 'project_locked'
+            ? 'Locked by Platform — Inherited & read-only for project users'
+            : 'Project Editable — Overridable in project setup'
+        }
+      >
+        {tier === 'platform_only' && <Shield size={10} />}
+        {tier === 'project_locked' && <Lock size={10} />}
+        {tier === 'project_editable' && <Check size={10} />}
+        {tier === 'platform_only' ? 'Platform Only' : tier === 'project_locked' ? 'Project Non-Editable' : 'Project Editable'}
+      </span>
+    );
+  }
+
   function renderField(field: ConnectorTemplateField) {
     const name = field.variable_name;
     const current = values[name] ?? "";
@@ -229,14 +343,17 @@ export default function ConnectorsForm({
     return (
       <div className="cf-contract-field" key={name}>
         <div className="cf-contract-field-header">
-          <label htmlFor={`contract-${name}`}>
-            {label}
-            {field.required && <span aria-label="required"> *</span>}
-          </label>
-          <span className="cf-contract-source">
-            {inherited ? "Inherited" : row?.source === "project" ? "Project override" : "Platform default"}
-            {row?.revision ? ` · rev ${row.revision}` : ""}
-          </span>
+          <div className="cf-contract-field-title-wrap">
+            <label htmlFor={`contract-${name}`}>
+              {label}
+              {field.required && <span aria-label="required"> *</span>}
+            </label>
+            <span className="cf-contract-source">
+              {inherited ? "Inherited" : row?.source === "project" ? "Project override" : "Platform default"}
+              {row?.revision ? ` · rev ${row.revision}` : ""}
+            </span>
+          </div>
+          {renderGovernanceControl(name)}
         </div>
 
         {field.value_type === "boolean" ? (

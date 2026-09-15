@@ -1013,86 +1013,94 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
 
   return (
     <div className="view-container investigations-page">
-      {/* Hero Banner with Defined 4-Card Operational Metrics */}
+      {/* Standard Hero Banner */}
       <section className="hero-banner">
         <div className="hero-main">
-          <div className="hero-kicker-strip">
-            <span className="hero-kicker">AUTONOMOUS SRE PLATFORM</span>
-            <span className="hero-kicker-dot">•</span>
-            <span className="hero-kicker-sub">INVESTIGATIONS & EXECUTION TRACES</span>
-          </div>
           <h1 className="hero-title">
+            <Activity size={22} color="var(--acc)" />
             Investigations & <span>Execution Traces</span>
           </h1>
           <p className="hero-lede">
-            Inspect autonomous multi-agent incident findings, cryptographic evidence bundles, and
-            execution telemetry.
+            Inspect autonomous multi-agent incident findings, cryptographic evidence bundles, and execution telemetry.
           </p>
 
-          <div className="hero-kpi-grid">
-            <div className="kpi-card">
-              <div className="kpi-icon-wrapper kpi-primary">
-                <Activity size={15} />
-              </div>
-              <div className="kpi-meta">
-                <span className="kpi-value">{total}</span>
-                <span className="kpi-label">Loaded Batch (max 50)</span>
-              </div>
-            </div>
-
-            <div className="kpi-card">
-              <div className="kpi-icon-wrapper kpi-running">
-                <span className="kpi-status-dot" />
-              </div>
-              <div className="kpi-meta">
-                <span className="kpi-value">{running}</span>
-                <span className="kpi-label">Active / Running</span>
-              </div>
-            </div>
-
-            <div className="kpi-card">
-              <div className="kpi-icon-wrapper kpi-success">
-                <CheckCircle2 size={15} />
-              </div>
-              <div className="kpi-meta">
-                <span className="kpi-value">
-                  {completed}{' '}
-                  <small className="kpi-sub-val">({completionRate}%)</small>
-                </span>
-                <span className="kpi-label">Batch Completed</span>
-              </div>
-            </div>
-
-            <div className="kpi-card">
-              <div className="kpi-icon-wrapper kpi-evidence">
-                <ShieldCheck size={15} />
-              </div>
-              <div className="kpi-meta">
-                <span className="kpi-value">{totalEvidence}</span>
-                <span className="kpi-label">Evidence Synthesized</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Explicit Diagnostic Breakdown Strip */}
-          <div className="batch-status-breakdown">
-            <span>Batch Diagnostic Breakdown:</span>
-            <b>{completed}</b> completed · <b>{running}</b> active · <b>{partial}</b> partial ·{' '}
-            <b>{failed}</b> failed/blocked · <b>{cancelled}</b> cancelled · <b>{simulated}</b> simulated
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip">
+              <Activity size={12} /> <b>{total}</b> Loaded Batch
+            </span>
+            <span className={`hero-stat-chip ${running > 0 ? 'highlight' : ''}`}>
+              <span className={`dot ${running > 0 ? 'pulse' : ''}`} /> <b>{running}</b> Active
+            </span>
+            <span className="hero-stat-chip">
+              <CheckCircle2 size={12} color="var(--acc3)" /> <b>{completed}</b> Completed ({completionRate}%)
+            </span>
+            <span className="hero-stat-chip">
+              <ShieldCheck size={12} /> <b>{totalEvidence}</b> Evidence Items
+            </span>
           </div>
         </div>
 
         <div className="hero-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={onNewInvestigation}
-          >
-            <Plus size={14} />
-            <span>New Investigation</span>
-          </button>
+          <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onNewInvestigation}
+            >
+              <Plus size={13} />
+              <span>New Investigation</span>
+            </button>
+          </div>
         </div>
       </section>
+
+      {/* Standard Metric Grid */}
+      <section className="metric-grid">
+        <div className="metric-card">
+          <div className="metric-label-row">
+            <span>Loaded Batch (max 50)</span>
+            <Activity size={14} color="var(--acc)" />
+          </div>
+          <div className="metric-value">{total}</div>
+          <div className="metric-meta">Batch window (max 50 runs)</div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-label-row">
+            <span>Active / Running</span>
+            <span className={`dot ${running > 0 ? 'pulse' : ''}`} />
+          </div>
+          <div className="metric-value">{running}</div>
+          <div className="metric-meta">Autonomous agents executing</div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-label-row">
+            <span>Batch Completed</span>
+            <CheckCircle2 size={14} color="var(--acc3)" />
+          </div>
+          <div className="metric-value">
+            {completed} <small style={{ fontSize: '13px', fontWeight: 500, color: 'var(--muted)' }}>({completionRate}%)</small>
+          </div>
+          <div className="metric-meta">{failed} failed · {partial} partial</div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-label-row">
+            <span>Evidence Synthesized</span>
+            <ShieldCheck size={14} color="var(--acc)" />
+          </div>
+          <div className="metric-value">{totalEvidence}</div>
+          <div className="metric-meta">Cryptographic bundles persisted</div>
+        </div>
+      </section>
+
+      {/* Explicit Diagnostic Breakdown Strip */}
+      <div className="batch-status-breakdown" style={{ fontSize: '12px', color: 'var(--muted)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', padding: '0 4px' }}>
+        <span>Batch Diagnostic Breakdown:</span>
+        <b>{completed}</b> completed · <b>{running}</b> active · <b>{partial}</b> partial ·{' '}
+        <b>{failed}</b> failed/blocked · <b>{cancelled}</b> cancelled · <b>{simulated}</b> simulated
+      </div>
 
       {error && (
         <div className="investigation-error page-error" role="alert">

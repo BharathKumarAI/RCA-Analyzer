@@ -847,82 +847,80 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
 
   return (
     <div className="view-container iam-page">
-      {/* Compact IAM Control Header */}
-      <div className="iam-control-header">
-        <div className="iam-header-main">
-          <div className="iam-title-row">
-            <ShieldCheck size={18} style={{ color: 'var(--acc)' }} />
-            <h1 className="iam-page-title">Users & Access Control</h1>
-            <span className="iam-scope-badge">
-              <Lock size={11} /> RS256 JWT Verified
-            </span>
-          </div>
-          <div className="iam-header-metrics">
-            <span className="iam-metric-pill">
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
+            <ShieldCheck size={22} style={{ color: 'var(--acc)' }} />
+            Users & <span>Access Control</span>
+          </h1>
+          <p className="hero-lede">
+            Manage directory principals, cryptographic role assignments, and dual-custody authorization boundaries.
+          </p>
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip highlight">
               <UsersIcon size={12} style={{ color: 'var(--acc)' }} />
-              <strong>{loading ? '…' : users.length}</strong>
-              <span className="iam-metric-label">Principals</span>
+              Principals: <b>{loading ? '…' : users.length}</b>
             </span>
-            <span className="iam-metric-pill">
+            <span className="hero-stat-chip">
               <KeyRound size={12} style={{ color: '#10b981' }} />
-              <strong>{loading ? '…' : roles.length}</strong>
-              <span className="iam-metric-label">Roles</span>
+              Roles: <b>{loading ? '…' : roles.length}</b>
             </span>
-            <span className="iam-metric-pill">
+            <span className="hero-stat-chip">
               <Layers size={12} style={{ color: '#f59e0b' }} />
-              <strong>{loading ? '…' : capabilities.length}</strong>
-              <span className="iam-metric-label">Capabilities</span>
+              Capabilities: <b>{loading ? '…' : capabilities.length}</b>
+            </span>
+            <span className="hero-stat-chip">
+              <Lock size={11} /> RS256 JWT Verified
             </span>
             {principal && (
               <span
-                className="iam-metric-pill user-session"
+                className="hero-stat-chip interactive"
                 title={`Authenticated as ${principal.subject} (${(principal.roles || []).join(', ')})`}
               >
-                <span className="iam-metric-label">Session:</span>
-                <strong>{principal.subject}</strong>
-                <span className="iam-session-role">
-                  {principal.roles && principal.roles[0] ? principal.roles[0].replace(/_/g, ' ') : 'USER'}
-                </span>
+                Session: <b>{principal.subject}</b> ({principal.roles && principal.roles[0] ? principal.roles[0].replace(/_/g, ' ') : 'USER'})
               </span>
             )}
           </div>
         </div>
-        <div className="iam-header-actions">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => void loadData(true)}
-            disabled={loading || refreshing}
-            title="Refresh IAM state"
-          >
-            <RefreshCw size={13} className={refreshing ? 'spin' : ''} />
-            {refreshing ? 'Refreshing…' : 'Refresh'}
-          </button>
-          {activeTab === 'roles' ? (
-            canManageUsers && (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleOpenCreateRole}
-                title="Define custom role"
-              >
-                <Plus size={13} /> Add Role
-              </button>
-            )
-          ) : (
-            canManageUsers && (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleOpenCreateUser}
-                title="Register new user membership"
-              >
-                <Plus size={13} /> Add User
-              </button>
-            )
-          )}
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void loadData(true)}
+              disabled={loading || refreshing}
+              title="Refresh IAM state"
+            >
+              <RefreshCw size={13} className={refreshing ? 'spin' : ''} />
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            {activeTab === 'roles' ? (
+              canManageUsers && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleOpenCreateRole}
+                  title="Define custom role"
+                >
+                  <Plus size={13} /> Add Role
+                </button>
+              )
+            ) : (
+              canManageUsers && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleOpenCreateUser}
+                  title="Register new user membership"
+                >
+                  <Plus size={13} /> Add User
+                </button>
+              )
+            )}
+          </div>
         </div>
-      </div>
+      </section>
 
       {/* Notifications */}
       {error && (

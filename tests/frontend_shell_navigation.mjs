@@ -6,8 +6,8 @@ const palette = await readFile(new URL('../frontend/src/components/CommandPalett
 
 // Keep the shell contract tied to persisted navigation settings: order is the
 // server array order, while hidden entries must never render or become commands.
-assert.match(sidebar, /settings\.navigation\.filter\(item => item\.visible\)/);
-assert.match(sidebar, /settings\.navigation\.filter\(item => item\.visible && item\.group === group\)/);
+assert.match(sidebar, /settings\.navigation\.filter\(item => item\.visible && item\.page !== 'project-setup'\)/);
+assert.match(sidebar, /navigation\.filter\(item => item\.group === group\)/);
 assert.match(sidebar, /<span>\{item\.label\}<\/span>/);
 assert.match(palette, /if \(!item\.visible \|\| !isActivePage\(item\.page\)\) return \[\]/);
 assert.match(palette, /title: item\.label/);

@@ -33,7 +33,8 @@ export const PAGE_ICONS: Record<ActivePage, LucideIcon> = {
 export const isActivePage = (page: string): page is ActivePage => Object.hasOwn(PAGE_ICONS, page);
 
 export const Sidebar: React.FC<SidebarProps> = ({ settings, activePage, onSelectPage, collapsed, onToggleCollapse }) => {
-  const groups = [...new Set(settings.navigation.filter(item => item.visible).map(item => item.group))];
+  const navigation = settings.navigation.filter(item => item.visible && item.page !== 'project-setup');
+  const groups = [...new Set(navigation.map(item => item.group))];
   return (
     <nav className={`sidebar ${collapsed ? 'collapsed' : ''}`} aria-label="Workspace navigation">
       <div className="sidebar-top">
@@ -56,7 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ settings, activePage, onSelect
             </div>
           )}
           <div className="sidebar-group-items">
-            {settings.navigation.filter(item => item.visible && item.group === group).map(item => {
+            {navigation.filter(item => item.group === group).map(item => {
               if (!isActivePage(item.page)) return null;
               const page = item.page;
               const Icon = page === 'roles' ? Users : PAGE_ICONS[page];

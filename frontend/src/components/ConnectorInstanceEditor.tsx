@@ -47,6 +47,7 @@ import {
   deleteEnvironmentConnection,
   testEnvironmentConnection,
   enableEnvironmentConnection,
+  saveConnectorFieldGovernance,
 } from '../services/api';
 import '../styles/connector-editor.css';
 import { ConnectorProjectPolicy } from './connectors/ConnectorProjectPolicy';
@@ -64,9 +65,11 @@ interface ConnectorInstanceEditorProps {
   onSave?: (saved: ProjectConnectorInstanceItem) => void;
   onCancel?: () => void;
   readOnly?: boolean;
+  projectContext?: boolean;
   templateDefaults?: React.ReactNode;
   templateDirty?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
+  onGovernanceSaved?: () => Promise<void>;
 }
 
 interface CustomFieldRow {
@@ -138,9 +141,11 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
   onSave,
   onCancel,
   readOnly = false,
+  projectContext = false,
   templateDefaults,
   templateDirty = false,
   onDirtyChange,
+  onGovernanceSaved,
 }) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const mcpMappingInput = useRef<HTMLTextAreaElement>(null);
@@ -154,8 +159,130 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
   const isPlatformAdmin = Boolean(principal?.roles?.includes('PLATFORM_ADMIN'));
 
   // --------------------------------------------------------------------------
-  // Mandatory Project-Owned Identity (Always Project-Owned & Editable)
+  // Field-level Governance Access & Control State (Zero Mockup - Live Backend)
   // --------------------------------------------------------------------------
+  const [govOverrides, setGovOverrides] = useState<Record<string, GovernanceTier>>({});
+  const [govRevision, setGovRevision] = useState<number>(template?.governance_revision || 0);
+  const [savingGovField, setSavingGovField] = useState<string | null>(null);
+  const [govFeedback, setGovFeedback] = useState<{ field: string; type: 'success' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    setGovRevision(template?.governance_revision || 0);
+  }, [template?.governance_revision]);
+
+  const handleGovernanceChange = async (fieldName: string, newTier: GovernanceTier) => {
+    if (!template?.system_name) return;
+    const aliases: Record<string, string> = {
+      project_key: 'external_resource',
+      index: 'external_resource',
+      space_key: 'external_resource',
+      topics: 'external_resource',
+      path: 'external_resource',
+      namespace: 'external_resource',
+      custom_field_mappings: 'custom_field_mapping',
+      search_window_seconds: 'max_window_seconds',
+    };
+    const targetVar = aliases[fieldName] || fieldName;
+    setSavingGovField(fieldName);
+    setGovFeedback(null);
+    try {
+      const res = await saveConnectorFieldGovernance(template.system_name, govRevision, { [targetVar]: newTier });
+      setGovRevision(res.revision);
+      setGovOverrides(prev => ({ ...prev, [fieldName]: newTier, [targetVar]: newTier }));
+      const tierLabel = newTier === 'platform_only' ? 'Platform Only' : newTier === 'project_locked' ? 'Project Non-Editable' : 'Project Editable';
+      setGovFeedback({ field: fieldName, type: 'success', text: `Access set to ${tierLabel}` });
+      setTimeout(() => setGovFeedback(null), 3000);
+      if (onGovernanceSaved) {
+        await onGovernanceSaved();
+      }
+    } catch (err) {
+      setGovFeedback({ field: fieldName, type: 'error', text: err instanceof Error ? err.message : 'Unable to update field access' });
+      setTimeout(() => setGovFeedback(null), 4000);
+    } finally {
+      setSavingGovField(null);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Governance Helper
+  // --------------------------------------------------------------------------
+  const getFieldTier = (fieldName: string): GovernanceTier => {
+    const aliases: Record<string, string> = { project_key: 'external_resource', index: 'external_resource', space_key: 'external_resource', topics: 'external_resource', path: 'external_resource', namespace: 'external_resource', custom_field_mappings: 'custom_field_mapping', search_window_seconds: 'max_window_seconds' };
+    const name = aliases[fieldName] || fieldName;
+    if (govOverrides[fieldName]) return govOverrides[fieldName];
+    if (govOverrides[name]) return govOverrides[name];
+    const policy = template?.field_governance?.find(field => field.variable_name === name);
+    if (policy) return policy.tier;
+    const pf = template?.parameter_fields?.find(f => f.variable_name === fieldName);
+    return getFieldGovernanceTier(pf);
+  };
+
+  const isFieldLocked = (fieldName: string): boolean => {
+    if (isPlatformAdmin) return false;
+    if (['endpoint', 'credentials', 'auth_type', 'mcp_configuration', 'access_mode'].includes(fieldName)) return true;
+    const tier = getFieldTier(fieldName);
+    return tier === 'project_locked' || tier === 'platform_only';
+  };
+
+  const renderGovernanceBadge = (fieldName: string) => {
+    const tier = getFieldTier(fieldName);
+    const isSaving = savingGovField === fieldName;
+    const feedback = govFeedback?.field === fieldName ? govFeedback : null;
+
+    if (isPlatformAdmin && !readOnly && !projectContext) {
+      return (
+        <div className="prism-field-gov-control" title="Field Access & Control: Manage visibility and editability for project users">
+          <div className={`prism-gov-select-pill ${tier} ${isSaving ? 'is-saving' : ''}`}>
+            <span className="prism-gov-pill-icon">
+              {isSaving ? (
+                <RefreshCw size={10} className="spin" />
+              ) : tier === 'platform_only' ? (
+                <Shield size={10} />
+              ) : tier === 'project_locked' ? (
+                <Lock size={10} />
+              ) : (
+                <Check size={10} />
+              )}
+            </span>
+            <select
+              aria-label={`${fieldName.replace(/_/g, ' ')} access control`}
+              value={tier}
+              disabled={isSaving}
+              onChange={(e) => void handleGovernanceChange(fieldName, e.target.value as GovernanceTier)}
+              className="prism-gov-inline-select"
+            >
+              <option value="platform_only">Platform Only</option>
+              <option value="project_editable">Project Editable</option>
+              <option value="project_locked">Project Non-Editable</option>
+            </select>
+          </div>
+          {feedback && (
+            <span className={`prism-gov-inline-feedback ${feedback.type}`} role="status">
+              {feedback.text}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <span
+        className={`prism-gov-badge ${tier}`}
+        title={
+          tier === 'platform_only'
+            ? 'Platform Only — Invisible to standard project users'
+            : tier === 'project_locked'
+            ? 'Locked by Platform — Inherited & read-only for project users'
+            : 'Project Editable — Overridable in project setup'
+        }
+      >
+        {tier === 'platform_only' && <Shield size={10} />}
+        {tier === 'project_locked' && <Lock size={10} />}
+        {tier === 'project_editable' && <Check size={10} />}
+        {tier === 'platform_only' ? 'Platform Only' : tier === 'project_locked' ? 'Project Non-Editable' : 'Project Editable'}
+      </span>
+    );
+  };
   const [systemName, setSystemName] = useState<string>(
     instance?.system_name || instance?.definition_json?.system_name || template?.system_name || template?.name || ''
   );
@@ -683,47 +810,6 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     return () => window.removeEventListener('beforeunload', warn);
   }, [isDirty]);
 
-  // --------------------------------------------------------------------------
-  // Governance Helper
-  // --------------------------------------------------------------------------
-  const getFieldTier = (fieldName: string): GovernanceTier => {
-    const aliases: Record<string, string> = { project_key: 'external_resource', index: 'external_resource', space_key: 'external_resource', topics: 'external_resource', path: 'external_resource', namespace: 'external_resource', custom_field_mappings: 'custom_field_mapping', search_window_seconds: 'max_window_seconds' };
-    const name = aliases[fieldName] || fieldName;
-    const policy = template?.field_governance?.find(field => field.variable_name === name);
-    if (policy) return policy.tier;
-    const pf = template?.parameter_fields?.find(f => f.variable_name === fieldName);
-    return getFieldGovernanceTier(pf);
-  };
-
-  const isFieldLocked = (fieldName: string): boolean => {
-    if (isPlatformAdmin) return false;
-    if (['endpoint', 'credentials', 'auth_type', 'mcp_configuration', 'access_mode'].includes(fieldName)) return true;
-    const tier = getFieldTier(fieldName);
-    return tier === 'project_locked' || tier === 'platform_only';
-  };
-
-  const renderGovernanceBadge = (fieldName: string) => {
-    const tier = getFieldTier(fieldName);
-    if (tier === 'platform_only') {
-      return (
-        <span className="prism-gov-badge platform-only" title="Platform Only — Invisible to standard project users">
-          <Shield size={10} /> Platform Only
-        </span>
-      );
-    }
-    if (tier === 'project_locked') {
-      return (
-        <span className="prism-gov-badge project-locked" title="Locked by Platform — Inherited & read-only for project users">
-          <Lock size={10} /> Project Non-Editable
-        </span>
-      );
-    }
-    return (
-      <span className="prism-gov-badge project-editable" title="Project Editable — Overridable in project setup">
-        <Check size={10} /> Project Editable
-      </span>
-    );
-  };
 
   // --------------------------------------------------------------------------
   // Handlers
@@ -2070,38 +2156,7 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
             ------------------------------------------------------------------ */}
         <div className="prism-grid-col">
           <ConnectorProjectPolicy connectorId={connectorType} readOnly={readOnly} />
-          <section className="prism-card" aria-labelledby="connector-runtime-support-title">
-            <header className="prism-card-header"><div><h2 id="connector-runtime-support-title" className="prism-card-title">Features &amp; availability</h2><p className="prism-card-desc">What this installed connector can do in an investigation.</p></div></header>
-            <div className="prism-card-body">
-              {(template?.runtime_support || []).map(feature => <div className="connector-feature-row" key={feature.name}><div><strong>{feature.name}</strong><p>{feature.detail}</p></div><span className={`connector-feature-status ${feature.status}`}>{feature.status}</span></div>)}
-
-            </div>
-          </section>
           {templateDefaults && <section className="prism-card connector-shared-defaults">{templateDefaults}</section>}
-
-          {(
-            <section className="prism-card" aria-labelledby="connector-access-title">
-              <div className="prism-card-header">
-                <div className="prism-card-title-wrap">
-                  <div className="prism-card-icon"><Shield size={16} /></div>
-                  <div>
-                    <h2 id="connector-access-title" className="prism-card-title">Permissions &amp; Access</h2>
-                    <p className="prism-card-desc">Server-enforced project scope and connector operations.</p>
-                  </div>
-                </div>
-              </div>
-              <div className="prism-card-body">
-                <dl className="prism-access-summary">
-                  <div><dt>Project scope</dt><dd>{projectId}</dd></div>
-                  <div><dt>Your roles</dt><dd>{principal?.roles?.join(', ') || 'No project role'}</dd></div>
-                  <div><dt>Data source</dt><dd>Read-only investigation evidence</dd></div>
-                  <div><dt>Generic viewer access</dt><dd>Controlled by authenticated project membership and capability permissions</dd></div>
-                  <div><dt>Allowed operations</dt><dd>{template?.supported_operations?.length ? template.supported_operations.join(', ') : 'No operations declared'}</dd></div>
-                </dl>
-                <p className="prism-field-hint">Connector permissions are enforced by the server. Write access is unavailable for read-only providers.</p>
-              </div>
-            </section>
-          )}
           {/* Card 4: Operations, Limits & Governance Policy */}
           {(
             <section className="prism-card" id="section-operations">
@@ -2187,6 +2242,54 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                       disabled
                     />
                   </div>
+
+                  {/* Retry Backoff */}
+                  <div className="prism-field-group" hidden={!isPlatformAdmin && getFieldTier('retry_backoff') === 'platform_only'}>
+                    <div className="prism-field-header">
+                      <label className="prism-field-label">Retry Backoff</label>
+                      {renderGovernanceBadge('retry_backoff')}
+                    </div>
+                    <input
+                      type="text"
+                      className="prism-input locked"
+                      value={template?.default_retry_backoff == null ? 'Not declared' : `${template.default_retry_backoff} seconds`}
+                      readOnly
+                      disabled
+                    />
+                    <span className="prism-field-hint">Wait interval applied between failed retry attempts.</span>
+                  </div>
+
+                  {/* Transport Protocol */}
+                  <div className="prism-field-group" hidden={!isPlatformAdmin && getFieldTier('protocol') === 'platform_only'}>
+                    <div className="prism-field-header">
+                      <label className="prism-field-label">Transport</label>
+                      {renderGovernanceBadge('protocol')}
+                    </div>
+                    <input
+                      type="text"
+                      className="prism-input locked"
+                      value={template?.protocol ? template.protocol.toUpperCase() : 'HTTPS'}
+                      readOnly
+                      disabled
+                    />
+                    <span className="prism-field-hint">Communication transport protocol implemented by this adapter.</span>
+                  </div>
+
+                  {/* Presentation URL */}
+                  <div className="prism-field-group full-width" hidden={!isPlatformAdmin && getFieldTier('ui_base_url') === 'platform_only'}>
+                    <div className="prism-field-header">
+                      <label className="prism-field-label">Presentation URL</label>
+                      {renderGovernanceBadge('ui_base_url')}
+                    </div>
+                    <input
+                      type="text"
+                      className="prism-input locked mono"
+                      value={template?.default_ui_base_url || 'Not declared'}
+                      readOnly
+                      disabled
+                    />
+                    <span className="prism-field-hint">Base URL used to construct deep-links into the provider's web user interface.</span>
+                  </div>
                 </div>
 
                 {/* Repository Release Policy Banner */}
@@ -2199,13 +2302,6 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                     </p>
                   </div>
                 </div>
-
-                <div className="connector-scope-facts">
-                  <div hidden={!isPlatformAdmin && getFieldTier('retry_backoff') === 'platform_only'}><span>Retry backoff</span><strong>{template?.default_retry_backoff == null ? 'Not declared' : `${template.default_retry_backoff} seconds`}</strong></div>
-                  <div hidden={!isPlatformAdmin && getFieldTier('ui_base_url') === 'platform_only'}><span>Presentation URL</span><strong>{template?.default_ui_base_url || 'Not declared'}</strong></div>
-                  <div hidden={!isPlatformAdmin && getFieldTier('protocol') === 'platform_only'}><span>Transport</span><strong>{template?.protocol || 'Not declared'}</strong></div>
-                </div>
-                <p className="prism-field-hint">Direct and MCP routes are configured and tested on each environment connection.</p>
               </div>
             </section>
           )}

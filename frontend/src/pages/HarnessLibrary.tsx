@@ -611,15 +611,6 @@ export const HarnessLibrary: React.FC<HarnessLibraryProps> = ({ principal, onNav
 
   return (
     <div className={`view-container harness-page ${activeTab === 'studio' ? 'studio-view' : ''}`}>
-      {/* Breadcrumbs */}
-      <nav className="harness-breadcrumbs" aria-label="Breadcrumb">
-        <span>Admin</span>
-        <span className="separator">/</span>
-        <span>Configuration</span>
-        <span className="separator">/</span>
-        <span className="active-crumb">Harness Library</span>
-      </nav>
-
       {/* Studio Workbench vs Catalog View Selector */}
       <div className="harness-main-nav-tabs">
         <button
@@ -646,99 +637,102 @@ export const HarnessLibrary: React.FC<HarnessLibraryProps> = ({ principal, onNav
         <HarnessStudioPage tenantId={principal?.tenant_id} projectId={principal?.project_id} />
       ) : (
         <>
-          {/* Hero Header */}
-          <section className="harness-hero">
-        <div className="harness-hero-main">
-          <h1>
-            Harness <span>Library</span> & Governance
-          </h1>
-          <p className="harness-hero-lede">
-            Govern platform templates and configure scoped resource inheritance for this project.
-            Click any resource card to inspect specifications, view model bindings, or adjust project inheritance.
-          </p>
+          {/* Standard Hero Banner */}
+          <section className="hero-banner">
+            <div className="hero-main">
+              <h1 className="hero-title">
+                <BookOpen size={22} color="var(--acc)" />
+                Harness <span>Library</span> & Governance
+              </h1>
+              <p className="hero-lede">
+                Govern platform templates and configure scoped resource inheritance for this project.
+                Click any resource card to inspect specifications, view model bindings, or adjust project inheritance.
+              </p>
 
-          <div className="harness-meta-strip">
-            <span className="harness-stat-chip highlight">
-              <ShieldCheck size={13} /> Platform Governed
-            </span>
-            <span className="harness-stat-chip">
-              <Layers size={13} />
-              <b>{selected.size}</b> project resources active
-            </span>
-            {revision && (
-              <span
-                className="harness-stat-chip interactive"
-                onClick={() => copyToClipboard(revision, 'rev')}
-                title="Click to copy full catalog revision SHA-256"
-              >
-                {copiedKey === 'rev' ? <Check size={12} style={{ color: 'var(--acc3)' }} /> : <Copy size={12} />}
-                Catalog: <code>{revision.slice(0, 18)}…</code>
-              </span>
-            )}
-            {projectRevision && (
-              <span
-                className="harness-stat-chip interactive"
-                onClick={() => copyToClipboard(projectRevision, 'proj_rev')}
-                title="Click to copy project layer revision SHA-256"
-              >
-                {copiedKey === 'proj_rev' ? <Check size={12} style={{ color: 'var(--acc3)' }} /> : <Copy size={12} />}
-                Project Layer: <code>{projectRevision.slice(0, 18)}…</code>
-              </span>
-            )}
-          </div>
-        </div>
+              <div className="hero-meta-strip">
+                <span className="hero-stat-chip highlight">
+                  <ShieldCheck size={13} /> Platform Governed
+                </span>
+                <span className="hero-stat-chip">
+                  <Layers size={13} />
+                  <b>{selected.size}</b> project resources active
+                </span>
+                {revision && (
+                  <span
+                    className="hero-stat-chip interactive"
+                    onClick={() => copyToClipboard(revision, 'rev')}
+                    title="Click to copy full catalog revision SHA-256"
+                  >
+                    {copiedKey === 'rev' ? <Check size={12} style={{ color: 'var(--acc3)' }} /> : <Copy size={12} />}
+                    Catalog: <code>{revision.slice(0, 18)}…</code>
+                  </span>
+                )}
+                {projectRevision && (
+                  <span
+                    className="hero-stat-chip interactive"
+                    onClick={() => copyToClipboard(projectRevision, 'proj_rev')}
+                    title="Click to copy project layer revision SHA-256"
+                  >
+                    {copiedKey === 'proj_rev' ? <Check size={12} style={{ color: 'var(--acc3)' }} /> : <Copy size={12} />}
+                    Project Layer: <code>{projectRevision.slice(0, 18)}…</code>
+                  </span>
+                )}
+              </div>
+            </div>
 
-        <div className="harness-hero-actions">
-          <button
-            type="button"
-            className={`btn ${hasUnsavedChanges ? 'btn-primary' : 'btn-open'}`}
-            onClick={() => void save()}
-            disabled={saving || loading || !document || !canManageProject || !hasUnsavedChanges}
-            title={hasUnsavedChanges ? 'Save changes to project resource selection' : 'No unsaved changes'}
-          >
-            <Check size={13} />
-            {saving ? 'Saving…' : hasUnsavedChanges ? 'Save project selection *' : 'Save project selection'}
-          </button>
+            <div className="hero-actions">
+              <div className="hero-actions-row">
+                <button
+                  type="button"
+                  className={`btn ${hasUnsavedChanges ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => void save()}
+                  disabled={saving || loading || !document || !canManageProject || !hasUnsavedChanges}
+                  title={hasUnsavedChanges ? 'Save changes to project resource selection' : 'No unsaved changes'}
+                >
+                  <Check size={13} />
+                  {saving ? 'Saving…' : hasUnsavedChanges ? 'Save project selection *' : 'Save project selection'}
+                </button>
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => void reset()}
-            disabled={saving || loading || !document || !canManageProject}
-            title="Reset project inheritance to platform catalog defaults"
-          >
-            <RotateCcw size={13} />
-            Reset to platform
-          </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void reset()}
+                  disabled={saving || loading || !document || !canManageProject}
+                  title="Reset project inheritance to platform catalog defaults"
+                >
+                  <RotateCcw size={13} />
+                  Reset to platform
+                </button>
 
-          {canManagePlatform && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                setPlatformText(JSON.stringify(document, null, 2));
-                setEditingPlatform(true);
-              }}
-              disabled={!document || saving}
-              title="Edit data-only config/harness.yaml definition"
-            >
-              <FileCode size={13} />
-              Edit platform catalog
-            </button>
-          )}
+                {canManagePlatform && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setPlatformText(JSON.stringify(document, null, 2));
+                      setEditingPlatform(true);
+                    }}
+                    disabled={!document || saving}
+                    title="Edit data-only config/harness.yaml definition"
+                  >
+                    <FileCode size={13} />
+                    Edit platform catalog
+                  </button>
+                )}
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => void load()}
-            disabled={loading || saving}
-            title="Reload harness catalog from server"
-          >
-            <RefreshCw size={13} className={loading ? 'spin' : ''} />
-            Refresh
-          </button>
-        </div>
-      </section>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => void load()}
+                  disabled={loading || saving}
+                  title="Reload harness catalog from server"
+                >
+                  <RefreshCw size={13} className={loading ? 'spin' : ''} />
+                  {loading ? 'Refreshing…' : 'Refresh'}
+                </button>
+              </div>
+            </div>
+          </section>
 
       {/* Notifications & Error Alerts */}
       {notice && (

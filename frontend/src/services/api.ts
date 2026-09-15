@@ -17,7 +17,13 @@ if (typeof window !== 'undefined') {
     try { window[name].removeItem('rca_auth_token'); } catch { /* Storage may be disabled. */ }
   }
 }
-export const setSessionToken = (token: string | null) => { inMemoryToken = token?.trim() || null; };
+export const setSessionToken = (token: string | null) => {
+  const value = token?.trim().replace(/^Bearer[ \t]+/i, '') || null;
+  if (value && !/^[A-Za-z0-9._~+/-]+=*$/.test(value)) {
+    throw new ApiError(400, 'The session token contains invalid characters. Paste the complete token on one line, without quotes or extra text.');
+  }
+  inMemoryToken = value;
+};
 export const getSessionToken = () => inMemoryToken;
 export const hasSessionToken = () => Boolean(inMemoryToken);
 export class ApiError extends Error { constructor(public status: number, message: string, public details: unknown = null) { super(message); this.name = 'ApiError'; } }
@@ -173,11 +179,11 @@ export async function fetchProjectEditor(): Promise<ProjectEditorDraft> { return
 export async function saveProjectEditor(document: Record<string, unknown>, expectedVersion: number): Promise<ProjectEditorDraft> {
   return request<ProjectEditorDraft>('/api/v1/project/editor', { method: 'PUT', body: { document, expected_version: expectedVersion } });
 }
-export async function validateProjectSetup(yaml: string): Promise<ProjectValidationResult> {
-  return request<ProjectValidationResult>('/api/v1/project/validate', { method: 'POST', body: { yaml } });
+export async function validateProjectSetup(yaml: string, expectedEditorVersion?: number): Promise<ProjectValidationResult> {
+  return request<ProjectValidationResult>('/api/v1/project/validate', { method: 'POST', body: { yaml, expected_editor_version: expectedEditorVersion } });
 }
-export async function saveProjectSetup(yaml: string): Promise<ProjectSetupResponse> {
-  return request<ProjectSetupResponse>('/api/v1/project/setup', { method: 'POST', body: { yaml } });
+export async function saveProjectSetup(yaml: string, expectedProjectRevision?: string, expectedEditorVersion?: number): Promise<ProjectSetupResponse> {
+  return request<ProjectSetupResponse>('/api/v1/project/setup', { method: 'POST', body: { yaml, expected_project_revision: expectedProjectRevision, expected_editor_version: expectedEditorVersion } });
 }
 export async function fetchAuditLogs(): Promise<AuditLog[]> { return request<AuditLog[]>('/api/v1/audit'); }
 export async function fetchSystemDiagnostics(): Promise<SystemDiagnostics> { return request<SystemDiagnostics>('/api/v1/system/diagnostics'); }
@@ -305,8 +311,8 @@ export async function resetProjectSkill(skillId: string): Promise<{ reset: boole
 export async function fetchHarnessLibrary(): Promise<HarnessResponse> {
   return request<HarnessResponse>('/api/v1/harness');
 }
-export async function updateHarnessLibrary(selection: HarnessSelection, expectedRevision: string, expectedProjectRevision: string): Promise<HarnessResponse> {
-  return request<HarnessResponse>('/api/v1/harness/project', { method: 'PUT', body: { selection, expected_revision: expectedRevision, expected_project_revision: expectedProjectRevision } });
+export async function updateHarnessLibrary(selection: HarnessSelection, expectedRevision: string, expectedProjectRevision: string, expectedEditorVersion?: number): Promise<HarnessResponse> {
+  return request<HarnessResponse>('/api/v1/harness/project', { method: 'PUT', body: { selection, expected_revision: expectedRevision, expected_project_revision: expectedProjectRevision, expected_editor_version: expectedEditorVersion } });
 }
 export async function resetHarnessLibrary(expectedProjectRevision: string): Promise<HarnessResponse> {
   return request<HarnessResponse>(`/api/v1/harness/project?expected_project_revision=${encodeURIComponent(expectedProjectRevision)}`, { method: 'DELETE' });
@@ -399,4 +405,16 @@ export async function saveConnectorFieldGovernance(templateId: string, revision:
   return request(`/api/v1/connectors/templates/${encodeURIComponent(templateId)}/field-governance`, {
     method: 'PUT', body: { expected_revision: revision, fields },
   });
+}
+
+export async function fetchProjectTemplateBinding(): Promise<import('../types/api').ProjectTemplateBinding> {
+  return request('/api/v1/project-templates/binding');
+}
+export async function applyProjectTemplate(template: import('../types/api').ProjectTemplateItem, binding: import('../types/api').ProjectTemplateBinding): Promise<import('../types/api').ProjectTemplateBinding> {
+  return request(`/api/v1/project-templates/${encodeURIComponent(template.template_id)}/${encodeURIComponent(template.version)}/apply`, { method: 'POST', body: {
+    expected_template_revision: template.revision,
+    expected_template_checksum: template.checksum,
+    expected_project_revision: binding.project_revision,
+    expected_harness_revision: binding.harness_revision,
+  } });
 }

@@ -292,6 +292,7 @@ export const App: React.FC = () => {
   }, [principal, uiReload, routeProjectKey]);
 
   const handleSelectPage = (page: ActivePage) => {
+    if (!window.dispatchEvent(new Event('rca:before-navigation', { cancelable: true }))) return;
     setActivePage(page);
     const scopedProjectKey = routeProjectKey;
     if (scopedProjectKey) {
@@ -432,7 +433,7 @@ export const App: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'project-setup' && (
-            <ProjectSetup />
+            <ProjectSetup onOverview={() => handleSelectPage('overview')} onNewInvestigation={() => openInvestigation()} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'persistence' && (

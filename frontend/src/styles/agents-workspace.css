@@ -6,18 +6,11 @@
 .agents-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 20px;
   width: 100%;
   max-width: none;
   margin: 0;
   box-sizing: border-box;
-  padding: 20px 24px 40px;
-  animation: agentsFadeIn 0.2s ease-out;
-}
-
-@keyframes agentsFadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
 }
 
 /* Breadcrumbs */

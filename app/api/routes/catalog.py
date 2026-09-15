@@ -44,6 +44,8 @@ MANAGEMENT_ROLES = {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER}
 
 class ProjectConfigPayload(BaseModel):
     yaml: str
+    expected_project_revision: str | None = None
+    expected_editor_version: int | None = Field(default=None, ge=0)
 
 
 class SystemConnectionTestPayload(BaseModel):
@@ -2688,7 +2690,9 @@ async def project_setup(request: Request, principal: Principal):
                   and item["version"] == project.project_template.template_version), None)
     template_document = bound["definition"] if bound else {"harness": {}}
 
+    from app.api.routes.harness import _project_revision
     return {
+        "project_revision": _project_revision(project),
         "generated_at": time.time(),
         "scope": {
             "tenant_id": principal.tenant_id,
@@ -2744,13 +2748,35 @@ async def project_setup(request: Request, principal: Principal):
     }
 
 
+async def _project_environment_dependency_errors(request, principal, validated):
+    if validated is None:
+        return []
+    active = {env["id"] for env in validated.get("environments", []) if env.get("enabled", True)}
+    instances = await request.app.state.platform_admin.list_project_connector_instances(principal.tenant_id, principal.project_id)
+    errors = []
+    for instance in instances:
+        if not instance.get("enabled"):
+            continue
+        missing = {binding["project_env_id"] for binding in instance.get("bindings", [])
+                   if binding.get("project_env_id") not in active}
+        if missing:
+            errors.append(f"Setup: connector {instance['instance_id']} still references environments {', '.join(sorted(missing))}; remap or disable it first")
+    return errors
+
+
 @router.post("/api/v1/project/validate")
 async def validate_project_setup(
     payload: ProjectConfigPayload, request: Request, principal: Principal
 ):
+    if payload.expected_editor_version is not None:
+        from app.api.routes.project_editor import validate_setup_draft
+        require_roles(principal, {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER})
+        await validate_setup_draft(request, principal, payload.expected_editor_version)
     valid, errors, warnings, validated = _validate_project_yaml(
         payload.yaml, request, principal
     )
+    errors.extend(await _project_environment_dependency_errors(request, principal, validated))
+    valid = valid and not errors
     return {
         "valid": valid,
         "errors": errors,
@@ -2770,11 +2796,20 @@ async def save_project_setup(
             403,
             "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project configuration",
         )
-    from app.api.routes.harness import _lock
+    from app.api.routes.harness import _lock, _project_revision
     async with _lock(request):
+        project = request.app.state.registry.inheritance.project(principal)
+        if (payload.expected_project_revision is not None
+                and payload.expected_project_revision != _project_revision(project)):
+            raise HTTPException(409, "Project settings changed; reload and review before applying")
+        if payload.expected_editor_version is not None:
+            from app.api.routes.project_editor import validate_setup_draft
+            await validate_setup_draft(request, principal, payload.expected_editor_version)
         valid, errors, warnings, validated = _validate_project_yaml(
             payload.yaml, request, principal
         )
+        errors.extend(await _project_environment_dependency_errors(request, principal, validated))
+        valid = valid and not errors
         if not valid:
             raise HTTPException(
                 422,

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   BellRing,
+  Bell,
   AlertCircle,
   RefreshCw,
   AlertTriangle,
@@ -436,72 +437,78 @@ export const Alerts: React.FC<AlertsProps> = ({ onNavigate, onNotificationsUpdat
   const totalNotificationsCount = notifications?.items.length ?? 0;
 
   return (
-    <div className="alerts-page">
-      {/* Breadcrumbs */}
-      <div className="alerts-breadcrumbs">
-        <span>Admin Platform</span>
-        <span className="separator">/</span>
-        <span>Operations & Observability</span>
-        <span className="separator">/</span>
-        <span className="active-crumb">Alerts & Notifications</span>
-      </div>
-
-      {/* Header Banner */}
-      <header className="alerts-header">
-        <div className="alerts-header-main">
-          <h1>
-            <AlertTriangle size={24} style={{ color: 'var(--acc)' }} />
+    <div className="view-container alerts-page">
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
+            <AlertTriangle size={22} style={{ color: 'var(--acc)' }} />
             Operational <span>Alerts</span> & Notifications
           </h1>
-          <p>
+          <p className="hero-lede">
             Real-time incident triggers, safety tripwires, and live runtime governance notifications.
             Navigate directly to active investigations, health checks, or governance audits from any alert.
           </p>
+
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip highlight">
+              <AlertTriangle size={12} /> <b>{totalAlertsCount}</b> Active Alerts
+            </span>
+            {criticalCount > 0 && (
+              <span className="hero-stat-chip amber">
+                <AlertCircle size={12} /> <b>{criticalCount}</b> Critical
+              </span>
+            )}
+            <span className="hero-stat-chip">
+              <Bell size={12} /> <b>{unreadNotificationsCount}</b> Unread Notifications
+            </span>
+            <span className="hero-stat-chip">
+              <span className="dot pulse" /> Tripwires Active
+            </span>
+          </div>
         </div>
 
-        <div className="alerts-header-actions">
-          {unreadNotificationsCount > 0 && (
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            {unreadNotificationsCount > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => void handleMarkAllRead()}
+                title="Mark all notifications as read"
+              >
+                <CheckCheck size={13} style={{ color: 'var(--acc)' }} /> Mark All Read ({unreadNotificationsCount})
+              </button>
+            )}
+
             <button
               type="button"
-              className="btn btn-outline"
-              onClick={() => void handleMarkAllRead()}
-              title="Mark all notifications as read"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+              className="btn btn-secondary"
+              onClick={() => void load()}
+              disabled={loading}
             >
-              <CheckCheck size={14} style={{ color: 'var(--acc)' }} /> Mark All Read ({unreadNotificationsCount})
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
+              {loading ? 'Refreshing…' : 'Refresh'}
             </button>
-          )}
 
-          <button
-            type="button"
-            className="btn btn-outline"
-            onClick={() => void load()}
-            disabled={loading}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-          >
-            <RefreshCw size={13} className={loading ? 'spin' : ''} />
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
+            <button
+              type="button"
+              className={`btn ${activeTab === 'thresholds' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setActiveTab(activeTab === 'thresholds' ? 'all' : 'thresholds')}
+            >
+              <Sliders size={13} /> Thresholds
+            </button>
 
-          <button
-            type="button"
-            className={`btn ${activeTab === 'thresholds' ? 'btn-primary' : 'btn-outline'}`}
-            onClick={() => setActiveTab(activeTab === 'thresholds' ? 'all' : 'thresholds')}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-          >
-            <Sliders size={13} /> Thresholds
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowBroadcastModal(true)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-          >
-            <Radio size={13} /> Broadcast Alert
-          </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowBroadcastModal(true)}
+            >
+              <Radio size={13} /> Broadcast Alert
+            </button>
+          </div>
         </div>
-      </header>
+      </section>
 
       {/* Feedback Banners */}
       {error && (

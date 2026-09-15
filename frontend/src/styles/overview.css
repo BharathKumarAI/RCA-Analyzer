@@ -849,3 +849,19 @@
   border-radius: var(--radius-full, 999px);
   border: 1px solid var(--line);
 }
+
+.overview-project { padding: 24px; margin-bottom: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.overview-project-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.overview-project h2 { margin: 0; font-size: 18px; }
+.overview-project h3 { margin: 20px 0 8px; font-size: 16px; overflow-wrap: anywhere; }
+.overview-project p { color: var(--muted); line-height: 1.6; }
+.overview-project-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 20px; margin: 20px 0 0; }
+.overview-project-details dt { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.overview-project-details dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.overview-page .hero-banner { flex-wrap: wrap; }
+.overview-page .hero-main { flex: 1 1 320px; min-width: 0; }
+.overview-page .hero-actions { flex: 0 1 auto; max-width: 100%; }
+.overview-page .hero-actions-row { flex-wrap: wrap; }
+@media (max-width: 768px) {
+  .overview-page .hero-main { flex: 1 1 auto; }
+}

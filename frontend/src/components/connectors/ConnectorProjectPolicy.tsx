@@ -27,7 +27,21 @@ export function ConnectorProjectPolicy({ connectorId, readOnly }: { connectorId:
     <div className="prism-card-body" aria-busy={loading || Boolean(busy)}>
       {error && <p role="alert" className="cf-error">{error} <button className="btn btn-secondary" onClick={() => { void load().catch(error => setError(String(error))); }}><RefreshCw size={13} /> Retry</button></p>}
       {loading ? <p className="prism-field-hint">Loading project capabilities…</p> : <>
-        {tool?.project_enabled !== undefined && <label className="connector-policy-switch"><span><strong>Use as an investigation data source</strong><small>Allow capabilities to use this connector, subject to connection tests and project permissions.</small></span><input type="checkbox" role="switch" checked={tool.project_enabled} disabled={readOnly || Boolean(busy)} onChange={() => void toggle('connectors', tool.id, tool.project_enabled!)} /></label>}
+        {tool?.project_enabled !== undefined && (
+          <label className="connector-policy-switch">
+            <span>
+              <strong>Enable {tool.name || connectorId} for Project Investigations</strong>
+              <small>{tool.description || 'Authorize workflow capabilities to query this connector for investigation evidence.'}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={tool.project_enabled}
+              disabled={readOnly || Boolean(busy)}
+              onChange={() => void toggle('connectors', tool.id, tool.project_enabled!)}
+            />
+          </label>
+        )}
         {capabilities.map(capability => <label className="connector-policy-switch" key={capability.id}><span><strong>{capability.name}</strong><small>{capability.description}</small><small>Minimum role: {capability.permissions?.minimum_role || capability.permissions?.allowed_roles?.join(', ') || 'Project policy'}</small></span><input type="checkbox" role="switch" checked={capability.project_enabled ?? capability.enabled ?? false} disabled={readOnly || Boolean(busy) || capability.project_enabled === undefined} onChange={() => void toggle('capabilities', capability.id, capability.project_enabled!)} /></label>)}
         {!capabilities.length && <p className="prism-field-hint">No published capabilities reference this connector.</p>}
       </>}

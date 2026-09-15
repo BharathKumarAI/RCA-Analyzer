@@ -62,8 +62,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       if (!authenticated) { setError('Paste a session token to connect.'); setLoading(false); return; }
       setSessionToken(null); setTokenInput(''); onSignedOut?.(); setLoading(false); return;
     }
-    setSessionToken(tokenInput);
-    try { const next = await fetchPrincipal(); onAuthenticated?.(next); onSessionChanged?.(); setTokenInput(''); onClose(); }
+    try { setSessionToken(tokenInput); const next = await fetchPrincipal(); onAuthenticated?.(next); onSessionChanged?.(); setTokenInput(''); onClose(); }
     catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Session verification failed';
       setSessionToken(null);

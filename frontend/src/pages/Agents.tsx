@@ -262,40 +262,32 @@ instruction: Investigate the supplied incident evidence and report bounded findi
           style={{ marginBottom: 16 }}
         />
       )}
-      {/* Breadcrumbs */}
-      <nav className="agents-breadcrumbs" aria-label="Breadcrumb">
-        <span>Admin</span>
-        <span className="separator">/</span>
-        <span>Configuration</span>
-        <span className="separator">/</span>
-        <span className="active-crumb">Agent Fleet & Specialists</span>
-      </nav>
-
-      {/* Hero Banner */}
-      <section className="agents-hero">
-        <div className="agents-hero-main">
-          <h1>
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
+            <Bot size={22} color="var(--acc)" />
             Agent Fleet & <span>Specialists</span>
           </h1>
-          <p className="agents-hero-lede">
+          <p className="hero-lede">
             Declarative ADK specialist agent configurations, dual-custody review gates, and cryptographic content-hash integrity verification.
             Fully synced across the platform catalog and scoped project inheritance.
           </p>
-          <div className="agents-meta-strip">
-            <span className="agents-stat-chip highlight">
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip highlight">
               <CheckCircle2 size={13} /> <b>{metrics.active}</b> Active in Workflow
             </span>
             {metrics.pending > 0 && (
-              <span className="agents-stat-chip amber">
+              <span className="hero-stat-chip amber">
                 <AlertTriangle size={13} /> <b>{metrics.pending}</b> Pending Review
               </span>
             )}
-            <span className="agents-stat-chip">
+            <span className="hero-stat-chip">
               <Shield size={13} /> Dual-Custody Review Enforced
             </span>
             {harnessData?.revision && (
               <span
-                className="agents-stat-chip interactive"
+                className="hero-stat-chip interactive"
                 onClick={() => copyToClipboard(harnessData.revision, 'hash_hero')}
                 title="Click to copy catalog revision SHA-256"
               >
@@ -306,23 +298,25 @@ instruction: Investigate the supplied incident evidence and report bounded findi
           </div>
         </div>
 
-        <div className="agents-hero-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => { setActionError(null); setReviewReason(''); setIsRegisterOpen(true); }}
-            title="Submit declarative specialist configuration"
-          >
-            <Plus size={13} strokeWidth={2.5} /> Register Specialist
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleRefreshAll}
-            title="Refresh specialist registry and harness catalog"
-          >
-            <RefreshCw size={13} /> Refresh
-          </button>
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => { setActionError(null); setReviewReason(''); setIsRegisterOpen(true); }}
+              title="Submit declarative specialist configuration"
+            >
+              <Plus size={13} strokeWidth={2.5} /> Register Specialist
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleRefreshAll}
+              title="Refresh specialist registry and harness catalog"
+            >
+              <RefreshCw size={13} /> Refresh
+            </button>
+          </div>
         </div>
       </section>
 

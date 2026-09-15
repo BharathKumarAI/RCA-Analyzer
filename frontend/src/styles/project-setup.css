@@ -2045,3 +2045,58 @@
   border-radius: 4px;
   font: 12px/1.45 var(--font-mono, monospace);
 }
+
+/* Guided project creation uses the workspace palette and a stable two-column flow. */
+.ps-project-entry { max-width: 760px; padding: 32px; margin: 24px auto; width: 100%; background: var(--ps-card-bg); border: 1px solid var(--ps-border); border-radius: 12px; }
+.ps-project-entry h1 { font-size: 30px; line-height: 36px; margin: 16px 0; }
+.ps-project-entry h2 { font-size: 20px; line-height: 28px; margin-top: 32px; }
+.ps-project-entry p, .ps-harness-setup p { max-width: 70ch; line-height: 1.5; text-wrap: pretty; color: var(--ps-text-muted); }
+.ps-project-entry .btn { margin-top: 16px; }
+.project-setup-page .hero-banner { background: var(--ps-card-bg); padding: 24px; gap: 24px; }
+.project-setup-page .hero-title { font-size: 24px; line-height: 32px; text-wrap: balance; }
+.project-setup-page .hero-actions-row { flex-wrap: wrap; }
+.project-setup-page .ps-wizard-grid { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
+.project-setup-page .ps-main-col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.ps-review-sections { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ps-review-sections .btn { white-space: normal; text-align: left; }
+.ps-wizard-footer { position: sticky; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--ps-border); border-radius: 8px; background: var(--ps-card-bg); }
+.ps-wizard-footer > span { color: var(--ps-text-muted); font-size: 14px; }
+.ps-harness-setup h3 { margin-top: 24px; font-size: 18px; line-height: 28px; }
+.ps-agent-list { list-style: none; padding: 0; }
+.ps-agent-list li { padding: 16px 0; border-bottom: 1px solid var(--ps-border-subtle); }
+.ps-agent-list p { margin: 4px 0 0; }
+.ps-template-review { padding: 16px; margin-top: 16px; background: var(--ps-card-subtle); border-radius: 8px; }
+.ps-template-review pre { overflow: auto; max-height: 320px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.ps-template-review .btn { margin-top: 16px; }
+.ps-connection-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; }
+.project-setup-page summary { cursor: pointer; padding: 8px 0; }
+.project-setup-page :is(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ps-primary); outline-offset: 3px; }
+.project-setup-page button:disabled { cursor: not-allowed; opacity: .55; }
+@media (max-width: 900px) {
+  .project-setup-page .ps-wizard-grid { grid-template-columns: minmax(0, 1fr); }
+  .project-setup-page .ps-stepper-col { position: static; display: flex; overflow-x: auto; gap: 8px; width: 100%; }
+  .project-setup-page .ps-step-btn { flex: 0 0 192px; }
+  .project-setup-page .ps-form-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .ps-project-entry { padding: 24px; margin: 0; }
+  .ps-wizard-footer { position: static; }
+  .ps-wizard-footer .ps-review-sections { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-setup-page, .project-setup-page * { animation: none !important; transition: none !important; }
+}
+.project-setup-page .ps-step-title { justify-content: flex-start; font-size: 14px; line-height: 20px; }
+.project-setup-page .ps-step-info { text-align: left; }
+.project-setup-page .ps-step-desc { white-space: normal; font-size: 12px; line-height: 16px; }
+.ps-review-summary { margin: 16px 0; }
+.ps-review-summary > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px; padding: 12px 0; }
+.ps-review-summary dt { font-weight: 600; }
+.ps-review-summary dd { margin: 0; overflow-wrap: anywhere; color: var(--ps-text-muted); }
+.ps-issue-link { background: none; border: none; color: var(--ps-primary); text-decoration: underline; cursor: pointer; padding: 8px 0; text-align: left; }
+.ps-draft-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ps-draft-comparison pre { overflow: auto; max-height: 320px; font-size: 12px; }
+@media (max-width: 600px) { .ps-review-summary > div, .ps-draft-comparison { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+@media (max-width: 900px) {
+  .project-setup-page .ps-stepper-col { flex-direction: row; align-items: stretch; }
+  .project-setup-page .ps-step-btn { min-width: 192px; min-height: 80px; }
+}
+@media (max-width: 600px) { .project-setup-page .ps-card-header { flex-direction: column; align-items: flex-start; gap: 12px; } }

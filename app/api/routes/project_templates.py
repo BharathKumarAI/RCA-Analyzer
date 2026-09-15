@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Path, Request
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import Principal, require_roles
-from app.api.routes.catalog import _save_project_file, _validate_project_yaml
+from app.api.routes.catalog import _save_project_file, _validate_project_yaml, _project_environment_dependency_errors
 from app.api.routes.harness import _lock, _project_revision
 from app.configuration.models import ProjectLayer
 from app.configuration.project_templates import (
@@ -80,6 +80,9 @@ async def apply_template(template_id: TemplateId, version: Version, body: Templa
         data.pop("project_id", None)
         supplied = dict(data)
         data = validate_definition(data, request, principal)
+        dependency_errors = await _project_environment_dependency_errors(request, principal, data)
+        if dependency_errors:
+            raise HTTPException(422, "; ".join(dependency_errors))
         data["project_template"] = {
             "template_id": template_id, "template_version": version,
             "template_checksum": row["checksum"], "template_revision": row["revision"],

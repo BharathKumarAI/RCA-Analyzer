@@ -134,7 +134,7 @@
   font-weight: 600;
 }
 .connector-form input:not([type="checkbox"]),
-.connector-form select,
+.connector-form select:not(.prism-gov-inline-select),
 .connector-form textarea {
   width: 100%;
   min-width: 0;
@@ -147,6 +147,49 @@
   font-family: inherit;
   font-size: 13px;
   font-weight: 400;
+}
+
+.connector-form .prism-field-gov-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.connector-form .prism-gov-select-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  width: auto;
+  box-sizing: border-box;
+}
+
+.connector-form select.prism-gov-inline-select,
+.connector-form .prism-gov-inline-select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  padding: 0 14px 0 0 !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: auto !important;
+  line-height: normal !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right center !important;
+  background-size: 10px !important;
 }
 .connector-form input::placeholder,
 .connector-form textarea::placeholder {
@@ -562,7 +605,7 @@
     flex-wrap: wrap;
   }
   .connector-form input:not([type="checkbox"]),
-  .connector-form select,
+  .connector-form select:not(.prism-gov-inline-select),
   .connector-form textarea {
     font-size: 16px;
   }
@@ -623,7 +666,7 @@
   color: #e2e8f0;
 }
 [data-theme="dark"] .connector-form input:not([type="checkbox"]),
-[data-theme="dark"] .connector-form select,
+[data-theme="dark"] .connector-form select:not(.prism-gov-inline-select),
 [data-theme="dark"] .connector-form textarea {
   background: #0f172a;
   border-color: #334155;

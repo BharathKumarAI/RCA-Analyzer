@@ -291,92 +291,71 @@ export const Capabilities: React.FC<CapabilitiesProps> = ({ onNewInvestigation }
 
   return (
     <div className="view-container capabilities-page">
-      {/* Breadcrumbs */}
-      <div className="capabilities-breadcrumbs">
-        <span>Admin</span>
-        <span className="separator">/</span>
-        <span>Configuration</span>
-        <span className="separator">/</span>
-        <span className="active-crumb">Capabilities & Topology</span>
-      </div>
-
-      {/* Page Header */}
-      <header className="capabilities-page-header">
-        <div className="capabilities-header-main">
-          <h1>
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
             <Workflow size={22} color="var(--acc)" />
-            Workflow Capabilities & Execution Topology
+            Workflow Capabilities & <span>Execution Topology</span>
           </h1>
-          <p>
+          <p className="hero-lede">
             Declarative capability contracts loaded directly from server manifests and evaluated by the ADK capability resolver.
           </p>
 
-          <div className="capabilities-stats-strip">
-            <button
-              type="button"
-              className={`capabilities-stat-chip interactive ${viewMode === 'workflows' ? 'is-active' : ''}`}
-              onClick={() => setViewMode('workflows')}
-              title="Show Workflow Master-Detail Directory"
-            >
-              <Layers size={12} />
-              Workflows: <b>{capabilities.length}</b>
-            </button>
-            <button
-              type="button"
-              className={`capabilities-stat-chip interactive ${viewMode === 'profiles' ? 'is-active' : ''}`}
-              onClick={() => setViewMode('profiles')}
-              title="Show Platform Model Profiles Matrix"
-            >
-              <Cpu size={12} />
-              Model Profiles: <b>{Object.keys(config?.model_profiles?.profiles || {}).length}</b>
-            </button>
-            <span className="capabilities-stat-chip">
-              <BookOpen size={12} />
-              Skills: <b>{skills.length}</b>
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip highlight">
+              <Layers size={12} /> Workflows: <b>{capabilities.length}</b>
             </span>
-            <span className="capabilities-stat-chip">
+            <span className="hero-stat-chip">
+              <Cpu size={12} /> Profiles: <b>{Object.keys(config?.model_profiles?.profiles || {}).length}</b>
+            </span>
+            <span className="hero-stat-chip">
+              <BookOpen size={12} /> Skills: <b>{skills.length}</b>
+            </span>
+            <span className="hero-stat-chip">
               Mode: <b>{config?.mode || 'demo'}</b>
             </span>
+          </div>
+        </div>
+
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <div className="capabilities-view-switcher" role="tablist" aria-label="Capabilities View Mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'workflows'}
+                className={`capabilities-view-btn ${viewMode === 'workflows' ? 'is-active' : ''}`}
+                onClick={() => setViewMode('workflows')}
+              >
+                <Layers size={13} />
+                Workflows ({capabilities.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'profiles'}
+                className={`capabilities-view-btn ${viewMode === 'profiles' ? 'is-active' : ''}`}
+                onClick={() => setViewMode('profiles')}
+              >
+                <Sliders size={13} />
+                Profiles ({Object.keys(config?.model_profiles?.profiles || {}).length})
+              </button>
+            </div>
+
             <button
               type="button"
               className="btn btn-secondary"
               onClick={() => void loadAll()}
               title="Reload from server"
-              style={{ padding: '3px 10px', height: '24px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
               disabled={loading}
             >
-              <RefreshCw size={11} className={loading ? 'spin' : ''} />
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
               Refresh
             </button>
           </div>
         </div>
-
-        {/* View Switcher Tabs */}
-        <div className="capabilities-page-actions">
-          <div className="capabilities-view-switcher" role="tablist" aria-label="Capabilities View Mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === 'workflows'}
-              className={`capabilities-view-btn ${viewMode === 'workflows' ? 'is-active' : ''}`}
-              onClick={() => setViewMode('workflows')}
-            >
-              <Layers size={13} />
-              Workflows ({capabilities.length})
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={viewMode === 'profiles'}
-              className={`capabilities-view-btn ${viewMode === 'profiles' ? 'is-active' : ''}`}
-              onClick={() => setViewMode('profiles')}
-            >
-              <Sliders size={13} />
-              Model Profiles Matrix ({Object.keys(config?.model_profiles?.profiles || {}).length})
-            </button>
-          </div>
-        </div>
-      </header>
+      </section>
 
       {/* Error alert */}
       {error && (

@@ -404,46 +404,50 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
   return (
     <div className="view-container">
       <div className="optimization-studio">
-        {/* Breadcrumbs */}
-        <div className="opt-breadcrumbs">
-          <span>Admin</span>
-          <span className="separator">/</span>
-          <span>Monitoring</span>
-          <span className="separator">/</span>
-          <span className="active-crumb">Optimization Studio</span>
-        </div>
-
-        {/* Executive Header */}
-        <section className="opt-page-header">
-          <div className="opt-header-main">
-            <h1>
-              <FlaskConical size={24} color="var(--acc)" />
+        {/* Standard Hero Banner */}
+        <section className="hero-banner">
+          <div className="hero-main">
+            <h1 className="hero-title">
+              <FlaskConical size={22} color="var(--acc)" />
               Optimization <span>Studio</span>
             </h1>
-            <p>
+            <p className="hero-lede">
               Offline replay evaluation, prompt & skill tuning, and two-person governance review.
               Offline comparisons evaluate candidate models against immutable baseline datasets before production activation.
             </p>
+            <div className="hero-meta-strip">
+              <span className="hero-stat-chip highlight">
+                <FlaskConical size={12} /> <b>{items.length}</b> Replays Evaluated
+              </span>
+              <span className="hero-stat-chip">
+                <span className="dot pulse" /> MLflow Metric Validation
+              </span>
+              <span className="hero-stat-chip">
+                Dual-Custody Approval Required
+              </span>
+            </div>
           </div>
-          <div className="opt-header-actions">
-            <button
-              className="btn btn-secondary"
-              onClick={() => void loadData()}
-              disabled={busy || loading}
-              title="Refresh telemetry"
-            >
-              <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => {
-                setActiveTab('runner');
-                setDetail(null);
-              }}
-              disabled={busy}
-            >
-              <Play size={14} /> New Evaluation
-            </button>
+          <div className="hero-actions">
+            <div className="hero-actions-row">
+              <button
+                className="btn btn-secondary"
+                onClick={() => void loadData()}
+                disabled={busy || loading}
+                title="Refresh telemetry"
+              >
+                <RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setActiveTab('runner');
+                  setDetail(null);
+                }}
+                disabled={busy}
+              >
+                <Play size={13} /> New Evaluation
+              </button>
+            </div>
           </div>
         </section>
 

@@ -328,60 +328,49 @@ export const Skills: React.FC<SkillsProps> = ({ principal, onNavigate }) => {
 
   return (
     <div className="view-container skills-page">
-      {/* Breadcrumbs */}
-      <div className="skills-breadcrumbs">
-        <span>Admin</span>
-        <span className="separator">/</span>
-        <span>Intelligence</span>
-        <span className="separator">/</span>
-        <span className="active-crumb">Skill Studio & Governance</span>
-      </div>
-
-      {/* Page Header */}
-      <header className="skills-page-header">
-        <div className="skills-header-main">
-          <h1>
+      {/* Standard Hero Banner */}
+      <section className="hero-banner">
+        <div className="hero-main">
+          <h1 className="hero-title">
             <BookOpen size={22} color="var(--acc)" />
-            Skill Studio & Governance
+            Skill Studio & <span>Governance</span>
           </h1>
-          <p>
+          <p className="hero-lede">
             Governed registry of platform baseline agent skills, declarative prompt workflow templates,
             connector action ceilings, and project-level instruction tuning with deterministic offline MLflow validation.
           </p>
 
-          <div className="skills-stats-strip">
-            <span className="skills-stat-chip">
-              <BookOpen size={12} />
-              Platform baseline: <b>{skills?.length ?? 0}</b> skills
+          <div className="hero-meta-strip">
+            <span className="hero-stat-chip">
+              <BookOpen size={12} /> Platform baseline: <b>{skills?.length ?? 0}</b> skills
             </span>
-            <span className="skills-stat-chip">
-              <Sliders size={12} />
-              Customizable: <b>{customizableCount}</b> skills
+            <span className="hero-stat-chip">
+              <Sliders size={12} /> Customizable: <b>{customizableCount}</b> skills
             </span>
-            <span className={`skills-stat-chip ${activeOverridesCount > 0 ? 'active-overrides' : ''}`}>
-              <Sparkles size={12} />
-              Active project overrides: <b>{activeOverridesCount}</b>
+            <span className={`hero-stat-chip ${activeOverridesCount > 0 ? 'highlight' : ''}`}>
+              <Sparkles size={12} /> Project overrides: <b>{activeOverridesCount}</b>
             </span>
-            <span className="skills-stat-chip">
-              <Activity size={12} />
-              Offline checks: <b>Deterministic MLflow</b>
+            <span className="hero-stat-chip">
+              <Activity size={12} /> Offline checks: <b>Deterministic MLflow</b>
             </span>
           </div>
         </div>
 
-        <div className="skills-page-actions">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => void loadData()}
-            disabled={loading}
-            title="Reload skills and manifests from platform registry"
-          >
-            <RefreshCw size={13} className={loading ? 'spin' : ''} />
-            {loading ? 'Refreshing...' : 'Reload Catalog'}
-          </button>
+        <div className="hero-actions">
+          <div className="hero-actions-row">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void loadData()}
+              disabled={loading}
+              title="Reload skills and manifests from platform registry"
+            >
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
+              {loading ? 'Refreshing...' : 'Reload Catalog'}
+            </button>
+          </div>
         </div>
-      </header>
+      </section>
 
       {/* Action Notification Alert */}
       {actionNotice && (

@@ -1,3 +1,6 @@
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import type { UiSettingsConfig } from '../types/api';
 import { PAGE_ICONS, isActivePage } from '../components/Sidebar';
 import React, { useEffect, useState } from 'react';
@@ -10,7 +13,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Clock3,
-  FileCog,
+  Plus,
   Layers,
   Play,
   RefreshCw,
@@ -25,8 +28,8 @@ import {
   HardDrive,
   BookOpen,
 } from 'lucide-react';
-import { fetchAlerts, fetchTools, fetchParameters, fetchHarnessLibrary } from '../services/api';
-import type { AgentConfiguration, AlertItem, Run, SystemHealth, ToolDefinition, ParameterDefinitionRow, HarnessResponse } from '../types/api';
+import { fetchAlerts, fetchTools, fetchParameters, fetchHarnessLibrary, fetchProjectSetup, fetchProjectEditor } from '../services/api';
+import type { AgentConfiguration, AlertItem, Run, SystemHealth, ToolDefinition, ParameterDefinitionRow, HarnessResponse, ProjectSetupResponse } from '../types/api';
 import type { ActivePage } from '../components/Sidebar';
 import '../styles/overview.css';
 
@@ -82,6 +85,20 @@ export const Overview: React.FC<OverviewProps> = ({
     }
   };
 
+  const [project, setProject] = useState<ProjectSetupResponse | null>(null);
+  const [projectDetails, setProjectDetails] = useState<Record<string, unknown>>({});
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const loadProject = async () => {
+    setProjectError(null);
+    try {
+      const [setup, editor] = await Promise.all([fetchProjectSetup(), fetchProjectEditor()]);
+      setProject(setup);
+      setProjectDetails((editor.document.metadata || {}) as Record<string, unknown>);
+    } catch (reason) {
+      setProjectError(reason instanceof Error ? reason.message : 'Unable to load project details.');
+    }
+  };
+
   const [harnessData, setHarnessData] = useState<HarnessResponse | null>(null);
 
   useEffect(() => {
@@ -89,6 +106,7 @@ export const Overview: React.FC<OverviewProps> = ({
     fetchParameters().then(setParameters).catch(() => setParameters([]));
     fetchHarnessLibrary().then(setHarnessData).catch(() => setHarnessData(null));
     void loadAlerts();
+    void loadProject();
   }, []);
 
   const pending = agents.filter(agent => agent.status === 'pending');
@@ -104,7 +122,7 @@ export const Overview: React.FC<OverviewProps> = ({
   const overriddenParameters = parameters?.filter(p => p.override_revision && p.override_revision > 0).length ?? 0;
 
   const adminControls = settings.navigation.flatMap(item => {
-    if (!item.visible || !isActivePage(item.page) || item.page === 'overview') return [];
+    if (!item.visible || !isActivePage(item.page) || item.page === 'overview' || item.page === 'project-setup') return [];
     const Icon = PAGE_ICONS[item.page];
     return [{ page: item.page, title: item.label, description: item.description, icon: <Icon size={16} />, group: item.group }];
   });
@@ -115,10 +133,10 @@ export const Overview: React.FC<OverviewProps> = ({
       <section className="hero-banner">
         <div className="hero-main">
           <h1 className="hero-title">
-            {settings.welcome_title}
+            Administration overview
           </h1>
           <p className="hero-lede">
-            {settings.welcome_description}
+            Review project configuration, operational health, and activity across the administration workspace.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip">
@@ -155,14 +173,9 @@ export const Overview: React.FC<OverviewProps> = ({
             >
               <Sliders size={13} /> Parameters
             </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => onNavigate('project-setup')}
-              title="Configure project scope & connectors"
-            >
-              <FileCog size={13} /> Project Setup
-            </button>
+            <Button type="button" onClick={() => onNavigate('project-setup')} title="Configure project scope & connectors">
+              <Plus size={14} aria-hidden="true" /> New project
+            </Button>
             <button
               type="button"
               className="btn btn-secondary"
@@ -174,6 +187,27 @@ export const Overview: React.FC<OverviewProps> = ({
           </div>
         </div>
       </section>
+
+      <Card className="overview-project tw:gap-0 tw:border-border" role="region" aria-labelledby="overview-project-title">
+        <div className="overview-project-heading">
+          <div><h2 id="overview-project-title">Projects</h2><p>Project details, configuration, environments, and investigation activity.</p></div>
+          {project && <Button type="button" variant="outline" className="tw:border-border" onClick={() => onNavigate('project-setup')}>Open project <ArrowRight size={14} /></Button>}
+        </div>
+        {projectError ? <div role="alert"><p>{projectError}</p><button className="btn btn-secondary" onClick={() => void loadProject()}>Try again</button></div> : !project ? <p role="status">Loading project details…</p> : <>
+          <p className="overview-project-scope">This deployment exposes one configured project. A platform-wide project inventory is not available yet.</p>
+          <h3>{typeof projectDetails.name === 'string' && projectDetails.name || project.scope.project_id}</h3>
+          {typeof projectDetails.objective === 'string' && projectDetails.objective && <p>{projectDetails.objective}</p>}
+          <dl className="overview-project-details">
+            <div><dt>Tenant</dt><dd>{project.scope.tenant_id}</dd></div>
+            <div><dt>Project ID</dt><dd>{project.scope.project_id}</dd></div>
+            <div><dt>Configuration</dt><dd><Badge variant="secondary">{project.project_layer ? 'Applied' : 'Not applied yet'}</Badge></dd></div>
+            <div><dt>Environments</dt><dd>{project.runtime.environments?.filter(env => env.enabled !== false).map(env => env.name || env.id).join(', ') || 'None configured'}</dd></div>
+            <div><dt>Recent investigations</dt><dd>{runs.length} shown · {activeRunsCount} running</dd></div>
+            <div><dt>Effective agents</dt><dd>{harnessData ? harnessData.effective_agents.length : 'Unavailable'}</dd></div>
+            <div><dt>Time zone</dt><dd>{typeof projectDetails.timezone === 'string' && projectDetails.timezone || 'Not set'}</dd></div>
+          </dl>
+        </>}
+      </Card>
 
       {/* KPI / Telemetry Metric Grid (Aligned with standard layout.css .metric-grid) */}
       <section className="metric-grid">

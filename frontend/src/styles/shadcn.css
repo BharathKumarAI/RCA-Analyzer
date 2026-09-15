@@ -1,0 +1,32 @@
+/* Keep Tailwind isolated from the existing app: prefixed utilities, no global reset. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(tw) important;
+@import "tw-animate-css";
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--tx);
+  --color-card: var(--card);
+  --color-card-foreground: var(--tx);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--tx);
+  --color-primary: var(--acc);
+  --color-primary-foreground: var(--tx-inverse);
+  --color-secondary: var(--card-subtle);
+  --color-secondary-foreground: var(--tx);
+  --color-muted: var(--card-subtle);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--card-hover);
+  --color-accent-foreground: var(--tx);
+  --color-destructive: var(--acc-rose);
+  --color-destructive-foreground: var(--tx-inverse);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--line-focus);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+}
