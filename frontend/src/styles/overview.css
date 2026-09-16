@@ -1558,3 +1558,655 @@
     justify-content: flex-end;
   }
 }
+
+/* ==========================================================================
+   14. OrchestrateIQ Modern Layout System (Reference Alignment)
+   ========================================================================== */
+.orchestrate-dashboard-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+/* Top Row: Health Card (Left) + 2x2 KPI Grid (Right) */
+.orchestrate-top-row {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.15fr) minmax(500px, 2fr);
+  gap: 20px;
+  align-items: stretch;
+}
+
+@media (max-width: 1100px) {
+  .orchestrate-top-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Standard OrchestrateIQ Floating Card */
+.orchestrate-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 20px);
+  box-shadow: var(--shadow-card);
+  padding: 24px 28px;
+  position: relative;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+.orchestrate-card:hover {
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--line-strong);
+}
+
+.orchestrate-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.orchestrate-card-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.orchestrate-card-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--tx);
+  margin: 0;
+}
+
+.orchestrate-card-subtitle {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* Health Badge */
+.orchestrate-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.orchestrate-status-pill.healthy {
+  background: var(--status-healthy-bg);
+  color: var(--status-healthy);
+  border: 1px solid rgba(22, 163, 74, 0.2);
+}
+
+.orchestrate-status-pill.degraded {
+  background: var(--status-degraded-bg);
+  color: var(--status-degraded);
+  border: 1px solid rgba(217, 119, 6, 0.2);
+}
+
+.orchestrate-status-pill.error {
+  background: var(--status-failing-bg);
+  color: var(--status-failing);
+  border: 1px solid rgba(220, 38, 38, 0.2);
+}
+
+.orchestrate-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Health Body: Radial Arc Gauge + Key Stats */
+.orchestrate-health-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+@media (max-width: 600px) {
+  .orchestrate-health-body {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
+.health-gauge-box {
+  position: relative;
+  width: 180px;
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.health-gauge-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.health-gauge-center {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  line-height: 1.1;
+  pointer-events: none;
+}
+
+.health-gauge-score {
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--tx);
+  font-family: var(--font-sans);
+}
+
+.health-gauge-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.health-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.health-stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .health-stat-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.health-stat-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.health-stat-value {
+  color: var(--tx);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* 2x2 KPI Grid */
+.orchestrate-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 600px) {
+  .orchestrate-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.orchestrate-kpi-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 20px);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  min-height: 120px;
+}
+
+.orchestrate-kpi-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.orchestrate-kpi-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.orchestrate-kpi-icon-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.orchestrate-kpi-icon-circle.green {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+
+.orchestrate-kpi-icon-circle.purple {
+  background: rgba(168, 85, 247, 0.12);
+  color: #9333ea;
+}
+
+.orchestrate-kpi-icon-circle.amber {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.orchestrate-kpi-icon-circle.blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.orchestrate-kpi-name {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.orchestrate-kpi-mid {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orchestrate-kpi-stat {
+  font-size: 28px;
+  font-weight: 750;
+  color: var(--tx);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-family: var(--font-sans);
+}
+
+.orchestrate-kpi-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.orchestrate-kpi-trend.neutral {
+  color: var(--muted);
+}
+
+.orchestrate-kpi-trend.positive {
+  color: #16a34a;
+}
+
+.orchestrate-kpi-trend.negative {
+  color: #ea580c;
+}
+
+.orchestrate-kpi-sparkline-box {
+  width: 90px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Live Agent Network Topology DAG Card
+   ========================================================================== */
+.orchestrate-network-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 20px);
+  box-shadow: var(--shadow-card);
+  padding: 24px 28px;
+  position: relative;
+  overflow: hidden;
+}
+
+.network-controls-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.network-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--tx);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.network-select-btn:hover {
+  background: var(--card-hover);
+  border-color: var(--line-strong);
+}
+
+.network-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.network-expand-btn:hover {
+  background: var(--card-hover);
+  border-color: var(--brand-blue);
+  color: var(--brand-blue);
+}
+
+.network-legend-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.network-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.legend-dot.healthy { background: #16a34a; }
+.legend-dot.degraded { background: #d97706; }
+.legend-dot.failing { background: #dc2626; }
+.legend-dot.idle { background: #94a3b8; }
+
+/* Interactive Topology Stage / Canvas */
+.network-dag-stage {
+  position: relative;
+  width: 100%;
+  min-height: 280px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  padding: 30px 20px;
+  box-sizing: border-box;
+}
+
+.network-dag-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Node layout on the canvas */
+.network-nodes-layer {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+}
+
+.network-column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  justify-content: center;
+  align-items: center;
+}
+
+.network-node-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  padding: 8px 18px 8px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  min-width: 165px;
+}
+
+.network-node-chip:hover {
+  transform: scale(1.03);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.09);
+  border-color: var(--line-strong);
+}
+
+.network-node-chip.active {
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 2px var(--brand-blue-glow), 0 8px 20px rgba(0, 0, 0, 0.09);
+}
+
+.network-node-chip.degraded {
+  border: 1.5px dashed #d97706;
+  background: var(--card);
+  box-shadow: 0 0 14px rgba(217, 119, 6, 0.2);
+}
+
+.network-node-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.network-node-icon.blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.network-node-icon.green {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+
+.network-node-icon.amber {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+}
+
+.network-node-texts {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.network-node-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--tx);
+}
+
+.network-node-metric {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* Traveling pulse animation */
+@keyframes wire-pulse {
+  0% { offset-distance: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* ==========================================================================
+   Bottom Row: Active Incidents + Cost by Agent
+   ========================================================================== */
+.orchestrate-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 900px) {
+  .orchestrate-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.incident-row-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  transition: all 0.15s ease;
+}
+
+.incident-row-item:hover {
+  background: var(--card-hover);
+  border-color: var(--line-strong);
+}
+
+.incident-left-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.incident-badge-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.incident-badge-tag.critical {
+  background: rgba(220, 38, 38, 0.15);
+  color: #dc2626;
+}
+
+.incident-badge-tag.warning {
+  background: rgba(217, 119, 6, 0.15);
+  color: #d97706;
+}
+
+.incident-badge-tag.info {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.incident-title-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.incident-right-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Cost by Agent / Model Bar Items */
+.cost-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.cost-bar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+}
+
+.cost-bar-name {
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.cost-bar-val {
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--tx);
+}
+
+.cost-bar-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.cost-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--brand-blue) 0%, #8b5cf6 100%);
+  transition: width 0.4s ease;
+}
+

@@ -418,9 +418,51 @@ export const Topbar: React.FC<TopbarProps> = ({
         </button>
       </div>
 
-      {/* Right: 3 Clustered Zones with Dividers */}
+      {/* Center: Sleek OrchestrateIQ Pill Navigation */}
+      <nav className="topbar-nav-pills" aria-label="Primary navigation">
+        {[
+          { id: 'overview', label: 'Overview', page: 'overview' as ActivePage, matches: ['overview'] },
+          { id: 'workflows', label: 'Workflows', page: 'chat' as ActivePage, matches: ['chat'] },
+          { id: 'live-map', label: 'Live Map', page: 'orchestration' as ActivePage, matches: ['orchestration'] },
+          { id: 'traces', label: 'Traces', page: 'runs' as ActivePage, matches: ['runs'] },
+          { id: 'incidents', label: 'Incidents', page: (projectKey ? 'triage-board' : 'alerts') as ActivePage, matches: ['triage-board', 'tickets', 'alerts', 'rca-workbench'] },
+          { id: 'insights', label: 'Insights', page: 'metrics' as ActivePage, matches: ['metrics', 'insights'] },
+        ].map(tab => {
+          const isActive = tab.matches.includes(activePage);
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`topbar-nav-pill-btn ${isActive ? 'active' : ''}`}
+              onClick={() => onNavigate && onNavigate(tab.page)}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Right: OrchestrateIQ Styled Utility Cluster */}
       <div className="topbar-right">
-        {/* Zone 1: Primary Action CTA */}
+        {/* Live Status Badge */}
+        <div className="topbar-live-chip" title="Live real-time telemetry streaming">
+          <span className="live-pulse-dot" aria-hidden="true" />
+          <span>Live</span>
+        </div>
+
+        {/* Time Window Dropdown */}
+        <button
+          type="button"
+          className="topbar-time-dropdown-btn"
+          title="Current telemetry observation window: 30 minutes"
+          onClick={() => onNavigate && onNavigate('metrics')}
+        >
+          <span>30 min</span>
+          <ChevronDown size={11} aria-hidden="true" />
+        </button>
+
+        {/* Primary Action CTA */}
         {onNewInvestigation && activePage !== 'chat' && (
           <div className="topbar-action-group">
             <button
@@ -436,11 +478,7 @@ export const Topbar: React.FC<TopbarProps> = ({
           </div>
         )}
 
-        {onNewInvestigation && activePage !== 'chat' && (
-          <div className="topbar-divider" aria-hidden="true" />
-        )}
-
-        {/* Zone 2: Compact Utility Icons Dock */}
+        {/* Compact Utility Icons Dock */}
         <div className="topbar-utility-dock">
           {/* Telemetry Pill & Popover */}
           <div className="topbar-menu-wrapper" ref={telemetryRef}>
@@ -613,7 +651,7 @@ export const Topbar: React.FC<TopbarProps> = ({
         <div className="topbar-menu-wrapper" ref={userMenuRef}>
           <button
             type="button"
-            className={`topbar-user-btn ${userMenuOpen ? 'active' : ''}`}
+            className={`topbar-user-btn topbar-user-pill ${userMenuOpen ? 'active' : ''}`}
             onClick={() => {
               setUserMenuOpen(open => !open);
               setTelemetryOpen(false);
@@ -624,14 +662,19 @@ export const Topbar: React.FC<TopbarProps> = ({
             aria-haspopup="dialog"
           >
             <div className="topbar-user-avatar-wrap">
-              <div className="topbar-user-avatar" aria-hidden="true">
+              <div className="topbar-user-avatar topbar-user-gradient-avatar" aria-hidden="true">
                 {principal.subject.charAt(0).toUpperCase()}
               </div>
               <span className="user-online-dot" aria-label="Online status" />
             </div>
-            <div className="topbar-user-info">
-              <span className="topbar-user-name">{principal.subject.split('@')[0]}</span>
-              <span className="topbar-role-badge">{primaryRole}</span>
+            <div className="topbar-user-info topbar-user-meta">
+              <span className="topbar-user-name topbar-user-primary-name">
+                {principal.roles.includes('PLATFORM_ADMIN') ? 'Platform Team' : principal.subject.split('@')[0]}
+              </span>
+              <span className="topbar-user-sub-label">
+                {primaryRole} · {projectKey || principal.project_id || 'acme-ai'}
+              </span>
+              <span className="sr-only topbar-role-badge">{primaryRole}</span>
             </div>
             <ChevronDown size={12} className="topbar-user-chevron" aria-hidden="true" />
           </button>

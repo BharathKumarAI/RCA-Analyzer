@@ -118,6 +118,9 @@ const projectPath = (projectKey: string, page: ActivePage, search = window.locat
 class PageErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: unknown, errorInfo: unknown) {
+    console.error('PageErrorBoundary caught error:', error, errorInfo);
+  }
   render() {
     if (this.state.failed) return <div className="notice-banner" role="alert" style={{ margin: 24 }}>
       <p>This page could not load. The application may have been updated. Reload to reconnect your session and try again.</p>

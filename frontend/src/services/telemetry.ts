@@ -61,8 +61,8 @@ export interface SreMetrics {
 }
 
 export interface TelemetryFilters {
-  start: string;
-  end: string;
+  start?: string;
+  end?: string;
   capability?: string;
   stage?: string;
   mode: 'live' | 'demo';

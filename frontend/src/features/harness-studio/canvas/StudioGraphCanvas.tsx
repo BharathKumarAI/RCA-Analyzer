@@ -12,10 +12,10 @@ interface StudioGraphCanvasProps {
 
 type Position = { x: number; y: number };
 
-const NODE_WIDTH = 224;
-const NODE_HEIGHT = 132;
-const COLUMN_GAP = 96;
-const ROW_GAP = 42;
+const NODE_WIDTH = 236;
+const NODE_HEIGHT = 64;
+const COLUMN_GAP = 100;
+const ROW_GAP = 32;
 const DEPENDENCY_KINDS = new Set(['model', 'model_profile', 'tool', 'connector', 'skill', 'policy', 'governance', 'binding', 'dependency']);
 const EXECUTION_KINDS = new Set(['execution', 'delegation', 'branch', 'join']);
 const isDependencyEdgeKind = (kind: string) => !EXECUTION_KINDS.has(kind.toLowerCase()) && !/sub.?agent|workflow|contains|sequence|parallel|next|execution|delegat|branch|join/.test(kind.toLowerCase());
@@ -243,38 +243,104 @@ export const StudioGraphCanvas: React.FC<StudioGraphCanvasProps> = ({ harness, s
         }
       }}
     >
-      <div className="hs-graph-toolbar">
-        <div className="hs-graph-search"><Search size={13} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Find component" aria-label="Find component" /></div>
-        <span className="hs-graph-count">{visibleNodes.length}/{nodes.length} nodes</span>
+      {/* OrchestrateIQ Topbar Header & Legend */}
+      <div className="hs-graph-topbar">
+        <div className="hs-graph-title-group">
+          <span className="hs-canvas-title">Live agent network</span>
+          <span className="hs-canvas-subtitle">
+            {visibleNodes.length} nodes · {visibleEdges.length} connections · updating in real time
+          </span>
+        </div>
+
+        <div className="hs-graph-legend">
+          <span className="hs-legend-item healthy"><span className="hs-legend-dot" /> Healthy</span>
+          <span className="hs-legend-item degraded"><span className="hs-legend-dot" /> Degraded</span>
+          <span className="hs-legend-item failing"><span className="hs-legend-dot" /> Failing</span>
+          <span className="hs-legend-item idle"><span className="hs-legend-dot" /> Idle</span>
+        </div>
+
+        <div className="hs-graph-actions">
+          <div className="hs-graph-search">
+            <Search size={13} />
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="Find component"
+              aria-label="Find component"
+            />
+          </div>
+          <div className="hs-graph-controls">
+            <button type="button" aria-label="Zoom out" onClick={() => setZoom(value => Math.max(0.25, value - 0.1))}><Minus size={13} /></button>
+            <span>{Math.round(zoom * 100)}%</span>
+            <button type="button" aria-label="Zoom in" onClick={() => setZoom(value => Math.min(1.8, value + 0.1))}><Plus size={13} /></button>
+            <button type="button" aria-label="Fit graph" onClick={fit}><Maximize2 size={13} /></button>
+          </div>
+        </div>
       </div>
-      <div className="hs-graph-controls">
-        <button type="button" aria-label="Zoom out" onClick={() => setZoom(value => Math.max(0.25, value - 0.1))}><Minus size={13} /></button>
-        <span>{Math.round(zoom * 100)}%</span>
-        <button type="button" aria-label="Zoom in" onClick={() => setZoom(value => Math.min(1.8, value + 0.1))}><Plus size={13} /></button>
-        <button type="button" aria-label="Fit graph" onClick={fit}><Maximize2 size={13} /></button>
-      </div>
+
       <div className="hs-canvas-world hs-graph-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
         <svg className="hs-svg-wires" width="5000" height="5000" aria-hidden="true">
-          <defs><marker id="studio-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 1 L 10 5 L 0 9 z" fill="var(--hs-wire-stroke)" /></marker></defs>
-          {visibleEdges.map(edge => {
-            const source = positions[edge.source]; const target = positions[edge.target];
+          <defs>
+            <marker id="studio-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--hs-wire-stroke)" />
+            </marker>
+            <filter id="wire-glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over" />
+            </filter>
+          </defs>
+          {visibleEdges.map((edge, edgeIndex) => {
+            const source = positions[edge.source];
+            const target = positions[edge.target];
             if (!source || !target) return null;
-            const x1 = source.x + NODE_WIDTH / 2; const y1 = source.y + NODE_HEIGHT; const x2 = target.x + NODE_WIDTH / 2; const y2 = target.y;
-            const curve = Math.max(34, Math.abs(y2 - y1) * 0.48);
+            // Smooth horizontal Bézier wire: right-center of source to left-center of target
+            const x1 = source.x + NODE_WIDTH;
+            const y1 = source.y + NODE_HEIGHT / 2;
+            const x2 = target.x;
+            const y2 = target.y + NODE_HEIGHT / 2;
+            const dx = Math.max(42, Math.abs(x2 - x1) * 0.48);
+            const pathD = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
             const dependency = isDependencyEdgeKind(edge.kind);
-            return <g key={`${edge.source}:${edge.target}:${edge.kind}`}><path className={`hs-wire-base ${dependency ? 'hs-wire-dependency' : ''}`} markerEnd="url(#studio-arrow)" d={`M ${x1} ${y1} C ${x1} ${y1 + curve}, ${x2} ${y2 - curve}, ${x2} ${y2}`} /><text className="hs-wire-caption" x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 4} textAnchor="middle">{edge.kind}</text></g>;
+            const duration = 2.4 + (edgeIndex % 3) * 0.4;
+            return (
+              <g key={`${edge.source}:${edge.target}:${edge.kind}`}>
+                <path
+                  className={`hs-wire-base ${dependency ? 'hs-wire-dependency' : ''}`}
+                  markerEnd="url(#studio-arrow)"
+                  d={pathD}
+                />
+                {!dependency && (
+                  <circle r="3" fill="var(--hs-acc)" filter="url(#wire-glow)" className="hs-wire-pulse">
+                    <animateMotion path={pathD} dur={`${duration}s`} repeatCount="indefinite" />
+                  </circle>
+                )}
+                <text className="hs-wire-caption" x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 6} textAnchor="middle">
+                  {edge.kind}
+                </text>
+              </g>
+            );
           })}
         </svg>
+
         {visibleNodes.map(node => {
           const position = positions[node.id] || { x: 60, y: 60 };
           const hasChildren = (childrenByParent.get(node.id) || []).length > 0;
           const isCollapsed = collapsed.has(node.id);
           const selected = selectedNodeId === node.id;
           const execution = eventStatus.get(node.id);
+
+          const nodeStatus: 'healthy' | 'degraded' | 'failing' | 'idle' =
+            node.enabled === false ? 'idle'
+            : execution?.state === 'failed' || execution?.state === 'blocked' ? 'failing'
+            : execution?.state === 'running' ? 'degraded'
+            : execution?.state === 'completed' ? 'healthy'
+            : node.reason ? 'degraded'
+            : 'healthy';
+
           return (
             <div
               key={node.id}
-              className={`hs-graph-node ${selected ? 'selected' : ''} ${node.enabled === false ? 'disabled' : ''} ${hasChildren ? 'group' : ''} ${execution ? `run-${execution.state}` : ''}`}
+              className={`hs-graph-node status-${nodeStatus} ${selected ? 'selected' : ''} ${node.enabled === false ? 'disabled' : ''} ${hasChildren ? 'group' : ''} ${execution ? `run-${execution.state}` : ''}`}
               style={{ left: position.x, top: position.y }}
               onPointerDown={event => { event.stopPropagation(); setDragging({ id: node.id, x: event.clientX, y: event.clientY, start: position }); }}
               onClick={event => { event.stopPropagation(); selectNode(node.id); }}
@@ -283,12 +349,39 @@ export const StudioGraphCanvas: React.FC<StudioGraphCanvasProps> = ({ harness, s
               aria-label={`Select ${node.label}`}
               onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(node.id); } }}
             >
-              <div className="hs-graph-node-head"><span className="hs-graph-node-icon">{kindIcon(node.kind)}</span><span className="hs-graph-node-kind">{node.kind}</span>{hasChildren && <button type="button" className="hs-graph-collapse" aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${node.label}`} onClick={event => { event.stopPropagation(); setCollapsed(current => { const next = new Set(current); if (next.has(node.id)) next.delete(node.id); else next.add(node.id); return next; }); }}>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button>}</div>
-              <div className="hs-graph-node-label">{node.label}</div>
-              <div className="hs-graph-node-meta">{node.ref || node.source || node.id}</div>
-              {execution && <div className="hs-graph-node-run"><span />{execution.state} · {execution.kind}</div>}
-              {node.reason && <div className="hs-graph-node-reason">{node.reason}</div>}
-              {hasChildren && <div className="hs-graph-node-children">{isCollapsed ? `${(childrenByParent.get(node.id) || []).length} internal components hidden` : `${(childrenByParent.get(node.id) || []).length} internal components`}</div>}
+              <div className="hs-node-pill-content">
+                <span className={`hs-graph-node-icon kind-${node.kind.toLowerCase()}`}>
+                  {kindIcon(node.kind)}
+                </span>
+                <div className="hs-node-text-col">
+                  <div className="hs-graph-node-label" title={node.label}>{node.label}</div>
+                  <div className="hs-graph-node-meta" title={node.ref || node.source || node.id}>
+                    {execution ? `${execution.state} · ${execution.kind}` : node.kind}
+                  </div>
+                </div>
+                <div className={`hs-node-status-badge ${nodeStatus}`}>
+                  <span className="hs-node-status-dot" />
+                  <span className="hs-node-status-text">{nodeStatus}</span>
+                </div>
+                {hasChildren && (
+                  <button
+                    type="button"
+                    className="hs-graph-collapse"
+                    aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${node.label}`}
+                    onClick={event => {
+                      event.stopPropagation();
+                      setCollapsed(current => {
+                        const next = new Set(current);
+                        if (next.has(node.id)) next.delete(node.id);
+                        else next.add(node.id);
+                        return next;
+                      });
+                    }}
+                  >
+                    {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}

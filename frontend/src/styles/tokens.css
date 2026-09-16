@@ -23,6 +23,22 @@
   --accent-indigo: var(--acc2);
   --accent-magenta: var(--acc);
   --accent-amber: var(--acc-amber);
+
+  /* Modern OrchestrateIQ Dashboard Tokens */
+  --radius-card: 20px;
+  --shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+  --shadow-card-hover: 0 10px 25px -4px rgba(15, 23, 42, 0.08), 0 4px 10px -2px rgba(15, 23, 42, 0.03);
+  --brand-blue: #2563eb;
+  --brand-blue-hover: #1d4ed8;
+  --brand-blue-glow: rgba(37, 99, 235, 0.18);
+  --status-healthy: #16a34a;
+  --status-healthy-bg: #dcfce7;
+  --status-degraded: #d97706;
+  --status-degraded-bg: #fef3c7;
+  --status-failing: #dc2626;
+  --status-failing-bg: #fee2e2;
+  --status-idle: #64748b;
+  --status-idle-bg: #f1f5f9;
 }
 [data-theme="dark"] {
   --bg: #17151b; --card: #201d27; --card-hover: #292430; --card-active: #402337; --card-subtle: #1c1922;
@@ -45,6 +61,22 @@
   --accent-indigo: var(--acc2);
   --accent-magenta: var(--acc);
   --accent-amber: var(--acc-amber);
+
+  /* Modern OrchestrateIQ Dashboard Tokens */
+  --radius-card: 20px;
+  --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.25), 0 2px 6px -1px rgba(0, 0, 0, 0.15);
+  --shadow-card-hover: 0 10px 25px -4px rgba(0, 0, 0, 0.35), 0 4px 10px -2px rgba(0, 0, 0, 0.2);
+  --brand-blue: #3b82f6;
+  --brand-blue-hover: #60a5fa;
+  --brand-blue-glow: rgba(59, 130, 246, 0.28);
+  --status-healthy: #22c55e;
+  --status-healthy-bg: rgba(34, 197, 94, 0.15);
+  --status-degraded: #f59e0b;
+  --status-degraded-bg: rgba(245, 158, 11, 0.15);
+  --status-failing: #f87171;
+  --status-failing-bg: rgba(239, 68, 68, 0.15);
+  --status-idle: #94a3b8;
+  --status-idle-bg: rgba(148, 163, 184, 0.15);
 }
 
 .table-row-hover:hover {
