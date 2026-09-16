@@ -205,7 +205,7 @@ export function interpolateJql(
   return jql;
 }
 
-export interface PrismFullConfigurationData {
+export interface RcaAssistFullConfigurationData {
   metadata: {
     id: string;
     name: string;
@@ -356,15 +356,15 @@ export function formatToYaml(data: any, indent = 0): string {
   return String(data);
 }
 
-/** Build complete PrismProjectConfiguration document */
-export function buildPrismDocument(data: PrismFullConfigurationData): Record<string, any> {
+/** Build complete RcaAssistProjectConfiguration document */
+export function buildRcaAssistDocument(data: RcaAssistFullConfigurationData): Record<string, any> {
   const teamScope = data.projectScope.teamScope || DEFAULT_TEAM_SCOPE;
   const jqlConfig = data.jqlConfiguration || DEFAULT_JQL_CONFIG;
   const jiraFields = data.jiraCustomFields || DEFAULT_JIRA_CUSTOM_FIELDS;
 
   return {
     schema_version: '1.0',
-    kind: 'PrismProjectConfiguration',
+    kind: 'RcaAssistProjectConfiguration',
     metadata: {
       project_id: data.metadata.id || 'sag',
       project_name: data.metadata.name || 'SAG',
@@ -583,7 +583,7 @@ export function buildPrismDocument(data: PrismFullConfigurationData): Record<str
           rate_limit_rpm: data.connectors.find(c => c.type === 'jira')?.rateLimitRpm || 120,
           custom_fields: {
             _description:
-              'Jira custom field mappings for PRISM/SAG ingestion. Field IDs are Jira-instance-specific; logical names are platform-agnostic.',
+              'Jira custom field mappings for RCA assist/SAG ingestion. Field IDs are Jira-instance-specific; logical names are platform-agnostic.',
             field_mapping: jiraFields.reduce((acc, f) => {
               acc[f.logical_name] = {
                 customfield_id: f.customfield_id,
@@ -709,8 +709,8 @@ export function buildPrismDocument(data: PrismFullConfigurationData): Record<str
 }
 
 /** Return contextual YAML slice for a given step */
-export function getContextualYaml(step: number, data: PrismFullConfigurationData, fullDoc?: Record<string, any>): string {
-  const doc = fullDoc || buildPrismDocument(data);
+export function getContextualYaml(step: number, data: RcaAssistFullConfigurationData, fullDoc?: Record<string, any>): string {
+  const doc = fullDoc || buildRcaAssistDocument(data);
   switch (step) {
     case 1:
       return formatToYaml({

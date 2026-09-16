@@ -1,341 +1,282 @@
-# Architecture and execution flows
+# Architecture and data flow
 
-This is the implementation reference for the RCA Analyzer harness. Read the [harness guide](harness.md) first for the component map and lifecycle diagrams; this guide explains the same system at package, configuration, and API-flow level.
+The request path is **FastAPI → authenticated project scope → capability and configuration resolution → SQLAlchemy run/session persistence → native ADK workflow**. Application code enforces access, budgets and storage; ADK executes agents. A prompt cannot grant permission. Sources: [application](../app/api/application.py), [runner](../app/runtime/runner.py), [root graph](../app/agents/root.py).
 
-Start with the [request flow](#1-request-and-preflight-flow), then follow the [agent workflow](#2-agent-workflow) and [connector call](#3-agent-to-connector-flow). Uploads happen separately through the [file flow](#4-file-processing-flow). Project specialists enter new runs through the [approval flow](#5-project-agent-approval-and-discovery). The [result flow](#6-results-progress-and-persistence) explains what the client receives.
+## Contents
 
-These diagrams describe the current backend. A future UI calls the same APIs. Solid arrows show execution or data movement; dotted arrows show configuration or access to stored data. A connector is an API client, not an agent. A tool is the typed interface an agent can call.
+- [Chat integration with the existing framework](#chat-integration-with-the-existing-framework)
 
-## Configuration ownership and inheritance
+- [System view](#system-view)
+- [Request to answer](#request-to-answer)
+- [Agent workflow](#agent-workflow)
+- [Tool to evidence](#tool-to-evidence)
+- [Files, knowledge and conversation context](#files-knowledge-and-conversation-context)
+- [Lifecycle and failure boundaries](#lifecycle-and-failure-boundaries)
+- [Detailed execution walkthrough](#detailed-execution-walkthrough)
+- [Streaming, reconnection and cancellation](#streaming-reconnection-and-cancellation)
+- [Detailed handbook reading paths](#detailed-handbook-reading-paths)
 
-The entire backend uses a platform/project/user ownership model. Google ADK is pinned to **2.9.0** in [pyproject.toml](../pyproject.toml). Native ADK owns agent/workflow execution; application code owns authentication, resolved permissions, bounded inputs and durable records.
 
-For the selection algorithm and element-by-element precedence rules, see [harness selection rules](harness.md#selection-rules-by-harness-element). This table describes ownership; that section describes how the owned values become one run configuration.
+## Chat integration with the existing framework
 
-| Area | Platform | Project | User |
-|---|---|---|---|
-| Identity, tenant/project scope and credentials | Deployment environment and server membership; immutable | Cannot replace | Cannot replace |
-| Capability access | Enabled definitions, minimum role and action ceiling | May disable or narrow roles/actions | Cannot grant access |
-| Connector access | Implemented Jira/Splunk providers, credentials and resource scope | May disable a provider; required-provider denial disables the capability | Cannot add providers or keys |
-| Models | Stage model IDs, settings and profiles in `config/model_profiles.yaml` | Selects only explicitly delegated existing profiles per capability | Cannot select models |
-| Execution budgets | Process concurrency and maximum per-run limits | May reduce model/tool calls, deadline, context and evidence limits | Cannot increase budgets |
-| Workflow | Native graph, stage availability and mandatory synthesis | May disable planning, attachments, specialists or parallel evidence | Cannot alter graph |
-| Stage prompts | Trusted defaults and immutable enforcement outside prompts | May replace delegated stage text; approved optimization is a baseline beneath explicit project text | Cannot replace stage prompts |
-| Skills | Instruction defaults, action bindings and override policy | Permitted overrides and further restrictions | Only overrides explicitly permitted by both higher tiers |
-| Presentation | Supported metadata formats and detail values | Team defaults and explicit user delegation | Permitted personal presentation/detail preferences |
-| Custom agents | Data-only schema and implemented tool catalog | Durable non-self administrator approval and revocation | Cannot bypass approval |
-| Persistence, input parsing and telemetry | Scoped SQLAlchemy/ADK stores, local bounded parsers, redaction and metadata export | Cannot disable safety/storage controls | Cannot disable safety/storage controls |
-
-Later instruction/default values take priority only where delegated. Permissions intersect; limits take the smaller value; a lower tier cannot restore a denial. Preferences guide model instructions and are not permission grants. The native workflow is selected by server configuration; model planning contributes notes to synthesis, not authority to rewrite the graph.
+**Proposed integration.** Preserve FastAPI authentication → server-resolved project scope/settings → capability resolution → SQLAlchemy run/session persistence → native ADK root workflow. CopilotKit may supply React interactions and AG-UI transport after compatibility verification; it does not replace authorization, the execution runner or storage.
 
 ```mermaid
 flowchart TD
-  BOOT[Application bootstrap] --> PLATFORM[Load one validated platform bundle]
-  PLATFORM --> SERVICES[Shared catalog, model profiles, connectors and stores]
-  REQUEST[Authenticated request] --> SCOPE[Server-owned tenant / project / subject]
-  SCOPE --> RESOLVE[Resolve delegated platform / project / user configuration]
-  SERVICES -.-> RESOLVE
-  RESOLVE --> PIN[Pin effective capability, instructions, workflow, limits and hashes]
-  PIN --> STORE[(SQLAlchemy run and attachment records)]
-  PIN --> ADK[Fresh native ADK Workflow and Session]
-  ADK --> TOOL[Single filtered FunctionTool / AgentTool surface]
-  TOOL --> GUARD[Active-run, budget and authorization checks]
-  GUARD --> PROVIDER[Scoped read-only providers]
-  PROVIDER --> EVIDENCE[(Redacted evidence and provenance)]
-  EVIDENCE --> FINAL[Structured synthesis and citation validation]
-  FINAL --> STORE
+    UI[Project chat and evidence panels] --> API[Authenticated chat and run APIs]
+    UI -. Optional AG-UI adapter .-> API
+    API --> SCOPE[Membership, ownership and capability resolution]
+    SCOPE --> RUN[Existing execution runner]
+    RUN --> ADK[Native ADK workflow]
+    ADK --> TOOLS[Governed read-only tools and project providers]
+    RUN --> DB[SQLAlchemy messages, runs, events and evidence]
+    DB --> API
 ```
 
-## Code and content layout
+Anchors: [application](../app/api/application.py), [identity](../app/identity/auth.py), [chat routes](../app/api/routes/chats.py), [run routes](../app/api/routes/runs.py), [runner](../app/runtime/runner.py), [ADK root](../app/agents/root.py), [governance](../app/runtime/governance.py).
 
-```text
-app/
-  api/                 HTTP middleware, request schemas and focused route modules
-  configuration/       Platform bundle, typed layers, resolution and agent approval
-  capabilities/        Declarative capability registry and authorization
-  identity/            RS256 verification and server-owned membership
-  runtime/             Resource lifecycle, run snapshots, execution and governance
-  agents/              Native ADK graph and stage factories
-  tools/               One implemented action catalog and typed domain tools
-  connectors/providers/ Network clients, credentials and local/GCS blobs
-  persistence/         Async SQLAlchemy run, evidence and attachment store
-  inputs/              Bounded local file parsing and OCR
-  models/              Stage profiles and model call limiter
-  policy/              Role/attribute checks, redaction and enforcement fingerprint
-  optimization/        Isolated replay, MLflow evaluation and reviewed promotion
-  observability/       Operational telemetry and metrics
-blob_local/platform/
-  config/              Platform operational defaults and model profiles
-  capabilities/        Declarative capability contracts
-  skills/              Default instruction assets
-  layers/platform.yaml Explicit delegation policy
-blob_local/projects/<tenant-key>/<project-key>/
-  configuration/project.yaml  Administrator-managed project configuration
-  configuration/users/        Explicitly delegated subject configuration
-  artifacts/framework/objects/agents/       Immutable agent definitions
-  artifacts/framework/uploads/              Content types and approval-stage views
-  artifacts/framework/optimizations/objects/ Immutable datasets/evaluated bundles
-  artifacts/chats/chat_<id>/uploads/         Raw originals and processed text
-  artifacts/chats/chat_<id>/created/         Generated terminal run/evidence exports
-  exports/                    Operator-managed exports; not automatic
+| Reference | Intended use | Boundary |
+| --- | --- | --- |
+| [Pi harness](https://github.com/earendil-works/pi) | Visible agent/tool activity and focused interaction loop | Reference only; no parallel execution runtime, shell toolset or provider layer. |
+| [OpenWorker](https://github.com/andrewyng/openworker) | Outcome-oriented conversations, deliverables and auditability | Reference only; do not import desktop execution, source writes, autonomy rules or scheduling. |
+| [CopilotKit](https://docs.copilotkit.ai/) | Candidate chat/headless UI and typed component rendering | Preserve application styling, safe rendering and SQLAlchemy history. |
+| [CopilotKit ADK](https://docs.copilotkit.ai/google-adk) | Candidate AG-UI bridge | Verify pinned package compatibility against this governed runner; examples are not deployment evidence. |
+
+The adapter must satisfy these requirements:
+
+- Map transport thread/run IDs to authenticated conversation/run IDs server-side. Client identifiers cannot select another owner's conversation or arbitrary native session.
+- Reuse admission, idempotency, immutable run contracts and cancellation. One submission must not launch both an adapter agent and the existing runner.
+- Keep persisted messages, evidence and run state authoritative. Shared UI state contains allowed presentation context only; revalidate resource IDs. Browser state cannot grant roles, tenant authority or connector access.
+- Map real events with stable IDs, ordering, deduplication and terminal outcomes. Progress revisions and trace sequences are separate cursors; preserve truncation. Snapshot progress is not token streaming; emit text deltas only when supplied by the backend.
+- Render allowlisted typed evidence/result/activity components. Agent text cannot inject HTML/JavaScript or directly invoke protected connectors from the browser.
+- Scope clarification responses to the requesting conversation/turn and validate them before execution. Human input cannot bypass independent configuration approval or enable unsupported source writes.
+- Bound history/context and preserve provenance; never silently copy context between projects. Reconnect reads saved state rather than starting another run.
+
+The current submission stream owns in-process execution and cancels unfinished work during cleanup. Preserve that contract or explicitly redesign it before claiming continued execution after disconnect. Durable queueing, scheduling and restart recovery remain outside this release. See [streaming lifecycle](#streaming-reconnection-and-cancellation) and [delivery gates](development.md#chat-and-metrics-delivery-plan).
+
+## System view
+
+```mermaid
+flowchart LR
+  UI[React workspace] --> API[FastAPI boundary]
+  API --> AUTH[Verified identity and project membership]
+  AUTH --> CFG[Resolve capability and approved configuration]
+  CFG --> RUN[Run contract and execution runner]
+  RUN --> ADK[Native ADK workflow]
+  ADK --> GOV[Tool governance and budgets]
+  GOV --> TOOLS[Typed domain tools]
+  TOOLS --> PROVIDERS[Scoped read-only providers]
+  PROVIDERS --> SOURCES[Authorized external sources]
+  GOV --> DB[(PostgreSQL records and evidence)]
+  RUN --> DB
+  API --> FILES[Bounded local extraction]
+  FILES --> DB
+  FILES --> BLOBS[(Local or GCS blobs)]
+  DB --> RESULT[Validated findings and citations]
+  RESULT --> UI
+  click UI "project.md#project-page-map" "Open detailed explanation"
+  click API "security.md#request-authorization" "Open detailed explanation"
+  click AUTH "security.md#roles-and-project-membership" "Open detailed explanation"
+  click CFG "configuration.md#scope-and-precedence" "Open detailed explanation"
+  click RUN "harness.md#from-configuration-to-execution" "Open detailed explanation"
+  click ADK "harness.md#default-investigation-graph" "Open detailed explanation"
+  click GOV "harness.md#tool-and-model-boundaries" "Open detailed explanation"
+  click TOOLS "connectors.md#provider-specific-forms" "Open detailed explanation"
+  click PROVIDERS "connectors.md#runtime-resolution" "Open detailed explanation"
+  click SOURCES "connectors.md#provider-specific-forms" "Open detailed explanation"
+  click DB "data-model.md#run-and-evidence-records" "Open detailed explanation"
+  click FILES "security.md#files-and-untrusted-content" "Open detailed explanation"
+  click BLOBS "data-model.md#storage-lifecycles" "Open detailed explanation"
+  click RESULT "architecture.md#4-synthesis-and-terminal-state" "Open detailed explanation"
 ```
 
-The [ASGI application factory](../app/api/application.py) composes the HTTP boundary. [Application bootstrap](../app/runtime/bootstrap.py) validates and shares the [platform bundle](../app/configuration/platform.py), owns cleanup, and creates connector clients once per process. [Routes](../app/api/routes/) call services; they do not create infrastructure. [Layer resolution](../app/configuration/layers.py) never takes scope or filesystem paths from request bodies. [Investigation persistence](../app/persistence/store.py) owns durable run, evidence and attachment records.
+The arrows show logical responsibility and data movement, not separate services. Providers are the network and credential boundary. Database and blob storage are complementary stores, not interchangeable backups. See [configuration and governance](configuration.md).
 
-[Project initialization and storage](../blob_local/projects/README.md) · [Project settings reference](../blob_local/platform/layers/projects/README.md) · [User example](../blob_local/platform/layers/users/README.md) · [Delegation policy](../blob_local/platform/layers/platform.yaml)
+## Request to answer
 
-Scoped YAML requires operator review and restart; there is no new self-service settings API. File names are descriptive only; explicit scope fields select content. Duplicate scopes/keys, aliases, unknown fields, invalid references and unauthorized overrides fail startup. Native guardrails never become optional model tools. The retired plugin registry, disabled database/write tool wrappers, unused circuit breaker and unused mutation/incident/remediation scaffolds are removed.
+1. **Authenticate before processing uploads or runs.** Verify bearer identity or browser session and resolve active project membership. The project header selects context only. [Authentication](../app/identity/auth.py).
+2. **Resolve intent when using Chat.** The chat route can persist a clarification or unsupported-request message without launching tools. Direct run requests use their validated capability contract. [Intent service](../app/runtime/intent.py), [chat routes](../app/api/routes/chats.py).
+3. **Resolve and freeze the run.** Validate capability access, owned attachments, approved definitions, model profiles, permitted actions and execution limits. Persist the run contract and configuration provenance; reject conflicting idempotency reuse. [Runner](../app/runtime/runner.py), [run contract](../app/runtime/run_contract.py).
+4. **Preflight.** Demo execution is explicitly simulated. Live execution checks configured model access and required connector health. Missing required sources block the run; optional-source limitations remain visible. [Runner](../app/runtime/runner.py).
+5. **Execute.** Build a fresh native workflow and session using the resolved graph. Share the run's budgets across model calls, tools and specialists. [Root agent](../app/agents/root.py), [model wrapper](../app/models/bounded.py).
+6. **Validate and persist.** Capture redacted evidence with IDs and provenance, validate structured findings and citations, and persist terminal results and progress. A failed or insufficient-evidence result must not appear as a successful diagnosis. [Governance](../app/runtime/governance.py), [store](../app/persistence/store.py), [run events](../app/persistence/run_events.py).
 
-## 1. Request and preflight flow
+`POST /api/v1/runs` executes within the request. Run history, progress and cancellation use persisted state, but persistence does not imply automatic recovery after process failure. Source: [run routes](../app/api/routes/runs.py).
+
+## Agent workflow
+
+The diagram shows the fullest default incident topology. Capability actions, available connectors, uploaded files and resolved stage settings determine which branches are included. An approved Harness Studio bundle can supply a validated data-only graph. Sources: [root factory](../app/agents/root.py), [workflow compiler](../app/configuration/workflow.py), [bundle compiler](../app/configuration/harness_bundles.py).
 
 ```mermaid
 flowchart TD
-  CLIENT[Client submits POST /api/v1/runs] --> AUTH[Verify JWT and server-owned project membership]
-  AUTH --> ROLE{Capability enabled and role allowed?}
-  ROLE -->|No| DENY[Reject request]
-  ROLE -->|Yes| CAPACITY{Run capacity available?}
-  CAPACITY -->|No| BUSY[HTTP 429: retry later]
-  CAPACITY -->|Yes| SNAP[Resolve scoped configuration, owned attachments and active approved agents]
-  SNAP --> CONTRACT[Snapshot capability, workflow, budgets, preferences, instructions and hashes]
-  CONTRACT --> IDEM{Matching idempotency key already stored?}
-  IDEM -->|Yes| EXISTING[Return existing run state]
-  IDEM -->|Different request for same key| CONFLICT[HTTP 409]
-  IDEM -->|No| RECORD[Persist RUNNING run and deadline]
-  RECORD --> MODE{Runtime mode}
-  MODE -->|Demo| DEMO[SIMULATED: no model or connector invocation]
-  MODE -->|Live| HEALTH[Probe configured connectors concurrently]
-  HEALTH --> REQUIRED{Required connectors healthy?}
-  REQUIRED -->|No| BLOCKED[Persist BLOCKED]
-  REQUIRED -->|Yes| MODEL{Model backend configured?}
-  MODEL -->|No| BLOCKED
-  MODEL -->|Yes| BUILD[Build fresh native ADK workflow and session]
-  BUILD --> RUN[Execute agent workflow]
-```
-
-Authentication and input errors return HTTP errors before an investigation starts. Once a run exists, execution outcomes are persisted as run statuses. An unavailable optional connector needed by retained actions is omitted and recorded as a limitation; an unavailable required connector blocks execution. Preflight checks model backend configuration, not a successful live model inference.
-
-`POST /runs` executes within its request and normally returns the completed result. It is not a durable job-queue submission. Another request can list runs, read progress, or cancel a running investigation.
-
-**Implementation:** [authentication](../app/identity/auth.py), [API middleware](../app/api/application.py) and [run routes](../app/api/routes/runs.py), [`ExecutionRunner.execute` and `_execute_contract`](../app/runtime/runner.py), [capability resolver](../app/capabilities/resolver.py), [run contract](../app/runtime/run_contract.py).
-
-## 2. Agent workflow
-
-This is the fullest topology for `incident_triage` with healthy Jira and Splunk, attachments, and an approved specialist. The factory omits branches that resolved project controls, capability permissions, enabled stages, inputs or available connectors do not support.
-
-```mermaid
-flowchart TD
-  START[Native ADK root Workflow] --> PLAN[Optional structured request planning]
-  PLAN --> FORK[Evidence acquisition]
-  FORK --> TRIAGE
-  FORK --> FILE
-  subgraph INCIDENT[Incident branch: ordered]
-    TRIAGE[Triage LlmAgent] -->|triage_result| LOGS[Log investigator LlmAgent]
-  end
-  subgraph ATTACHMENT[Attachment branch: independent]
-    FILE[File investigator LlmAgent]
-  end
-  TRIAGE -.-> ITSM[Governed get_ticket tool]
-  LOGS -.-> SEARCH[Governed query_range tool]
-  FILE -.-> TEXT[Previously extracted attachment evidence]
-  LOGS --> JOIN[Join completed evidence branches]
+  START[Resolved request] --> PLAN[Optional planning]
+  PLAN --> TRIAGE[Jira triage]
+  PLAN --> FILE[Optional attachment summary]
+  PLAN --> EXTRA[Other permitted connector evidence]
+  EXTRA --> JOIN
+  TRIAGE --> LOGS[Bounded log investigation]
+  LOGS --> JOIN[Join included evidence branches]
   FILE --> JOIN
-  JOIN --> HAS{Usable approved specialists?}
-  HAS -->|No| SYNTH[Synthesis LlmAgent]
-  HAS -->|Yes| ROUTER[Specialist router LlmAgent]
-  ROUTER --> NEED{Relevant specialist needed?}
-  NEED -->|Yes: AgentTool call| SPECIALIST[Approved project LlmAgent]
-  SPECIALIST -->|Return specialist notes| ROUTER
-  NEED -->|No more delegation| SYNTH
-  SYNTH --> VALIDATE[Validate structured result and evidence IDs]
+  JOIN --> SPECIALIST[Optional approved specialist delegation]
+  SPECIALIST --> SYNTH[Synthesis]
+  SYNTH --> CHECK[Validate findings and evidence citations]
+  click START "architecture.md#2-resolve-the-contract" "Open detailed explanation"
+  click PLAN "harness.md#stage-contracts" "Open detailed explanation"
+  click TRIAGE "connectors.md#jira-form-and-read-flow" "Open detailed explanation"
+  click FILE "security.md#files-and-untrusted-content" "Open detailed explanation"
+  click EXTRA "connectors.md#provider-specific-forms" "Open detailed explanation"
+  click LOGS "connectors.md#provider-specific-forms" "Open detailed explanation"
+  click JOIN "harness.md#native-graph-compilation" "Open detailed explanation"
+  click SPECIALIST "harness.md#adding-an-agent-or-skill" "Open detailed explanation"
+  click SYNTH "harness.md#stage-contracts" "Open detailed explanation"
+  click CHECK "architecture.md#4-synthesis-and-terminal-state" "Open detailed explanation"
 ```
 
-Jira triage precedes log investigation so the log agent can use `triage_result`. File summarization can run alongside the incident branch because its text is already extracted. The join waits for all included evidence branches before routing and synthesis. When the platform or project sets `parallel_evidence: false`, the evidence branches run sequentially. With one branch, no parallel join is needed.
+Triage precedes logs so incident context can inform log retrieval. Attachment text is already extracted and can be summarized independently. Disabling parallel evidence makes branches sequential. Approved specialists become `AgentTool` entries; the router chooses whether to invoke them. Their notes do not replace authoritative captured evidence. The run shares model-call, tool-call, context, evidence and deadline limits. Sources: [root](../app/agents/root.py), [evidence stages](../app/agents/workflows/evidence_acquisition.py), [governance](../app/runtime/governance.py).
 
-The router can choose relevant specialists from the approved `AgentTool` list; approval does not mean every specialist runs on every request. Specialists can use only their declared existing tools, within the main run's capability permissions and shared budgets. Their results are notes, not automatically authoritative evidence.
-
-| Stage | Receives | Produces | Default balanced profile |
-|---|---|---|---|
-| Planning | Request and resolved preferences | Typed `request_plan` notes | Selected triage model; no tools |
-| Triage | Request, incident ID, selected skill instructions; Jira through a tool | `triage_result` | `triage`: Flash Lite, low thinking |
-| Logs | Request, triage notes, configured lookback; Splunk through a tool | `logs_result` | `logs`: Flash, low thinking |
-| File summary | Request and recorded attachment text | `file_result` | `extraction`: Flash Lite, minimal thinking |
-| Specialist router | Request and captured evidence; approved specialist descriptions | `specialist_result` | Uses the selected profile's triage model |
-| Project specialist | Request, captured evidence, approved instructions and tools | Return value to the router | Approved `model_profile` and `stage_model` |
-| Synthesis | Stage notes and authoritative captured evidence | Structured findings or insufficient evidence | `synthesis`: Flash, high thinking |
-
-Exact model IDs, thinking settings, output limits and profile mappings are in [model_profiles.yaml](../blob_local/platform/config/model_profiles.yaml). The shared `max_parallel_models` semaphore limits simultaneous model calls across runs in one process. The resolved `max_llm_calls` and the smaller of profile/project tool limits bound each run, including specialist work. These limits do not make dependent stages parallel.
-
-**Implementation:** [`build_root_agent`](../app/agents/root.py), [triage factory](../app/agents/triage.py), [log/file factories](../app/agents/workflows/evidence_acquisition.py), [synthesis factory](../app/agents/rca_synthesizer.py), [model limiter](../app/models/bounded.py), [prompts](../blob_local/platform/config/prompts.yaml).
-
-### How capability selection changes the graph
-
-| Capability | Required connector | Optional connector | Included investigation stages |
-|---|---|---|---|
-| `incident_triage` | `itsm` | `log_search` | Jira triage, then logs if usable; file summary if supplied and enabled |
-| `log_correlation` | `log_search` | `itsm` | Logs; file summary if supplied and enabled. Jira is not attached because this capability does not allow `itsm.get_ticket` |
-| `database_rca` | — | — | Disabled; no database investigation runs |
-
-Every enabled capability still reaches synthesis, with the optional approved-specialist router before it. Uploading a file does not waive the selected capability's required-connector checks. See [capability manifests](../blob_local/platform/capabilities/).
-
-## 3. Agent-to-connector flow
+## Tool to evidence
 
 ```mermaid
 sequenceDiagram
-  participant A as LlmAgent
-  participant G as RunGovernance
-  participant T as ADK FunctionTool
-  participant C as Connector provider
-  participant X as Jira or Splunk
-  participant E as Evidence store
-  A->>G: Proposed tool name and arguments
-  G->>G: Check run active, tool budget, scope and allowed action
-  alt Denied
-    G-->>A: Deny tool invocation, provider not called
-  else Allowed
-    G->>T: Permit typed tool invocation
-    T->>C: Call provider method
-    C->>C: Validate project/index, query and time bounds
-    C->>X: Authenticated bounded HTTP request
-    X-->>C: Response
-    C->>C: Check status, response size and schema
-    C-->>T: Selected ticket fields or log records
-    T-->>G: Tool result
-    G->>G: Redact and bound content, compute hash
-    G->>E: Persist scoped evidence with provenance
-    E-->>G: Saved
-    G-->>A: Evidence ID and redacted content
+  participant Agent as ADK agent
+  participant Guard as Governance callbacks
+  participant Tool as Domain tool
+  participant Provider as Connector provider
+  participant Store as Evidence store
+  link Agent: ADK stages @ harness.md#stage-contracts
+  link Guard: Tool governance @ harness.md#tool-and-model-boundaries
+  link Tool: Connector tools @ connectors.md#provider-specific-forms
+  link Provider: Provider resolution @ connectors.md#runtime-resolution
+  link Store: Evidence records @ data-model.md#run-and-evidence-records
+  Agent->>Guard: Proposed tool and arguments
+  Guard->>Guard: Active run, action, scope and budget checks
+  Guard->>Tool: Authorized invocation
+  Tool->>Provider: Typed bounded read
+  Provider-->>Tool: Validated source response
+  Tool-->>Guard: Tool result
+  Guard->>Store: Redacted bounded evidence and provenance
+  Guard-->>Agent: Evidence ID and safe content
+```
+
+Denied operations do not reach the provider. Provider errors become sanitized limitations; policy failures remain fail-closed. Network credentials never belong in model instructions or frontend payloads. Sources: [governance](../app/runtime/governance.py), [tool catalog](../app/tools/catalog.py), [Jira](../app/connectors/providers/jira.py), [Splunk](../app/connectors/providers/splunk.py).
+
+## Files, knowledge and conversation context
+
+| Input | Processing and ownership | Use in a run |
+| --- | --- | --- |
+| Chat upload | Authenticate → bound count/size → isolated local parser → redact extracted text → persist metadata and original bytes | Verify chat/uploader/project/expiry; capture bounded text as run evidence |
+| Project knowledge | Create or upload draft → inspect revision → independent hash-bound review | Retrieve eligible approved excerpts within context/evidence limits; treat as reference guidance |
+| Conversation history | Persist owned messages and bounded summaries | Interpret follow-ups; retrieve current evidence again before making incident claims |
+
+Sources: [file route](../app/api/routes/files.py), [parsers](../app/inputs/files.py), [chat artifacts](../app/persistence/chat_artifacts.py), [knowledge](../app/configuration/knowledge.py), [runner](../app/runtime/runner.py).
+
+Raw files never become executable instructions. Image support is local OCR; scanned PDFs without extractable text are not automatically rasterized for OCR. Spreadsheet formulas are not executed. Original downloads have their own ownership checks and retention; they are distinct from redacted previews and evidence excerpts. Sources: [parsers](../app/inputs/files.py), [artifact service](../app/persistence/chat_artifacts.py).
+
+## Lifecycle and failure boundaries
+
+Bootstrap loads validated deployment resources; project runtime management isolates project configuration and clients. Each run pins its effective contract, so editing configuration does not rewrite historical traces. Capacity rejection, preflight blocking, cancellation, deadline expiry and execution errors are separate from diagnostic uncertainty. There is no durable worker, restart recovery contract, or automatic retention loop. Sources: [bootstrap](../app/runtime/bootstrap.py), [project runtime](../app/runtime/projects.py), [runner](../app/runtime/runner.py), [cleanup](../scripts/cleanup.py).
+
+For field-level contracts and earlier lifecycle diagrams, see [reference architecture](reference/runtime-and-extension-contracts.md#architecture), [harness lifecycle](reference/runtime-and-extension-contracts.md#harness), and [runtime context](reference/runtime-and-extension-contracts.md#runtime-context). These retained details must be checked against current source before changing behavior.
+
+## Detailed execution walkthrough
+
+Use this walkthrough to trace a real investigation from a browser action to a saved result. The sequence is implemented by [run routes](../app/api/routes/runs.py) and [`ExecutionRunner.execute`](../app/runtime/runner.py). A chat is the conversation container; a run is one bounded investigation; an ADK session belongs to that run.
+
+```mermaid
+sequenceDiagram
+  actor Analyst
+  participant UI as Chat workspace
+  participant API as Authenticated API
+  participant Resolve as Runtime resolution
+  participant DB as SQLAlchemy stores
+  participant ADK as Native ADK runner
+  link UI: Project pages @ project.md#project-page-map
+  link API: Authorization @ security.md#request-authorization
+  link Resolve: Configuration @ configuration.md#scope-and-precedence
+  link DB: Data model @ data-model.md
+  link ADK: Native execution @ harness.md
+  Analyst->>UI: Submit question and optional local attachments
+  UI->>API: Resolve intent in selected project
+  alt Clarification or unsupported request
+    API-->>UI: Persisted conversational response
+  else Investigation
+    UI->>API: POST runs with capability and chat ID
+    API->>Resolve: Verify capability, ownership and effective configuration
+    Resolve->>DB: Create run with contract and deadline
+    alt Existing matching idempotency key
+      DB-->>API: Existing run
+    else New run
+      Resolve->>Resolve: Resolve providers and check required health
+      Resolve->>DB: Capture attachments and approved knowledge
+      Resolve->>DB: Freeze actual graph and context
+      Resolve->>ADK: Create per-run session and execute
+      loop Native agent and tool events
+        ADK->>DB: Persist progress, trace and evidence
+      end
+      ADK->>Resolve: Structured synthesis
+      Resolve->>DB: Save validated terminal result
+    end
+    API-->>UI: Saved result, limitations and evidence references
   end
 ```
 
-The diagram describes the ADK before/after-tool callbacks, not a second network layer. Domain tools contain no HTTP or credential handling. Providers own credentials, HTTPS clients, connection pools, request bounds and external resource scoping. Raw provider responses pass through governance before becoming model-visible tool results.
+### 1. Admission and ownership
 
-Provider failures go through `on_tool_error`: the model receives a sanitized unavailable-source message, the run records a limitation, and synthesis may continue. Policy denials fail closed. A later model, timeout or validation failure can still fail the investigation.
+Before any model work, the runner verifies that the principal's tenant and project match its runtime. It resolves capability authorization without health probing, computes inherited settings, rejects disallowed attachments and excessive prompt length, and obtains a bounded execution slot. Attachments must be accessible and belong to the requested chat; a chat inferred from attachments must pass the same ownership check. Admission failures need not create a run record.
 
-| Agent-facing function | Capability action | Provider method | External operation |
-|---|---|---|---|
-| `get_ticket(ticket_id)` | `itsm.get_ticket` | `JiraConnector.get_ticket` | Read issue from the configured Jira project |
-| `query_range(query, time_range)` | `log_search.query_range` | `SplunkConnector.query_logs` | Read bounded search results from the configured Splunk index |
+The API maps denied access to `403`, capacity exhaustion to `429` with a retry hint, and configuration/attachment/idempotency conflicts to `409` for ordinary run requests. Streaming start failures use an `error` event once the stream has begun. Do not interpret every start failure as a model failure. Sources: [runner admission](../app/runtime/runner.py), [HTTP and streaming behavior](../app/api/routes/runs.py).
 
-**Implementation:** [governance callbacks](../app/runtime/governance.py), [ITSM tools](../app/tools/domain/itsm.py), [log tools](../app/tools/domain/logs.py), [Jira provider](../app/connectors/providers/jira.py), [Splunk provider](../app/connectors/providers/splunk.py), [evidence store](../app/persistence/store.py). See [connector lifecycle and health flows](connector-onboarding.md).
+### 2. Resolve the contract
 
-## 4. File-processing flow
+The runner selects eligible approved specialists, effective optimization content, capability skills, stage models and prompts. The effective tool limit cannot exceed the selected profile's limit. It selects approved knowledge within remaining evidence and context capacity, then records configuration provenance.
 
-```mermaid
-flowchart TD
-  UP[POST /api/v1/files: multipart uploads] --> AUTH[Authenticate and check upload role]
-  AUTH --> LIMIT[Bound request size, file count and upload concurrency]
-  LIMIT --> PAR[Parse files concurrently within configured worker limit]
-  PAR --> CHILD[Spawn isolated parser process per file]
-  CHILD --> TYPE{File type}
-  TYPE -->|Text, Markdown, logs, JSON, CSV or TSV| TEXT[Decode or parse bounded text]
-  TYPE -->|DOCX or XLSX| OFFICE[Validate archive and extract document or cell text]
-  TYPE -->|PDF| PDF[Extract embedded text within page limit]
-  TYPE -->|PNG, JPEG or WebP| OCR[Local Tesseract OCR within pixel limit]
-  TEXT --> CLEAN[Bound and redact extracted text]
-  OFFICE --> CLEAN
-  PDF --> CLEAN
-  OCR --> CLEAN
-  CLEAN --> VALID{All files contain extractable text?}
-  VALID -->|No| REJECT[Reject upload]
-  VALID -->|Yes| SAVE[Store redacted text in SQLAlchemy and original bytes in chat blob storage]
-  SAVE --> IDS[Return chat, attachment and artifact IDs]
-  IDS --> REQ[Client submits IDs in POST /api/v1/runs]
-  REQ --> OWNER[Verify uploader, project and expiry]
-  OWNER --> EVIDENCE[Capture attachment text as run evidence]
-  EVIDENCE --> AGENT[File summary agent in evidence workflow]
-```
+| Snapshot field group | Why it is retained |
+| --- | --- |
+| Capability/version/hash and policy hash | Identify the authorized investigation contract |
+| Skill, agent and attachment hashes | Identify the exact content selected |
+| Stage models, prompts and workflow settings | Explain the agent behavior used for this run |
+| Allowed actions, disabled connectors and environments | Explain the resolved permission and execution context |
+| Limits and runtime controls | Explain truncation, timeouts and resource ceilings |
+| Knowledge revisions and pricing snapshot | Preserve reference selection and cost-estimation inputs |
+| Resolved graph and bounded chat history | Explain the actual execution topology and follow-up context |
 
-Parsing is local, occurs before investigation, and does not call an LLM. Each parser has a hard timeout and a killable child process. The upload stores redacted extracted text and metadata in SQLAlchemy, plus the exact original bytes under the project’s chat artifact prefix. Only the authenticated chat owner can list or download originals; raw bytes never enter the model context. The later file agent summarizes the stored text using its configured model.
+The initial run is persisted before preflight. After preflight, the runtime adds usable connector controls, selected history and the actual graph, then persists the final snapshot before the first native ADK event. This is a staged freeze; it is not one atomic snapshot of all external systems. Sources: [contract model](../app/runtime/run_contract.py), [execution sequence](../app/runtime/runner.py).
 
-Scanned PDFs without embedded text are rejected; the image OCR path does not automatically rasterize PDFs. Image support extracts text, not visual scene meaning. XLSX formulas are read as text rather than executed or recalculated. File warnings are carried into run limitations.
+### 3. Preflight and evidence acquisition
 
-**Implementation:** [upload route](../app/api/routes/files.py), [`parse_files` and `parse_file`](../app/inputs/files.py), [file limits](../blob_local/platform/config/file_processing.yaml), [`save_attachment` and `get_attachments`](../app/persistence/store.py), [chat artifact catalog](../app/persistence/chat_artifacts.py), [chat routes](../app/api/routes/chats.py).
+Demo mode terminates as `SIMULATED` without invoking live connectors or a model. Live mode resolves runtime providers, checks required connector health and checks model-backend configuration. A missing required connector blocks execution; an unavailable optional source is recorded as a limitation. Uploaded text and selected knowledge enter the evidence store before the native workflow starts.
 
-The [blob storage guide](blob-storage.md) defines framework approval stages, upload processing stages, generated outputs and recovery.
+During execution, governance checks each proposed tool operation, shares budgets across branches, and records safe evidence. Evidence persistence precedes a successful tool-completion event. A source response is not automatically an accepted finding: synthesis must cite evidence IDs captured for the current run. Sources: [runner preflight](../app/runtime/runner.py), [tool governance](../app/runtime/governance.py).
 
-## 5. Project agent approval and discovery
+### 4. Synthesis and terminal state
 
-```mermaid
-sequenceDiagram
-  participant U as Project author
-  participant API as Configuration API
-  participant B as Local or GCS blob store
-  participant D as Configuration database
-  participant ADM as Different scoped administrator
-  participant R as Next investigation
-  U->>API: Submit YAML using existing capability and tools
-  API->>API: Validate schema, model catalog and tool allowlist
-  API->>B: Write canonical YAML under its SHA-256 hash
-  API->>D: Store PENDING draft and submission audit
-  API-->>U: Draft ID, definition and content hash
-  ADM->>API: Approve draft with expected hash and reason
-  API->>B: Read and verify exact blob
-  API->>API: Check scope, non-self review and PENDING state
-  API->>D: Approve, audit and replace active project-agent pointer
-  R->>D: Discover active approved agents for project and capability
-  R->>B: Reverify blob integrity
-  R->>R: Snapshot definitions and selected models
-  R->>R: Build eligible specialists as AgentTools
-```
+The runtime reads the final structured response from `rca_synthesizer`, validates its schema, verifies that cited IDs exist in the run's evidence, and rejects findings without recorded evidence. It redacts the final result and incorporates connector failures and truncation into uncertainty.
 
-Only `PLATFORM_ADMIN` or `PROJECT_OWNER` can review, within the deployment's tenant/project scope. Authors cannot review their own drafts. Rejecting a draft never activates it. A new approval replaces the active version for that agent ID; previous approved records remain history. Revocation removes that version from future discovery. Already-running investigations retain their pinned snapshot.
+| Saved status | Meaning and next action |
+| --- | --- |
+| `SIMULATED` | No live investigation occurred; configure live dependencies before seeking a diagnosis |
+| `BLOCKED` | Preflight or execution policy prevented completion; inspect the saved reason and correct configuration/access |
+| `FAILED` | Timeout, context overflow, invalid synthesis or another execution failure; inspect stage and trace before retrying |
+| `CANCELLED` | Execution was cancelled; inspect retained records before starting another run |
+| `PARTIAL` | A structured answer exists with limitations or insufficient evidence; resolve missing evidence before relying on a cause |
+| `SUCCEEDED` | Structured synthesis passed runtime validation without recorded limitations; assess the cited evidence and uncertainty |
 
-### Approved project specialists
+`SUCCEEDED` is an execution result, not proof that a proposed root cause is objectively correct. Source: [terminal result validation](../app/runtime/runner.py).
 
-```yaml
-id: payments_specialist
-version: 1.0.0
-name: Payments specialist
-description: Reviews payment timeout evidence when relevant
-instruction: Summarize payment failure evidence and cite recorded evidence IDs.
-capability: incident_triage
-model_profile: balanced-investigation
-stage_model: logs
-tools: [log_search.query_range]
-```
+## Streaming, reconnection and cancellation
 
-`stage_model` selects a logical stage in the approved profile or an explicitly named deployment stage. YAML cannot import Python or introduce new network tools. The local/GCS blob provider stores configuration; it is not an investigation tool exposed to the model.
+`POST /api/v1/runs?stream=true` emits `run`, `progress`, `trace` and `complete` events from persisted state. The stream owns an in-process execution task; its cleanup cancels an unfinished task. It is not a durable job submission interface.
 
-**Implementation:** [configuration endpoints](../app/api/routes/agents.py), [definition schema](../app/configuration/models.py), [approval and active-version service](../app/configuration/service.py), [blob provider](../app/connectors/providers/blob.py), [specialist assembly](../app/agents/root.py). See [lifecycle and endpoints](skill-lifecycle.md).
+For an existing run, `GET /api/v1/runs/{run_id}` retrieves state, `/events` streams progress revisions, `/trace` returns the graph and recorded events, `/trace/events` streams trace sequences, and `/evidence` returns captured evidence. Progress revisions and trace sequences are separate cursors. Their streaming endpoints accept `Last-Event-ID`; clients must use the cursor for the corresponding stream. A trace response can explicitly indicate truncation.
 
-## 6. Results, progress and persistence
+Cancellation uses `POST /api/v1/runs/{run_id}/cancel` with server-side role checks. The runner tracks local active tasks, finalizes pending tools and closes run-specific connector clients. A database record cannot restart a task lost with the process. Sources: [run API](../app/api/routes/runs.py), [runner cleanup](../app/runtime/runner.py).
 
-```mermaid
-flowchart TD
-  EVENTS[ADK events] --> PROGRESS[Update run stage and revision]
-  PROGRESS --> DB[(Run database)]
-  DB --> GET[GET run or list runs]
-  DB --> SSE[GET run events: poll revisions and emit SSE]
-  FINAL[Synthesis response] --> STRUCT[Validate structured result]
-  STRUCT --> CITE[Check every cited ID against saved run evidence]
-  CITE --> OUTCOME{Valid outcome}
-  OUTCOME -->|Findings without recorded limitations| OK[SUCCEEDED]
-  OUTCOME -->|Limitations or insufficient evidence| PART[PARTIAL]
-  STRUCT -->|Invalid output| FAIL[FAILED]
-  CITE -->|Unknown evidence ID| FAIL
-  OK --> DB
-  PART --> DB
-  FAIL --> DB
-  CANCEL[Authorized cancel request] --> STOP[Mark CANCELLED and cancel local task if present]
-  STOP --> DB
-  TIME[Run timeout] --> FAIL
-```
+## Detailed handbook reading paths
 
-SSE exposes stored progress revisions; it is not a raw token stream. Clients can obtain a run ID from the run listing while a request is active. Terminal records cannot be overwritten by a late agent result. After a process interruption, runs are not resumed; a stale running record becomes failed when read after its deadline.
+- System view: [workspace](project.md#project-page-map) → [identity](security.md#request-authorization) → [configuration](configuration.md) → [ADK](harness.md) → [data](data-model.md).
+- Agent workflow: [stages](harness.md#stage-contracts) → [native compiler](harness.md#native-graph-compilation) → [tool boundaries](harness.md#tool-and-model-boundaries).
+- Tool sequence: [actions and providers](connectors.md#provider-specific-forms) → [governance](harness.md#tool-and-model-boundaries) → [evidence records](data-model.md#run-and-evidence-records).
 
-| Store or export | What it contains | Purpose |
-|---|---|---|
-| Run database | Immutable contract snapshot, status, stage, result and revisions | Client results, idempotency and progress |
-| Evidence records | Redacted content, source/query provenance, content hash and evidence ID | Resolve and validate citations |
-| Attachment records | Redacted extracted text, source hash, owner and expiry | Inputs for subsequent runs |
-| Native ADK session database | Session state and execution events | ADK conversation/workflow persistence |
-| Configuration database and blobs | Drafts, active pointers, review audit and canonical YAML | Approved specialist lifecycle |
-| Optional OTLP export | Allowlisted operational metadata and usage | Tracing to a collector or MLflow |
+## OKF integration boundary
 
-Citation validation checks that IDs exist in the run's evidence; it does not independently prove causal correctness. Metadata-only telemetry is separate from the application/session databases. Retention is an explicit operator action, described in [operations](operations.md).
-
-**Implementation:** [event consumption and final validation](../app/runtime/runner.py), [run/evidence persistence](../app/persistence/store.py), [SSE and cancellation routes](../app/api/routes/runs.py), [telemetry filtering](../app/observability/otel.py).
-
-## Prompt and skill improvement
-
-Native MLflow optimization compares an instruction candidate with the active baseline on a versioned benchmark. A separate administrator must approve a passing comparison before its immutable blob bundle becomes active for new investigations. See [the optimization workflow](optimization.md) for storage, evaluation gates, API examples and MLflow inspection.
+The [Open Knowledge Format design](knowledge.md#position-in-the-rca-ecosystem) places portable knowledge import/export around the existing reviewed library. SQLAlchemy, immutable revisions and ADK run snapshots remain authoritative. Import/export and freshness-aware selection are proposed, not active runtime features.

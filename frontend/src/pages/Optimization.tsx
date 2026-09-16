@@ -998,7 +998,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
                           <div>
                             <strong>Author Review Restriction (Two-Person Rule):</strong>
                             <p style={{ margin: '3px 0 0', lineHeight: 1.4 }}>
-                              You are authenticated as <code>{principal?.subject}</code>, the author of this optimization run. In accordance with RCA Analyzer security policy, authors cannot review their own revisions. Another authorized administrator must approve or reject this candidate.
+                              You are authenticated as <code>{principal?.subject}</code>, the author of this optimization run. In accordance with RCA assist security policy, authors cannot review their own revisions. Another authorized administrator must approve or reject this candidate.
                             </p>
                           </div>
                         </div>

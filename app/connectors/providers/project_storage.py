@@ -6,7 +6,7 @@ import re
 from typing import Literal
 
 ArtifactKind = Literal[
-    "agent-configurations", "optimizations", "chats", "framework-uploads"
+    "agent-configurations", "optimizations", "chats", "framework-uploads", "knowledge"
 ]
 
 
@@ -31,6 +31,7 @@ def project_artifact_uri(
         "optimizations",
         "chats",
         "framework-uploads",
+        "knowledge",
     }:
         raise ValueError("Unknown project artifact kind")
     directory = {
@@ -38,6 +39,7 @@ def project_artifact_uri(
         "optimizations": "framework/optimizations/objects",
         "framework-uploads": "framework/uploads",
         "chats": "chats",
+        "knowledge": "knowledge/objects",
     }[kind]
     prefix = project_prefix(tenant_id, project_id)
     if root.startswith("gs://"):

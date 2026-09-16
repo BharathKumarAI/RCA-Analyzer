@@ -1,0 +1,34 @@
+.project-access-dialog { width: min(640px, calc(100vw - 32px)); max-height: min(820px, calc(100dvh - 48px)); margin: auto; padding: 28px; border: 1px solid var(--line); border-radius: 12px; color: var(--tx); background: var(--card); overflow: auto; }
+.project-access-dialog::backdrop { background: rgb(20 22 36 / .48); }
+.project-access-dialog h2, .project-access-dialog h3, .project-access-dialog p { margin: 0; }
+.project-access-dialog h2 { font-size: 22px; font-weight: 600; line-height: 30px; }
+.project-access-dialog h3 { font-size: 16px; font-weight: 600; line-height: 24px; }
+.project-access-dialog p { font-size: 13px; line-height: 21px; color: var(--muted); }
+.project-access-dialog > header, .project-access-history > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.project-access-dialog > header p { margin-top: 6px; }
+.project-access-icon { width: 36px; min-height: 36px; display: grid; place-items: center; flex-shrink: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
+.project-access-icon:hover { color: var(--tx); background: var(--card-hover); }
+.project-access-dialog nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 24px 0; border-bottom: 1px solid var(--line); }
+.project-access-dialog nav button { flex: 1; min-width: 0; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--muted); padding: 12px 8px; font-size: 13px; line-height: 20px; cursor: pointer; }
+.project-access-dialog nav button[aria-pressed='true'] { border-bottom-color: var(--acc); color: var(--acc); }
+.project-access-dialog form, .project-access-dialog fieldset { display: flex; flex-direction: column; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.project-access-dialog label { display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 20px; }
+.project-access-dialog input, .project-access-dialog select, .project-access-dialog textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 12px; min-height: 42px; font: inherit; font-size: 14px; color: var(--tx); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; caret-color: var(--acc); }
+.project-access-dialog textarea { resize: vertical; }
+.project-access-dialog :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--line-focus); outline-offset: 3px; }
+.project-access-dialog input::placeholder, .project-access-dialog textarea::placeholder { color: var(--muted); opacity: 1; }
+.project-access-dialog button:disabled, .project-access-dialog fieldset:disabled { opacity: .55; cursor: not-allowed; }
+.project-access-dialog footer, .project-access-review-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
+.project-access-dialog .btn { min-height: 40px; padding: 8px 12px; font-size: 13px; line-height: 20px; white-space: normal; }
+.project-access-dialog .project-access-error { color: var(--acc-rose); margin-bottom: 16px; overflow-wrap: anywhere; }
+.project-access-dialog .project-access-notice { padding: 14px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 20px; }
+.project-access-history > p { padding: 20px 0; }
+.project-access-history > ul { list-style: none; padding: 0; margin: 0; }
+.project-access-history > ul > li { padding: 20px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.project-access-history li > p { margin-top: 6px; }
+.project-access-request-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.project-access-request-heading strong { font-size: 15px; line-height: 22px; font-weight: 600; }
+.project-access-request-heading span { font-size: 12px; line-height: 20px; color: var(--muted); flex-shrink: 0; }
+.project-access-history .project-access-reason { margin: 12px 0; white-space: pre-wrap; color: var(--tx); }
+.project-access-history li form { margin-top: 16px; }
+@media (max-width: 600px) { .project-access-dialog { padding: 20px; max-height: calc(100dvh - 24px); } .project-access-dialog input, .project-access-dialog select, .project-access-dialog textarea { font-size: 16px; } .project-access-dialog nav button { font-size: 12px; padding: 10px 4px; } }

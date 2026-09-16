@@ -1,48 +1,180 @@
 # Operations
 
-Operational lifecycle at a glance:
+This release runs a FastAPI process, PostgreSQL, and a React frontend. Local development can use Vite; the API can serve the built frontend. Configuration and investigation records persist, but there is no durable worker or automatic run recovery. Sources: [application](../app/api/application.py), [runner](../app/runtime/runner.py), [Compose](../docker-compose.yml).
 
-```mermaid
-flowchart LR
-    START[Start] --> VALIDATE[Validate environment and content]
-    VALIDATE --> READY[Serve liveness/readiness]
-    READY --> RUN[Execute bounded runs]
-    RUN --> OBS[Inspect health, logs and traces]
-    OBS --> REPAIR[Repair derived blob views when needed]
-    REPAIR --> CLEAN[Run retention cleanup explicitly]
-    CLEAN --> BACKUP[Back up DB, ADK sessions and scoped blobs]
+## Contents
+
+- [Chat and metrics integration rollout](#chat-and-metrics-integration-rollout)
+
+- [Local setup](#local-setup)
+- [Authentication and project connections](#authentication-and-project-connections)
+- [Database and configuration rollout](#database-and-configuration-rollout)
+- [Health and measurements](#health-and-measurements)
+- [Retention, repair and recovery](#retention-repair-and-recovery)
+- [Verification and deployment evidence](#verification-and-deployment-evidence)
+- [Runbook: bring a deployment into service](#runbook-bring-a-deployment-into-service)
+- [Runbook: diagnose a failed or incomplete investigation](#runbook-diagnose-a-failed-or-incomplete-investigation)
+- [Runbook: publish a configuration change](#runbook-publish-a-configuration-change)
+- [Runbook: retention and restoration](#runbook-retention-and-restoration)
+
+
+## Chat and metrics integration rollout
+
+**Acceptance runbook for proposed work, not deployment certification.** Follow the [delivery plan](development.md#chat-and-metrics-delivery-plan). Resolve the [platform authorization gap](configuration.md#chat-and-metrics-integration-policy) before exposing tenant-wide metrics.
+
+1. Record revision, dependency versions and transport choice. Trial CopilotKit against the governed ADK runner; retain the existing UI/API as rollback without moving history into a second store.
+2. Verify authentication, active membership, private conversation ownership and project switching. Test cross-project denial for streams, evidence and downloads as well as normal requests.
+3. Run an authorized live investigation against a configured model/source. Inspect saved message/run IDs, tool events, citations, artifacts and usage. Demo/readiness success is insufficient.
+4. Exercise duplicate submission, cancellation, network disconnect and process interruption. Assess saved state and retry explicitly when needed. Do not promise background work, scheduling or automatic recovery under the in-process execution contract.
+5. Compare the same run population in chat, project metrics and authorized platform metrics. Check prices, missing data, sample counts, truncation, date ranges and export metadata. Verify project-owner/member denial for platform totals.
+6. Measure query/refresh latency under expected load. Prevent overlapping refresh and pause it on hidden views; investigate slow aggregation before adding caches or workers.
+7. Record actual checks and unresolved gaps. Roll back adapter/UI deployment while preserving SQLAlchemy/native session/blob records. Do not rewrite historical results or prices to force agreement.
+
+Sources: [run lifecycle](../app/api/routes/runs.py), [runner cleanup](../app/runtime/runner.py), [metrics routes](../app/api/routes/metrics.py), [telemetry coverage](../app/persistence/telemetry.py). Use [retention/restoration](#runbook-retention-and-restoration); replaying recorded events does not recover lost execution.
+
+## Local setup
+
+```sh
+make setup
+make db-deploy
 ```
 
-The [harness lifecycle guide](harness.md) is the canonical explanation of what each stage owns.
+The local deployer starts PostgreSQL, applies migrations, seeds missing configuration, grants runtime permissions and creates missing credentials in private `.env` and `.env.runtime` files. Repeat deployment preserves active configuration. Configure authentication and source credentials using [.env.example](../.env.example); do not commit or print secrets. Source: [local deployer](../scripts/deploy_local_database.py).
 
-This release runs as one API service with PostgreSQL in Compose; SQLite remains available for offline tests and fixtures. The [local deployment command](../scripts/deploy_local_database.py) and [database guide](database.md) describe the seven schemas, runtime role and explicit clean replay. It has no durable background worker or restart recovery loop. Approved agent definitions and their content-addressed blobs do survive process restarts.
+Set `RCA_MODE=demo` for explicitly simulated runs. Live runs require real model access, authorized connector endpoints/credentials, and active project membership. `RCA_TENANT_ID` owns the deployment; `RCA_PROJECT_ID` identifies its bootstrap project. Bearer verification uses `RCA_AUTH_ISSUER`, `RCA_AUTH_AUDIENCE`, and `RCA_AUTH_PUBLIC_KEY`; trusted `RCA_PRINCIPALS_JSON` supplies bootstrap membership. Sources: [settings](../app/settings.py), [authentication](../app/identity/auth.py).
 
-## Configuration
+```sh
+make dev
+```
 
-Run `make db-deploy` to configure the local PostgreSQL instance and generate missing credentials in private `.env` and `.env.runtime` files; use [.env.example](../.env.example) as the setting reference. The [deployer](../scripts/deploy_local_database.py) excludes database owner credentials from the API container. Set `RCA_MODE=demo` for offline simulation or `RCA_MODE=live` for authenticated connector-backed runs. Configure one deployment scope with `RCA_TENANT_ID` and `RCA_PROJECT_ID`. Configure RS256 verification and server-side principals with `RCA_AUTH_ISSUER`, `RCA_AUTH_AUDIENCE`, `RCA_AUTH_PUBLIC_KEY`, and `RCA_PRINCIPALS_JSON`.
+The API starts on port 8000. In another terminal:
 
-## Health and observability
+```sh
+cd frontend
+npm ci
+RCA_API_TARGET=http://127.0.0.1:8000 npm run dev
+```
 
-`GET /health` is a liveness check and `GET /ready` checks storage/auth readiness. OpenTelemetry uses standard `OTEL_*` variables. MLflow uses the configured experiment identifier. Connector health is exposed at `GET /api/v1/connectors/health`. Effective redacted settings are exposed at `GET /api/v1/config` for authenticated project users.
+Open `http://localhost:5173/`. The explicit API target avoids the development proxy's port-8005 default. Stop each foreground development process with Ctrl+C. Source: [Vite configuration](../frontend/vite.config.ts).
 
-## Limits and recovery
+To serve the built frontend through FastAPI, run `npm run build` from `frontend/`. To run the Compose stack, use `make docker-up`; stop it with `make docker-down`. Inspect the checked-in [Makefile](../Makefile) and [Compose configuration](../docker-compose.yml) for exact commands and mounted services.
 
-The service enforces `RCA_MAX_CONCURRENT_RUNS`, `RCA_RUN_TIMEOUT_SECONDS`, and `RCA_MAX_LLM_CALLS`. Request deadlines are UTC-based. The [HTTP boundary](../app/api/application.py) limits streamed request bodies to the smaller of the configured run timeout and 60 seconds, returning 408 and releasing upload capacity on timeout. Clients should retain run IDs and retry explicitly after process failure; no durable worker resumes abandoned work. Retention cleanup is an explicit operator action: `uv run --env-file .env python -m scripts.cleanup` reports candidates; add `--apply` to delete expired terminal runs, their evidence and ADK sessions, plus expired extracted attachments and original chat artifact blobs/catalog entries. Raw artifacts expire after `RCA_RETENTION_DAYS` from upload; extracted text uses the shorter `RCA_ATTACHMENT_TTL_SECONDS`. Original cleanup is limited to the configured deployment project, and deletes bytes before metadata so failed deletions can be retried. See [artifact storage and recovery](chat-artifacts.md). This is not scheduled automatically. Configuration blobs and approval audit records are retained separately.
+## Authentication and project connections
 
-Uploads are local-only and bounded. OCR requires Tesseract in the runtime image. Agent YAML blobs use local storage by default and GCS when `RCA_CONFIG_BLOB_URI` is a `gs://` URI. No remote file URLs, macros, code execution, or raw image visual semantics are supported.
+For company sign-in, configure and independently approve the OIDC provider, use the exact HTTPS callback URL, and provision subject membership before login. Preserve bearer bootstrap/recovery configuration. Browser-session security and real identity-provider setup are described in [sign-in reference](reference/data-access-and-operations.md#browser-sign-in); implementation is in [OIDC configuration](../app/configuration/oidc.py).
 
-Telemetry is disabled without an OTLP endpoint. Set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to the collector or MLflow trace ingestion URL, and `MLFLOW_EXPERIMENT_ID` when using MLflow. Standard `OTEL_EXPORTER_OTLP_HEADERS` carries deployment credentials. Exported spans retain allowlisted operational attributes and usage, stripping payload attributes, exception events, links, and arbitrary resource attributes. Export failures are visible in `/api/v1/config`; they do not fail investigations. This does not configure a remote collector for you.
+Configure each project's enabled connector instances, environments, authorized resources and secret references. All implemented connector types are in scope; do not mark an unconfigured or unhealthy connection ready. Current Oracle and template-enable gaps are listed in [configuration](configuration.md#all-connectors-enabled-per-project). Documentation changes do not enable deployment records. Sources: [provider resolution](../app/connectors/providers/registry.py), [connector API](../app/api/routes/connectors_api.py).
 
-The default redactor masks known credential patterns, email addresses and US SSN patterns. It is not a complete PII classifier; adapt data handling and retention to your deployment requirements. `/ready` checks local database connectivity and configured authentication; connector health and model authorization are checked separately at run preflight.
+## Database and configuration rollout
 
-## Database configuration and template rollout
+- `make db-migrate` applies pending versioned SQL migrations. The runner uses transactions, an advisory lock and applied-file checksums.
+- `make db-deploy` also handles local provisioning, seeding and runtime role permissions. Do not give the API database-owner credentials.
+- To publish an intentional template update, use `uv run python -m scripts.seed_database --expected-bundle-hash CURRENT_ACTIVE_HASH`, substituting the verified active hash.
+- Restart to load startup-owned bundle/settings changes. Use the corresponding service's activation contract for database-backed runtime edits; existing runs retain their pinned configuration.
+- The deployer's `--recreate` option erases the configured local database. It is a destructive development reset, not an upgrade or backup restore; retained blobs cannot reconstruct missing database metadata.
 
-With `RCA_DATABASE_CONFIGURATION=true`, [bootstrap](../app/runtime/bootstrap.py) loads one validated database snapshot and resolves platform/project parameters at startup. Explicit trusted environment settings take final precedence. Restart after publishing configuration or parameter changes; active runs retain their resolved contract. Invalid configuration fails startup and acquired resources are closed.
+Sources: [migration runner](../scripts/migrate.py), [deployment](../scripts/deploy_database.py), [seed publisher](../scripts/seed_database.py), [bootstrap](../app/runtime/bootstrap.py).
 
-Repository `blob_local/platform/` YAML and Markdown and administrator-managed project YAML are templates. `RCA_CONTENT_ROOT`, `RCA_CONFIG_DIR` and `RCA_PROJECTS_ROOT` select the input locations for the [seed command](../scripts/seed_database.py). Initial deployment imports missing values without overwriting deployed configuration. Publish an intentional template update with `uv run python -m scripts.seed_database --expected-bundle-hash CURRENT_ACTIVE_HASH`, then restart. The [bundle publisher](../app/configuration/database_bundle.py) validates content and compares the active hash atomically. See [database configuration](database.md) for the parameter API, schema ownership and replay procedure.
+## Health and measurements
 
-Runtime optimization tracking metadata uses the PostgreSQL `mlflow` schema after local deployment; native MLflow migrations run in the [deployment job](../scripts/deploy_database.py). Artifacts remain in project blobs through the [optimization evaluator](../app/optimization/evaluation.py). Offline fixture evaluation keeps its own tracking store. Back up PostgreSQL and scoped blobs together and verify restoration before live rollout; local deployment does not establish production readiness.
+| Surface | Meaning |
+| --- | --- |
+| `GET /health` | Process liveness |
+| `GET /ready` | Storage/auth readiness, not proof of live model or connector success |
+| `GET /api/v1/connectors/health` | Authenticated connector health |
+| `GET /api/v1/config` | Authenticated redacted effective settings |
+| Insights and run events | Recorded timings/usage; coverage limits and missing values remain visible |
 
-## Separate project storage
+Sources: [application](../app/api/application.py), [connector routes](../app/api/routes/connectors_api.py), [telemetry](../app/persistence/telemetry.py).
 
-Initialize real projects with the [project provisioning command](../blob_local/projects/README.md). `RCA_PROJECTS_ROOT` selects local project configuration; optional `RCA_PROJECTS_BLOB_URI` selects the root of GCS artifact prefixes. New blobs are separated by tenant and project. Preserve explicit legacy blob locations until scoped migration is verified. Reference `project_1` and `project_2` are not active scopes.
+OpenTelemetry export requires deployment collector configuration through `OTEL_*` settings. Exported operational data must remain redacted and bounded. Model cost estimates depend on independently approved rates and recorded provider usage; they are not invoices or accuracy scores. Sources: [observability](../app/observability), [pricing](../app/configuration/model_pricing.py).
+
+## Retention, repair and recovery
+
+```sh
+# Report candidates before deleting anything.
+uv run --env-file .env python -m scripts.cleanup
+# Inspect derived artifact views without applying repairs.
+uv run --env-file .env python -m scripts.sync_artifacts
+```
+
+Both operations are explicit; use `--apply` only for the intended cleanup or repair. Cleanup removes eligible terminal records, sessions and expired attachments/artifacts according to its scope. Run it for each project with the correct `RCA_PROJECT_ID`, database configuration and shared artifact root. There is no automatic all-project cleanup loop. Sources: [cleanup](../scripts/cleanup.py), [repair](../scripts/sync_artifacts.py).
+
+Back up PostgreSQL, native sessions and project blobs together, and verify coordinated restoration. After an interrupted process, inspect saved run IDs and retry explicitly; do not assume abandoned work resumes. Blob repair rebuilds derived views from authoritative records, not missing evidence or deleted catalogs. Sources: [artifact storage](../app/persistence/chat_artifacts.py), [runner](../app/runtime/runner.py).
+
+## Verification and deployment evidence
+
+Run `make lint`, `make test`, and `make smoke` before handoff; use `make eval` for offline contracts. Confirm real SSO, source credentials, model behavior, expected load and database/blob restoration in the target deployment. Passing local checks is not production certification. Dated verification records are retained under [references](reference/README.md); their counts describe those runs, not the current working tree.
+
+## Runbook: bring a deployment into service
+
+Use the following sequence for an environment you are authorized to operate. Record the actual deployment and verification results; a configuration form saved successfully is not evidence that a source or model worked.
+
+| Phase | Action | Exit evidence |
+| --- | --- | --- |
+| Prepare | Confirm database, blob location, tenant, bootstrap project and secret references | Explicit deployment settings with no credentials committed |
+| Provision | Apply all shipped migrations and seed missing configuration using the deployment tooling | Migration/deployment completes against the intended database |
+| Authenticate | Configure bearer verification and approved OIDC when used; provision membership | Authorized login succeeds and unauthorized project access fails |
+| Start | Run the API and frontend using the documented process configuration | Process liveness and readiness endpoints respond |
+| Connect | Save project instances, resources, environments and credential bindings | Required connector health is usable for the selected capability |
+| Investigate | Run an authorized live investigation | Saved live run with inspectable source evidence and honest limitations |
+| Restore | Exercise coordinated database/session/blob restoration in a suitable environment | Restored records and their artifacts can be read consistently |
+
+These are operator acceptance steps, not claims that they have been performed by this documentation update. Sources: [deployment](../scripts/deploy_database.py), [bootstrap](../app/runtime/bootstrap.py), [health endpoints](../app/api/application.py), [runner](../app/runtime/runner.py).
+
+## Runbook: diagnose a failed or incomplete investigation
+
+Start with the project, run ID, status, stage and sanitized reason. Use the run's trace and contract to distinguish input, configuration, dependency and execution failures. Avoid copying raw credentials or unredacted source payloads into incident notes.
+
+| Symptom | Inspect first | Next action |
+| --- | --- | --- |
+| Sign-in rejected | Issuer/audience/key settings, approved OIDC binding and active subject membership | Correct identity configuration or membership through its authorized path |
+| Project inaccessible | Active database membership for the selected project | Review access; changing the project header cannot grant it |
+| Start returns `409` | Attachment ownership/expiry, configuration validity and idempotency reuse | Correct the conflict; do not blindly reuse a key with changed inputs |
+| Start returns `429` | Run capacity and busy project-runtime contexts | Retry after the indicated delay; inspect load if persistent |
+| `BLOCKED` at preflight | Required connector health and live model-backend configuration | Repair the missing required dependency before retrying |
+| `FAILED` at `context_limit` | Required input size and resolved context limits | Narrow the request or review permitted limits; source truncation cannot remove required instructions |
+| `FAILED` at `timeout` | Deadline, stage/tool timing and bounded source request | Investigate the slow dependency or narrow the investigation |
+| `PARTIAL` | Missing optional sources, truncation and insufficient-evidence outcome | Obtain missing evidence or ask a narrower follow-up |
+| Original downloads but cannot be analyzed | Extraction expiry versus original retention | Re-upload the retained original if analysis is still needed |
+| Missing complete cost estimate | Provider usage coverage and approved pricing | Preserve unknown values; inspect partial recorded charges separately |
+| Process stopped during execution | Last persisted run and trace state | Assess the interrupted work and retry explicitly; no recovery worker resumes it |
+
+Sources: [authentication](../app/identity/auth.py), [project runtimes](../app/runtime/projects.py), [run endpoints](../app/api/routes/runs.py), [execution failures](../app/runtime/runner.py), [artifacts](../app/persistence/chat_artifacts.py), [telemetry](../app/persistence/telemetry.py).
+
+## Runbook: publish a configuration change
+
+1. Identify whether the setting is startup-owned, a scoped parameter, or a reviewed runtime artifact. Use the corresponding [configuration workflow](configuration.md).
+2. Read the active revision/hash and prepare the intended change. Preserve operator-managed values when updating repository seed templates.
+3. Validate the change through the existing service or configuration command. Obtain the independent review required by that artifact type.
+4. Activate or publish with the expected revision/hash. A stale conflict requires re-reading the active state; do not overwrite it blindly.
+5. Restart only when the setting's loading contract requires it. Existing runs retain their resolved snapshot.
+6. Start a new authorized verification run and inspect its effective settings, graph and evidence. If the change fails, use the artifact's supported revision/approval lifecycle to restore known content rather than editing historical run records.
+
+Sources: [database bundle](../app/configuration/database_bundle.py), [seed publisher](../scripts/seed_database.py), [parameters](../app/configuration/parameters.py), [harness workspace](../app/configuration/harness_workspace.py).
+
+## Runbook: retention and restoration
+
+**Before cleanup:** verify the selected project and retention settings, run the dry report, and confirm that the intended database and blob store are backed up together. Originals, extracted text, terminal outputs and sessions have different lifetimes; do not assume one timestamp controls all of them.
+
+**During cleanup:** apply only the reviewed scope. Repeat deliberately for other projects. The release does not schedule an automatic all-project retention loop.
+
+**After cleanup:** inspect remaining run and artifact records. Use artifact synchronization to inspect and, when intended, repair derived exports. Repair can rebuild outputs from retained authoritative run/evidence data; it cannot recover deleted source records.
+
+**During restoration:** restore the corresponding database, native session data and blobs, then verify ownership, run/evidence links and original downloads before treating the restored deployment as usable. Interrupted execution still needs explicit assessment and retry. Sources: [cleanup command](../scripts/cleanup.py), [artifact repair](../scripts/sync_artifacts.py), [artifact ownership and exports](../app/persistence/chat_artifacts.py).
+
+## Database DDL maintenance and seed policy
+
+Use [the consolidated SQL](../migrations/schema.sql) to inspect the current database design by schema. Deploy with `make db-migrate` or the existing deployment job, which reads immutable SQL from [migration history](../migrations/history). The SQL reference does not replace checksummed upgrades, native schema-version rows, bootstrap configuration or restricted-role provisioning.
+
+To regenerate the reference, prepare a **disposable UTF-8 PostgreSQL database** using the same locked dependencies and compatible `pg_dump` version. Apply `scripts.migrate.migrate` and `scripts.deploy_database.upgrade_tracking` to that database; do not import sample data or application configuration. Then set `RCA_MIGRATION_DATABASE_URL` to that disposable database and run:
+
+```sh
+uv run python -m scripts.export_database_ddl --output migrations/schema.sql
+```
+
+The exporter reads schema definitions only. Never use an operator database as the canonical source: drift, project-specific objects or comments could otherwise enter the checked-in reference. Review generated changes, including indexes, foreign keys, functions, triggers and privileges. MLflow object changes may reflect a dependency migration and require corresponding review.
+
+Set `RCA_POSTGRES_TEST_URL` to an isolated database-creator account and run the [DDL integration test](../tests/integration/test_database_ddl.py). It creates disposable databases, applies the migrations twice, compares the export to the checked-in reference, restores it and compares again. Run the normal [verification commands](development.md#verification) before handoff. A schema-only restore intentionally has no migration ledger or native version rows and must not be started as a deployed API database.
+
+[Required configuration import](../scripts/seed_database.py) remains part of deployment: project identity, parameter definitions and the deployment template baseline are necessary for database-first runtime configuration. Demo triage ticket creation has been removed from reads. No cleanup command in this change deletes existing operator data; review historical sample rows separately before any destructive cleanup.

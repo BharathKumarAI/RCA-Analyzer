@@ -10,7 +10,7 @@ export const ConnectorGovernanceCard: React.FC<ConnectorGovernanceCardProps> = (
   writeAccessRole = 'Project Analyst',
 }) => {
   return (
-    <div className="prism-governance-section">
+    <div className="rca_assist-governance-section">
       <div style={{ marginBottom: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Shield size={15} style={{ color: 'var(--acc, #2563eb)' }} />

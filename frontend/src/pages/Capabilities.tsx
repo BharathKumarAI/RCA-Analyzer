@@ -41,6 +41,7 @@ import '../styles/capabilities.css';
 
 type TabKey = 'topology' | 'governance' | 'model' | 'manifest';
 type ViewMode = 'workflows' | 'profiles';
+const capabilityFromLocation = () => new URLSearchParams(window.location.search).get('capability') || new URLSearchParams(window.location.hash.split('?')[1] || '').get('capability') || '';
 
 interface CapabilitiesProps {
   onNewInvestigation?: (capabilityId: string) => void;
@@ -56,7 +57,7 @@ export const Capabilities: React.FC<CapabilitiesProps> = ({ onNewInvestigation }
   const [availabilityBusy, setAvailabilityBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedCapId, setSelectedCapId] = useState<string>('');
+  const [selectedCapId, setSelectedCapId] = useState<string>(capabilityFromLocation);
   const [activeTab, setActiveTab] = useState<TabKey>('topology');
   const [activeProfileKey, setActiveProfileKey] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -101,6 +102,22 @@ export const Capabilities: React.FC<CapabilitiesProps> = ({ onNewInvestigation }
   useEffect(() => {
     void loadAll();
   }, []);
+
+  useEffect(() => {
+    const selectLinkedCapability = () => {
+      const id = capabilityFromLocation();
+      if (id && capabilities.some(cap => cap.id === id)) {
+        setSelectedCapId(id);
+        setViewMode('workflows');
+      }
+    };
+    window.addEventListener('hashchange', selectLinkedCapability);
+    window.addEventListener('popstate', selectLinkedCapability);
+    return () => {
+      window.removeEventListener('hashchange', selectLinkedCapability);
+      window.removeEventListener('popstate', selectLinkedCapability);
+    };
+  }, [capabilities]);
 
   // Extract unique categories dynamically from server data
   const availableCategories = useMemo(() => {

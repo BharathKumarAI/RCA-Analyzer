@@ -17,9 +17,16 @@ def test_knowledge_upload_is_scoped_bounded_and_redacted():
             assert response.status_code == 201
             item = response.json()
             assert "private-value" not in item["content"]
-            assert item["upload"]["original_retained"] is False
+            assert item["status"] == "draft"
+            assert item["upload"]["original_retained"] is True
+            assert client.get("/api/v1/knowledge", headers=token("viewer")).json() == []
+            review_body = {"expected_hash": item["content_hash"], "reason": "Reviewed the bounded extracted document"}
+            assert client.post(f"/api/v1/knowledge/{item['id']}/submit", headers=token("owner"), json=review_body).status_code == 200
+            assert client.post(f"/api/v1/knowledge/{item['id']}/approve", headers=token("owner"), json=review_body).status_code == 403
+            assert client.post(f"/api/v1/knowledge/{item['id']}/approve", headers=token("admin"), json=review_body).status_code == 200
             documents = client.get("/api/v1/knowledge", headers=token("viewer")).json()
             stored = next(row for row in documents if row.get("doc_id") == item["doc_id"])
+            assert stored["status"] == "approved"
             assert stored["upload"] == item["upload"]
             assert stored["upload"]["processing_status"] == "extracted"
             bad = client.post("/api/v1/knowledge/upload", headers=token("owner"), data={"title": "Invalid"}, files={"file": ("script.exe", b"not allowed")})

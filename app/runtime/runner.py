@@ -25,6 +25,7 @@ from app.connectors.providers.registry import (
 )
 from app.configuration.platform import PlatformConfiguration
 from app.configuration.parameters import RUNTIME_FIELDS
+from app.configuration.model_pricing import pricing_snapshot
 from app.configuration.models import ExecutionLimits
 from app.observability.otel import get_tracer
 from app.observability.mlflow_adapter import record_run_metrics
@@ -71,6 +72,7 @@ class ExecutionRunner:
         self.chat_artifacts = chat_artifacts
         self.connector_instance_store = connector_instance_store
         self.parameter_store = parameter_store
+        self.knowledge = None
         self.refresh_deployment_connectors = refresh_deployment_connectors
         self.connector_secret_references = connector_secret_references
         self.connector_allowed_hosts = connector_allowed_hosts
@@ -472,12 +474,15 @@ class ExecutionRunner:
             self.settings.project_id,
         ):
             raise PermissionError("Identity is outside deployment scope")
-        preliminary = CapabilityResolver(self.registry).resolve(
+        # Keep each request on one catalog snapshot while other requests add skills.
+        registry = self.registry
+        harness = registry.harness
+        preliminary = CapabilityResolver(registry).resolve(
             capability_id, principal, check_health=False
         )
         if not preliminary.is_authorized:
             raise PermissionError(preliminary.rejection_reason)
-        runtime = self.registry.inheritance.runtime(
+        runtime = registry.inheritance.runtime(
             principal, self.settings, self.prompts
         )
         effective_settings = runtime["settings"]
@@ -506,8 +511,8 @@ class ExecutionRunner:
                 if self.configuration_service and runtime["workflow"].specialists
                 else []
             )
-            project = self.registry.inheritance.project(principal)
-            approved = self.harness.filter_approved(
+            project = registry.inheritance.project(principal)
+            approved = harness.filter_approved(
                 approved, project.harness if project else None
             )
             if len(approved) > self.settings.max_project_agents:
@@ -519,7 +524,7 @@ class ExecutionRunner:
                 if self.optimization_service
                 else None
             )
-            runtime = self.registry.inheritance.runtime(
+            runtime = registry.inheritance.runtime(
                 principal,
                 self.settings,
                 optimized["bundle"]["prompts"] if optimized else self.prompts,
@@ -528,10 +533,10 @@ class ExecutionRunner:
             skill_contents = (
                 optimized["bundle"]["skills"]
                 if optimized
-                else self.registry.skill_contents
+                else registry.skill_contents
             )
             resolved = (
-                CapabilityResolver(self.registry).resolve(
+                CapabilityResolver(registry).resolve(
                     capability_id,
                     principal,
                     check_health=False,
@@ -561,8 +566,18 @@ class ExecutionRunner:
                         jira_attachment_processing = str(row.get("effective_value") or "disabled")
                         break
 
+            knowledge = []
+            if self.knowledge is not None:
+                knowledge = await self.knowledge.relevant(
+                    principal, request.text,
+                    max_items=max(0, effective_settings.max_evidence_items - len(files) - len(capability.allowed_actions)),
+                    max_chars=min(effective_settings.max_context_chars // 4, effective_settings.max_evidence_chars),
+                )
             snapshot = {
-                "harness_revision": self.harness.revision,
+                "knowledge_references": knowledge,
+                "model_telemetry_version": 1,
+                "model_pricing": await pricing_snapshot(self.store.engine, principal),
+                "harness_revision": harness.revision,
                 "runtime_controls": {name: getattr(effective_settings, name) for name in RUNTIME_FIELDS},
                 "project_template": project.project_template.model_dump(mode="json") if project and project.project_template else None,
                 "harness_selection": project.harness.model_dump(mode="json") if project else {},
@@ -627,7 +642,7 @@ class ExecutionRunner:
                 request=clean_request,
                 capability=capability.id,
                 capability_version=capability.version,
-                capability_hash=self.registry.content_hash,
+                capability_hash=resolved.content_hash,
                 policy_hash=self.policy_hash,
                 skill_hashes=tuple(
                     "sha256:" + hashlib.sha256(skill_contents[s].encode()).hexdigest()
@@ -835,6 +850,13 @@ class ExecutionRunner:
             )
             governance.failures.extend(file.get("warnings", []))
         snapshot = json.loads(contract.model_config_json)
+        for reference in snapshot.get("knowledge_references", []):
+            captured = await governance.capture(
+                "knowledge", reference["title"],
+                {key: reference[key] for key in ("doc_id", "content_hash", "revision")},
+                reference,
+            )
+            reference["evidence_id"] = captured["evidence_id"]
         snapshot["connector_controls"] = {
             name: {field: getattr(provider, field) for field in (
                 "max_response_bytes", "max_results", "max_window_seconds", "custom_field_mapping",

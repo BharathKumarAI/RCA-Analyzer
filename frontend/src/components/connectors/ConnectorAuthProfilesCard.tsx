@@ -10,7 +10,7 @@ export const ConnectorAuthProfilesCard: React.FC<ConnectorAuthProfilesCardProps>
   readOnly = false,
 }) => {
   return (
-    <div className="prism-auth-profiles-section">
+    <div className="rca_assist-auth-profiles-section">
       <div style={{ marginBottom: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Key size={15} style={{ color: 'var(--acc, #2563eb)' }} />

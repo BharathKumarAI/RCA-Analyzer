@@ -35,6 +35,17 @@ def read_platform(settings, registry=None, prompts_override=None):
             files[f"{prefix}/{path.relative_to(directory)}"] = path.read_text()
     for relative, text in registry.inheritance.files.items():
         files[f"layers/{relative}"] = text
+    if registry.managed_skills:
+        # Replay and export consume the same effective definitions as live runs.
+        files["layers/platform.yaml"] = yaml.safe_dump(
+            registry.inheritance.policy.model_dump(mode="json"), sort_keys=False)
+        for skill in registry.managed_skills:
+            files[f"skills/{skill.id}/SKILL.md"] = registry.skill_contents[skill.id]
+            for capability_id in skill.capabilities:
+                cap = registry.get(capability_id)
+                for path, source in tuple(files.items()):
+                    if path.startswith("capabilities/") and load_yaml_data(source).get("id") == capability_id:
+                        files[path] = yaml.safe_dump(cap.model_dump(mode="json"), sort_keys=False)
     files.update(
         {
             f"projects/{name}": text

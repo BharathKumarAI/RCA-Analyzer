@@ -119,6 +119,7 @@ TERMINAL_STATUSES = {
 
 class RunResponse(BaseModel):
     chat_id: str | None = None
+    prompt: str = ""
     run_id: str
     status: RunStatus
     mode: Literal["demo", "live"]

@@ -1,45 +1,52 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { KeyRound, ShieldAlert, X } from 'lucide-react';
-import { Principal } from '../types/api';
-import { ApiError, getSessionToken, setSessionToken, fetchPrincipal } from '../services/api';
+import { KeyRound, X } from 'lucide-react';
+import type { AuthProviders, Principal } from '../types/api';
+import { ApiError, fetchAuthProviders, fetchPrincipal, getSessionToken, logoutSession, setSessionToken } from '../services/api';
+import './SessionModal.css';
+
+const localLoginPath = (value: string | null | undefined) => {
+  if (!value) return null;
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.origin === window.location.origin && url.pathname.startsWith('/api/v1/auth/') ? url.pathname + url.search : null;
+  } catch { return null; }
+};
 
 interface SessionModalProps {
   isOpen: boolean;
   onClose: () => void;
   principal: Principal;
-  onUpdatePrincipal?: (p: Principal) => void;
+  onUpdatePrincipal?: (principal: Principal) => void;
   onSessionChanged?: () => void;
   onAuthenticated?: (principal: Principal) => void;
   onSignedOut?: (reason?: string) => void;
   sessionError?: string | null;
 }
 
-export const SessionModal: React.FC<SessionModalProps> = ({
-  isOpen,
-  onClose,
-  principal,
-  onUpdatePrincipal: _onUpdatePrincipal,
-  onSessionChanged,
-  onAuthenticated,
-  onSignedOut,
-  sessionError,
-}) => {
-  const [tokenInput, setTokenInput] = useState(getSessionToken() || '');
+export const SessionModal: React.FC<SessionModalProps> = ({ isOpen, onClose, principal, onSessionChanged, onAuthenticated, onSignedOut, sessionError }) => {
+  const [tokenInput, setTokenInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [providers, setProviders] = useState<AuthProviders | null>(null);
+  const [providerError, setProviderError] = useState<string | null>(null);
+  const [providerRetry, setProviderRetry] = useState(0);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const authenticated = Boolean(principal.subject);
+  const loginPath = providers?.configured ? localLoginPath(providers.login_path) : null;
 
   useEffect(() => {
-    setTokenInput(isOpen ? getSessionToken() || '' : '');
-    setError(null);
-  }, [isOpen, principal.subject]);
+    if (!isOpen) return;
+    let cancelled = false;
+    setTokenInput(''); setError(null); setProviderError(null);
+    void fetchAuthProviders().then(value => { if (!cancelled) setProviders(value); }).catch(reason => { if (!cancelled) setProviderError(reason instanceof Error ? reason.message : 'Sign-in options could not load.'); });
+    return () => { cancelled = true; };
+  }, [isOpen, providerRetry]);
 
   useEffect(() => {
     if (!isOpen) return;
     previouslyFocused.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)') || []);
+    const focusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), a[href], summary') || []).filter(element => element.getClientRects().length > 0);
     focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && authenticated && !loading) { onClose(); return; }
@@ -55,82 +62,37 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSave = async () => {
+  const connectToken = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
     if (loading) return;
+    if (!tokenInput.trim()) { setError('Paste an administrator session token to connect.'); return; }
     setError(null); setLoading(true);
-    if (!tokenInput.trim()) {
-      if (!authenticated) { setError('Paste a session token to connect.'); setLoading(false); return; }
-      setSessionToken(null); setTokenInput(''); onSignedOut?.(); setLoading(false); return;
-    }
     try { setSessionToken(tokenInput); const next = await fetchPrincipal(); onAuthenticated?.(next); onSessionChanged?.(); setTokenInput(''); onClose(); }
     catch (reason) {
       const message = reason instanceof Error ? reason.message : 'Session verification failed';
       setSessionToken(null);
       if (!(reason instanceof ApiError && reason.status === 0)) setTokenInput('');
-      setError(message);
-      onSignedOut?.(message);
-    }
+      setError(message); onSignedOut?.(message);
+    } finally { setLoading(false); }
+  };
+  const signOut = async () => {
+    if (loading) return;
+    setLoading(true); setError(null);
+    try { await logoutSession(); setTokenInput(''); onSignedOut?.(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Sign out could not finish. Try again.'); }
     finally { setLoading(false); }
   };
 
-  return (
-    <div className="modal-overlay" onClick={() => { if (!loading) onClose(); }}>
-      <div ref={dialogRef} className="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="session-title" aria-describedby="session-description" onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <KeyRound size={18} color="var(--acc)" />
-            <h2 id="session-title" style={{ fontSize: '16px', fontWeight: 600 }}>{authenticated ? 'Session details' : 'Connect your session'}</h2>
-          </div>
-          {authenticated && <button type="button" className="icon-btn" aria-label="Close session dialog" onClick={onClose} disabled={loading}><X size={16} /></button>}
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <p id="session-description" style={{ color: 'var(--muted)', fontSize: '12px' }}>{authenticated ? 'Your authenticated identity and assigned roles are shown below.' : 'Paste a session token to access RCA Analyzer.'}</p>
-          {(error || sessionError) && <div role="alert" style={{ color: 'var(--acc-rose)', fontSize: '12px' }}>{error || sessionError}</div>}
-          {authenticated && <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--card-subtle)', border: '1px solid var(--line)', fontSize: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-              <span style={{ color: 'var(--muted)' }}>Subject</span>
-              <span style={{ fontWeight: 600 }}>{principal.subject}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--muted)' }}>Assigned Roles</span>
-              <span className="badge badge-active">{principal.roles.join(', ')}</span>
-            </div>
-          </div>}
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>
-              Session token
-            </label>
-            <textarea
-              aria-label="Session bearer token"
-              rows={4}
-              disabled={loading}
-              autoComplete="off"
-              spellCheck={false}
-              value={tokenInput}
-              onChange={e => setTokenInput(e.target.value)}
-              placeholder="Paste your deployment JWT"
-              style={{ width: '100%', padding: '10px', resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '11px' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-              <span style={{ fontSize: '11px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ShieldAlert size={12} />
-                Token stays in memory and resets when this page refreshes.
-              </span>
-
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
-          {authenticated && <button type="button" className="btn btn-secondary" disabled={loading} onClick={() => { setSessionToken(null); setTokenInput(''); onSignedOut?.(); }}>Sign out</button>}
-          {authenticated && <button type="button" className="btn btn-secondary" onClick={onClose} disabled={loading}>Close</button>}
-          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={loading}>
-            {loading ? 'Verifying…' : tokenInput.trim() ? 'Connect session' : authenticated ? 'Sign out' : 'Connect session'}
-          </button>
-        </div>
-      </div>
+  return <div className="modal-overlay" onClick={() => { if (authenticated && !loading) onClose(); }}>
+    <div ref={dialogRef} className="modal-dialog session-dialog" role="dialog" aria-modal="true" aria-labelledby="session-title" aria-describedby="session-description" onClick={event => event.stopPropagation()}>
+      <div className="session-heading"><KeyRound size={20} aria-hidden="true" /><h2 id="session-title">{authenticated ? 'Your session' : 'Sign in to RCA assist'}</h2>{authenticated && <button type="button" className="icon-btn" aria-label="Close session dialog" onClick={onClose} disabled={loading}><X size={16} /></button>}</div>
+      <p id="session-description">{authenticated ? 'Your account determines which project and settings you can access.' : 'Use your company account to open your assigned workspace.'}</p>
+      {(error || sessionError) && <p className="session-error" role="alert">{error || sessionError}</p>}
+      {authenticated ? <dl className="session-identity"><dt>Account</dt><dd>{principal.subject}</dd><dt>Project</dt><dd>{principal.project_id}</dd><dt>Access</dt><dd>{principal.roles.map(role => role.replace(/_/g, ' ').toLowerCase()).join(', ')}</dd><dt>Signed in with</dt><dd>{getSessionToken() ? 'Administrator session token' : 'Company account'}</dd></dl> : <section className="session-company-signin">
+        {loginPath ? <a className="btn btn-primary" href={loginPath}>Continue with {providers?.name || 'company sign-in'}</a> : providerError ? <div role="alert"><p>{providerError}</p><button type="button" className="btn btn-secondary" onClick={() => setProviderRetry(value => value + 1)}>Retry sign-in options</button></div> : providers ? <p>Company sign-in has not been configured. Ask your platform administrator to set it up.</p> : <p role="status">Loading company sign-in…</p>}
+      </section>}
+      <details className="session-token-access"><summary>Administrator access</summary><p>Use a session token only when your administrator has provided one. It stays in memory and is cleared on refresh.</p><form onSubmit={connectToken}><label htmlFor="session-bearer-token">Session token</label><textarea id="session-bearer-token" aria-label="Session bearer token" rows={3} disabled={loading} autoComplete="off" spellCheck={false} value={tokenInput} onChange={event => setTokenInput(event.target.value)} /><button type="submit" className="btn btn-secondary" disabled={loading || !tokenInput.trim()}>{loading ? 'Verifying…' : 'Connect session'}</button></form></details>
+      <div className="session-footer">{authenticated ? <><button type="button" className="btn btn-secondary" disabled={loading} onClick={() => void signOut()}>{loading ? 'Signing out…' : 'Sign out'}</button><button type="button" className="btn btn-primary" onClick={onClose} disabled={loading}>Done</button></> : <a className="btn btn-secondary" href="/">Back to RCA assist</a>}</div>
     </div>
-  );
+  </div>;
 };

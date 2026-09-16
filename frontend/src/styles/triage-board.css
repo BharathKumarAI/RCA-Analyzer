@@ -1,0 +1,1045 @@
+/* PRISM Live Triage Board & Investigation Workspace Stylesheet */
+/* Follows project tokens: var(--bg), var(--card), var(--line), var(--acc), etc. */
+
+.triage-board-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  padding: 0 4px;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
+   Header Strip
+   ========================================================================== */
+.triage-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.triage-title-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.triage-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--acc-glow);
+  color: var(--acc);
+  border: 1px solid var(--line);
+}
+
+.triage-title-text h1 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--tx);
+  letter-spacing: -0.01em;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.triage-title-text p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 2px 0 0;
+}
+
+.triage-live-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--acc3);
+  background: var(--acc3-glow);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(39, 123, 103, 0.25);
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.triage-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.triage-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  min-width: 240px;
+}
+
+.triage-search-box:focus-within {
+  border-color: var(--line-focus);
+}
+
+.triage-search-box input {
+  border: 0;
+  background: transparent;
+  outline: 0;
+  font-size: 12px;
+  color: var(--tx);
+  padding: 6px 0;
+  width: 100%;
+}
+
+.btn-triage-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.btn-triage-refresh:hover {
+  border-color: var(--line-strong);
+  background: var(--card-hover);
+}
+
+/* ==========================================================================
+   Urgency Strip (4 Operational Cards)
+   ========================================================================== */
+.urgency-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.urgency-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.urgency-card:hover {
+  border-color: var(--line-strong);
+}
+
+.urgency-card.card-breached {
+  border-left: 3px solid var(--acc-rose);
+}
+
+.urgency-card.card-at-risk {
+  border-left: 3px solid var(--acc-amber);
+}
+
+.urgency-card.card-action-req {
+  border-left: 3px solid var(--acc);
+}
+
+.urgency-card.card-healthy {
+  border-left: 3px solid var(--acc3);
+}
+
+.urgency-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--card-subtle);
+  flex-shrink: 0;
+}
+
+.card-breached .urgency-icon-box { color: var(--acc-rose); }
+.card-at-risk .urgency-icon-box { color: var(--acc-amber); }
+.card-action-req .urgency-icon-box { color: var(--acc); }
+.card-healthy .urgency-icon-box { color: var(--acc3); }
+
+.urgency-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.urgency-count {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--tx);
+  line-height: 1.1;
+}
+
+.urgency-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+/* ==========================================================================
+   Work Buckets Filter Strip
+   ========================================================================== */
+.work-buckets-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+
+.bucket-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.bucket-pill:hover {
+  border-color: var(--line-strong);
+  color: var(--tx);
+}
+
+.bucket-pill.active {
+  background: var(--tx);
+  color: var(--tx-inverse);
+  border-color: var(--tx);
+}
+
+.bucket-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--card-subtle);
+  color: var(--muted);
+}
+
+.bucket-pill.active .bucket-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: var(--tx-inverse);
+}
+
+/* ==========================================================================
+   3-Column Workbench Layout
+   ========================================================================== */
+.triage-workbench-grid {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr) 280px;
+  gap: 12px;
+  min-height: 680px;
+}
+
+@media (max-width: 1360px) {
+  .triage-workbench-grid {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+  .triage-team-column {
+    display: none;
+  }
+}
+
+@media (max-width: 960px) {
+  .triage-workbench-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Left Column: Focus Queue
+   ========================================================================== */
+.focus-queue-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.focus-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card-subtle);
+}
+
+.focus-queue-header h2 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tx);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.focus-queue-sub {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.focus-queue-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: calc(100vh - 270px);
+}
+
+.focus-ticket-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  text-align: left;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.15s ease, border-left-color 0.15s ease;
+}
+
+.focus-ticket-card:hover {
+  background: var(--card-hover);
+}
+
+.focus-ticket-card.selected {
+  background: var(--card-active);
+  border-left-color: var(--acc);
+}
+
+.focus-ticket-card.card-breached {
+  border-left-color: var(--acc-rose);
+}
+
+.focus-ticket-card.card-at-risk {
+  border-left-color: var(--acc-amber);
+}
+
+.card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.priority-chip {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+}
+
+.priority-p1 {
+  background: rgba(180, 35, 63, 0.12);
+  color: var(--acc-rose);
+  border: 1px solid rgba(180, 35, 63, 0.25);
+}
+
+.priority-p2 {
+  background: rgba(154, 103, 0, 0.12);
+  color: var(--acc-amber);
+  border: 1px solid rgba(154, 103, 0, 0.25);
+}
+
+.priority-p3 {
+  background: rgba(39, 123, 103, 0.12);
+  color: var(--acc3);
+  border: 1px solid rgba(39, 123, 103, 0.25);
+}
+
+.priority-p4 {
+  background: var(--card-subtle);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.ticket-key {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--tx);
+}
+
+.work-state-pill {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.work-state-pill.state-returned {
+  background: rgba(196, 20, 112, 0.12);
+  color: var(--acc);
+  border-color: rgba(196, 20, 112, 0.25);
+}
+
+.work-state-pill.state-in-triage {
+  background: var(--acc3-glow);
+  color: var(--acc3);
+  border-color: rgba(39, 123, 103, 0.25);
+}
+
+.card-summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.card-sla-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.sla-countdown-badge {
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.sla-breached {
+  background: rgba(180, 35, 63, 0.12);
+  color: var(--acc-rose);
+}
+
+.sla-at-risk {
+  background: rgba(154, 103, 0, 0.12);
+  color: var(--acc-amber);
+}
+
+.sla-healthy {
+  background: var(--acc3-glow);
+  color: var(--acc3);
+}
+
+.sla-progress-track {
+  width: 100%;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.sla-progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.fill-breached { background: var(--acc-rose); }
+.fill-at-risk { background: var(--acc-amber); }
+.fill-healthy { background: var(--acc3); }
+
+.card-explanation-box {
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.card-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.card-owner-info {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-card-action {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--acc-glow);
+  color: var(--acc);
+  border: 1px solid rgba(196, 20, 112, 0.25);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-card-action:hover {
+  background: var(--acc);
+  color: var(--tx-inverse);
+}
+
+/* ==========================================================================
+   Center Column: Ticket Investigation Workspace
+   ========================================================================== */
+.triage-workspace-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.workspace-persistent-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+
+.header-top-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-tag-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-ticket-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--tx);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.workspace-meta-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.workspace-nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card-subtle);
+  overflow-x: auto;
+}
+
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-bottom-color 0.15s ease;
+}
+
+.workspace-tab:hover {
+  color: var(--tx);
+}
+
+.workspace-tab.active {
+  color: var(--acc);
+  border-bottom-color: var(--acc);
+}
+
+.tab-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--line);
+  color: var(--muted);
+}
+
+.workspace-tab.active .tab-badge {
+  background: var(--acc-glow);
+  color: var(--acc);
+}
+
+.workspace-body-container {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ==========================================================================
+   Tab 1: Overview & Assignment Journey
+   ========================================================================== */
+.overview-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.journey-timeline-card {
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.journey-header {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--tx);
+  letter-spacing: 0.04em;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.journey-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  padding-left: 18px;
+}
+
+.journey-steps-list::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--line-strong);
+}
+
+.journey-step-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.journey-step-dot {
+  position: absolute;
+  left: -18px;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--acc);
+  border: 2px solid var(--card);
+}
+
+.journey-step-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.journey-step-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* Delta Card */
+.delta-changes-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.delta-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.delta-item:last-child {
+  border-bottom: 0;
+}
+
+/* ==========================================================================
+   Tab 3: Contextual Tool Pane
+   ========================================================================== */
+.tool-pane-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tool-selector-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.tool-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tool-tab-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--tx);
+}
+
+.tool-tab-btn.active {
+  background: var(--tx);
+  color: var(--tx-inverse);
+  border-color: var(--tx);
+}
+
+.tool-proposal-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-rationale-box {
+  background: var(--card-subtle);
+  border-left: 3px solid var(--acc);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--tx);
+}
+
+.tool-editor-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.tool-query-textarea {
+  width: 100%;
+  min-height: 110px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  color: var(--tx);
+  resize: vertical;
+}
+
+.tool-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-tool-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--acc);
+  color: var(--tx-inverse);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.btn-tool-run:hover {
+  opacity: 0.9;
+}
+
+.btn-tool-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tx);
+  cursor: pointer;
+}
+
+.btn-tool-secondary:hover {
+  border-color: var(--line-strong);
+}
+
+/* Tool Results */
+.tool-results-card {
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.results-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
+.results-table th, .results-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.results-table th {
+  background: var(--card-subtle);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Right Column: Team Capacity, Connectors & Metrics
+   ========================================================================== */
+.triage-team-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.team-sidebar-panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tx);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.analyst-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.analyst-list-item:last-child {
+  border-bottom: 0;
+}
+
+.analyst-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.analyst-name {
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.analyst-sub {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.connector-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 11.5px;
+}
+
+.status-dot-green {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc3);
+  margin-right: 4px;
+}
+
+.metric-grid-2x2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.metric-tile {
+  background: var(--card-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-tile-val {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--tx);
+}
+
+.metric-tile-label {
+  font-size: 10px;
+  color: var(--muted);
+}

@@ -36,6 +36,6 @@ skills:
     actions: [itsm.get_ticket]
 ```
 
-[Platform policy](../platform.yaml) delegates sections, model-profile choices, skill overrides and user preference fields. Limits use the smaller of platform and project values. A project cannot enable a disabled platform capability, expand roles/actions, create a new connector, change a model ID, alter security or supply credentials. Custom agents still require the [separate approval lifecycle](../../../../docs/skill-lifecycle.md).
+[Platform policy](../platform.yaml) delegates sections, model-profile choices, skill overrides and user preference fields. Limits use the smaller of platform and project values. A project cannot enable a disabled platform capability, expand roles/actions, create a new connector, change a model ID, alter security or supply credentials. Custom agents still require the [separate approval lifecycle](../../../../docs/reference/configuration-and-review-contracts.md#skill-lifecycle).
 
-See the [application architecture and ownership matrix](../../../../docs/architecture.md#configuration-ownership-and-inheritance).
+See the [application architecture and ownership matrix](../../../../docs/configuration.md#scope-and-precedence).

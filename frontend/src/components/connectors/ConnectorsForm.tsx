@@ -277,9 +277,9 @@ export default function ConnectorsForm({
 
     if (isPlatformAdmin && !readOnly) {
       return (
-        <div className="prism-field-gov-control" title="Field Access & Control: Click to change project visibility and editing">
-          <div className={`prism-gov-select-pill ${tier} ${isSaving ? 'is-saving' : ''}`}>
-            <span className="prism-gov-pill-icon">
+        <div className="rca_assist-field-gov-control" title="Field Access & Control: Click to change project visibility and editing">
+          <div className={`rca_assist-gov-select-pill ${tier} ${isSaving ? 'is-saving' : ''}`}>
+            <span className="rca_assist-gov-pill-icon">
               {isSaving ? (
                 <RefreshCw size={10} className="spin" />
               ) : tier === 'platform_only' ? (
@@ -295,7 +295,7 @@ export default function ConnectorsForm({
               value={tier}
               disabled={isSaving}
               onChange={(e) => void handleGovChange(name, e.target.value as GovernanceTier)}
-              className="prism-gov-inline-select"
+              className="rca_assist-gov-inline-select"
             >
               <option value="platform_only">Platform Only</option>
               <option value="project_editable">Project Editable</option>
@@ -303,7 +303,7 @@ export default function ConnectorsForm({
             </select>
           </div>
           {feedback && (
-            <span className={`prism-gov-inline-feedback ${feedback.type}`} role="status">
+            <span className={`rca_assist-gov-inline-feedback ${feedback.type}`} role="status">
               {feedback.text}
             </span>
           )}
@@ -313,7 +313,7 @@ export default function ConnectorsForm({
 
     return (
       <span
-        className={`prism-gov-badge ${tier}`}
+        className={`rca_assist-gov-badge ${tier}`}
         title={
           tier === 'platform_only'
             ? 'Platform Only — Invisible to standard project users'

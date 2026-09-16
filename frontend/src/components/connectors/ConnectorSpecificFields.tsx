@@ -35,32 +35,32 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
   // Jira / ITSM
   if (connectorType === 'itsm') {
     return (
-      <div className="prism-connector-specific-fields">
-        <div className="prism-form-grid-2">
+      <div className="rca_assist-connector-specific-fields">
+        <div className="rca_assist-form-grid-2">
           {onJiraProjectKeyChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">
-                Jira Project Key <span className="prism-req">*</span>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">
+                Jira Project Key <span className="rca_assist-req">*</span>
               </label>
               <input
                 type="text"
-                className="prism-input mono"
+                className="rca_assist-input mono"
                 value={jiraProjectKey || ''}
                 placeholder="PROJ"
                 disabled={readOnly}
                 onChange={e => onJiraProjectKeyChange(e.target.value.toUpperCase())}
               />
-              <span className="prism-field-caption">Primary Jira project key for incident triage</span>
+              <span className="rca_assist-field-caption">Primary Jira project key for incident triage</span>
             </div>
           )}
 
           {onAttachmentProcessingChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">
-                Attachment Processing Mode <span className="prism-req">*</span>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">
+                Attachment Processing Mode <span className="rca_assist-req">*</span>
               </label>
               <select
-                className="prism-select"
+                className="rca_assist-select"
                 value={attachmentProcessing}
                 disabled={readOnly}
                 onChange={e => onAttachmentProcessingChange(e.target.value)}
@@ -69,35 +69,35 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
                 <option value="skip">skip (Ignore ticket attachments)</option>
                 <option value="summarize">summarize (Extract text and summarize)</option>
               </select>
-              <span className="prism-field-caption">
+              <span className="rca_assist-field-caption">
                 Local-only parsing policy during triage; remote fetches and macros are forbidden.
               </span>
             </div>
           )}
 
           {onMaxResultsChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">
-                Max Ticket Results <span className="prism-req">*</span>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">
+                Max Ticket Results <span className="rca_assist-req">*</span>
               </label>
               <input
                 type="number"
-                className="prism-input"
+                className="rca_assist-input"
                 value={maxResults}
                 min={1}
                 max={100}
                 disabled={readOnly}
                 onChange={e => onMaxResultsChange(Number(e.target.value) || 50)}
               />
-              <span className="prism-field-caption">Maximum issues fetched during incident discovery</span>
+              <span className="rca_assist-field-caption">Maximum issues fetched during incident discovery</span>
             </div>
           )}
 
           {onCustomJqlChange && (
-            <div className="prism-form-group full-width">
+            <div className="rca_assist-form-group full-width">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <label className="prism-label" style={{ margin: 0 }}>Custom JQL Filter (Saved Configuration)</label>
+                  <label className="rca_assist-label" style={{ margin: 0 }}>Custom JQL Filter (Saved Configuration)</label>
                   <span
                     style={{
                       fontSize: '11px',
@@ -117,14 +117,14 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
                 </span>
               </div>
               <textarea
-                className="prism-textarea mono"
+                className="rca_assist-textarea mono"
                 rows={3}
                 value={customJql || ''}
                 placeholder="e.g. project = INC AND status != Closed"
                 disabled={readOnly}
                 onChange={e => onCustomJqlChange(e.target.value)}
               />
-              <span className="prism-field-caption">
+              <span className="rca_assist-field-caption">
                 Saved query appended to incident triage queries (max 4096 characters). Dynamic JQL evaluation supported.
               </span>
             </div>
@@ -137,52 +137,52 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
   // Splunk / Log Search
   if (connectorType === 'log_search') {
     return (
-      <div className="prism-connector-specific-fields">
-        <div className="prism-form-grid-2">
+      <div className="rca_assist-connector-specific-fields">
+        <div className="rca_assist-form-grid-2">
           {onSplunkIndexChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">
-                Authorized Splunk Index <span className="prism-req">*</span>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">
+                Authorized Splunk Index <span className="rca_assist-req">*</span>
               </label>
               <input
                 type="text"
-                className="prism-input mono"
+                className="rca_assist-input mono"
                 value={splunkIndex || ''}
                 placeholder="main"
                 disabled={readOnly}
                 onChange={e => onSplunkIndexChange(e.target.value)}
               />
-              <span className="prism-field-caption">Target index searched by the native Splunk client</span>
+              <span className="rca_assist-field-caption">Target index searched by the native Splunk client</span>
             </div>
           )}
 
           {onMaxResultsChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">
-                Max Log Results <span className="prism-req">*</span>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">
+                Max Log Results <span className="rca_assist-req">*</span>
               </label>
               <input
                 type="number"
-                className="prism-input"
+                className="rca_assist-input"
                 value={maxResults}
                 min={1}
                 max={1000}
                 disabled={readOnly}
                 onChange={e => onMaxResultsChange(Number(e.target.value) || 100)}
               />
-              <span className="prism-field-caption">Maximum events returned per log query (1–1000)</span>
+              <span className="rca_assist-field-caption">Maximum events returned per log query (1–1000)</span>
             </div>
           )}
 
           {onSearchWindowSecondsChange && (
-            <div className="prism-form-group full-width">
-              <label className="prism-label">
-                Search Time Window Seconds <span className="prism-req">*</span>
+            <div className="rca_assist-form-group full-width">
+              <label className="rca_assist-label">
+                Search Time Window Seconds <span className="rca_assist-req">*</span>
               </label>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <input
                   type="number"
-                  className="prism-input"
+                  className="rca_assist-input"
                   value={searchWindowSeconds}
                   min={60}
                   max={86400}
@@ -193,7 +193,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button
                       type="button"
-                      className="prism-btn-reset"
+                      className="rca_assist-btn-reset"
                       style={{ padding: '4px 8px', fontSize: '11px' }}
                       onClick={() => onSearchWindowSecondsChange(3600)}
                     >
@@ -201,7 +201,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
                     </button>
                     <button
                       type="button"
-                      className="prism-btn-reset"
+                      className="rca_assist-btn-reset"
                       style={{ padding: '4px 8px', fontSize: '11px' }}
                       onClick={() => onSearchWindowSecondsChange(86400)}
                     >
@@ -210,7 +210,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
                   </div>
                 )}
               </div>
-              <span className="prism-field-caption">
+              <span className="rca_assist-field-caption">
                 Upper search limit: {searchWindowSeconds}s ({Math.round(searchWindowSeconds / 3600)} hours, capped at 86,400s / 24h)
               </span>
             </div>
@@ -223,38 +223,38 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
   // Unix
   if (connectorType === 'unix') {
     return (
-      <div className="prism-connector-specific-fields">
-        <div className="prism-form-grid-2">
+      <div className="rca_assist-connector-specific-fields">
+        <div className="rca_assist-form-grid-2">
           {onSshPortChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">SSH Port</label>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">SSH Port</label>
               <input
                 type="number"
-                className="prism-input"
+                className="rca_assist-input"
                 value={sshPort}
                 min={1}
                 max={65535}
                 disabled={readOnly}
                 onChange={e => onSshPortChange(Number(e.target.value) || 22)}
               />
-              <span className="prism-field-caption">Port for bounded SFTP connection (default 22)</span>
+              <span className="rca_assist-field-caption">Port for bounded SFTP connection (default 22)</span>
             </div>
           )}
 
           {onUnixLogPathChange && (
-            <div className="prism-form-group full-width">
-              <label className="prism-label">
-                Approved Log File Path <span className="prism-req">*</span>
+            <div className="rca_assist-form-group full-width">
+              <label className="rca_assist-label">
+                Approved Log File Path <span className="rca_assist-req">*</span>
               </label>
               <input
                 type="text"
-                className="prism-input mono"
+                className="rca_assist-input mono"
                 value={unixLogPath || ''}
                 placeholder="/var/log/application.log"
                 disabled={readOnly}
                 onChange={e => onUnixLogPathChange(e.target.value)}
               />
-              <span className="prism-field-caption">
+              <span className="rca_assist-field-caption">
                 Must be an absolute path (e.g. <code>/var/log/syslog</code>); path traversal (<code>..</code>) is rejected.
               </span>
             </div>
@@ -267,26 +267,26 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
   // Kafka
   if (connectorType === 'kafka') {
     return (
-      <div className="prism-connector-specific-fields">
-        <div className="prism-form-grid-2">
+      <div className="rca_assist-connector-specific-fields">
+        <div className="rca_assist-form-grid-2">
           {onKafkaTopicFilterChange && (
-            <div className="prism-form-group full-width">
-              <label className="prism-label">Kafka Topic Filter Pattern</label>
+            <div className="rca_assist-form-group full-width">
+              <label className="rca_assist-label">Kafka Topic Filter Pattern</label>
               <input
                 type="text"
-                className="prism-input mono"
+                className="rca_assist-input mono"
                 value={kafkaTopicFilter || ''}
                 placeholder="events-*"
                 disabled={readOnly}
                 onChange={e => onKafkaTopicFilterChange(e.target.value)}
               />
-              <span className="prism-field-caption">
+              <span className="rca_assist-field-caption">
                 Optional glob pattern (fnmatch) used to match configured topic names (max 256 characters).
               </span>
             </div>
           )}
 
-          <div className="prism-form-group full-width">
+          <div className="rca_assist-form-group full-width">
             <div
               style={{
                 display: 'flex',
@@ -313,13 +313,13 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
   // Oracle
   if (connectorType === 'oracle') {
     return (
-      <div className="prism-connector-specific-fields">
-        <div className="prism-form-grid-2">
+      <div className="rca_assist-connector-specific-fields">
+        <div className="rca_assist-form-grid-2">
           {onOracleDriverModeChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">Oracle Driver Mode</label>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">Oracle Driver Mode</label>
               <select
-                className="prism-select"
+                className="rca_assist-select"
                 value={oracleDriverMode}
                 disabled={readOnly}
                 onChange={e => onOracleDriverModeChange(e.target.value)}
@@ -331,10 +331,10 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
           )}
 
           {onOracleConnectionFormatChange && (
-            <div className="prism-form-group">
-              <label className="prism-label">Connection Format</label>
+            <div className="rca_assist-form-group">
+              <label className="rca_assist-label">Connection Format</label>
               <select
-                className="prism-select"
+                className="rca_assist-select"
                 value={oracleConnectionFormat}
                 disabled={readOnly}
                 onChange={e => onOracleConnectionFormatChange(e.target.value)}
@@ -347,11 +347,11 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
           )}
 
           {oracleDriverMode === 'thick' && onOracleClientLibDirChange && (
-            <div className="prism-form-group full-width">
-              <label className="prism-label">Oracle Client Library Directory</label>
+            <div className="rca_assist-form-group full-width">
+              <label className="rca_assist-label">Oracle Client Library Directory</label>
               <input
                 type="text"
-                className="prism-input mono"
+                className="rca_assist-input mono"
                 value={oracleClientLibDir || ''}
                 placeholder="/opt/oracle/instantclient_19_8"
                 disabled={readOnly}
@@ -360,7 +360,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
             </div>
           )}
 
-          <div className="prism-form-group full-width">
+          <div className="rca_assist-form-group full-width">
             <div
               style={{
                 display: 'flex',
@@ -386,11 +386,11 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
 
   // Generic Scope / REST Evidence (Confluence, GitLab, SignalFx, qTest, Kubernetes)
   return (
-    <div className="prism-connector-specific-fields">
-      <div className="prism-form-grid-2">
+    <div className="rca_assist-connector-specific-fields">
+      <div className="rca_assist-form-grid-2">
         {onScopeValueChange && (
-          <div className="prism-form-group full-width">
-            <label className="prism-label">
+          <div className="rca_assist-form-group full-width">
+            <label className="rca_assist-label">
               {connectorType === 'confluence'
                 ? 'Authorized Space Key'
                 : connectorType === 'gitlab'
@@ -405,7 +405,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
             </label>
             <input
               type="text"
-              className="prism-input mono"
+              className="rca_assist-input mono"
               value={scopeValue || ''}
               placeholder={
                 connectorType === 'confluence'
@@ -419,7 +419,7 @@ export const ConnectorSpecificFields: React.FC<ConnectorSpecificFieldsProps> = (
               disabled={readOnly}
               onChange={e => onScopeValueChange(e.target.value)}
             />
-            <span className="prism-field-caption">
+            <span className="rca_assist-field-caption">
               Scoped external resource identifier accessed by this connector.
             </span>
           </div>

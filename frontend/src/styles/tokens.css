@@ -8,6 +8,21 @@
   --shadow: 0 1px 2px rgba(34, 38, 56, .05), 0 5px 14px rgba(34, 38, 56, .05); --shadow-hover: 0 3px 8px rgba(34, 38, 56, .1);
   --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-full: 999px;
+
+  /* Semantic Aliases Mapped to Established Tokens */
+  --bg-elevated: var(--card-subtle);
+  --bg-card: var(--card);
+  --bg-input: var(--card);
+  --border-subtle: var(--line);
+  --border-medium: var(--line-strong);
+  --ink-primary: var(--tx);
+  --ink-secondary: var(--muted);
+  --ink-tertiary: var(--dim);
+  --accent-rose: var(--acc-rose);
+  --accent-teal: var(--acc3);
+  --accent-indigo: var(--acc2);
+  --accent-magenta: var(--acc);
+  --accent-amber: var(--acc-amber);
 }
 [data-theme="dark"] {
   --bg: #17151b; --card: #201d27; --card-hover: #292430; --card-active: #402337; --card-subtle: #1c1922;
@@ -15,4 +30,24 @@
   --text: var(--tx); --accent: var(--acc); --border: var(--line); --text-muted: var(--muted); --text-dim: var(--dim);
   --acc: #ed72b1; --acc-glow: rgba(237, 114, 177, .16); --acc2: #f18ac0; --acc3: #6dc6ae; --acc3-glow: rgba(109, 198, 174, .16); --acc-rose: #f07891; --acc-amber: #e8b858;
   --shadow: 0 2px 8px rgba(0, 0, 0, .22); --shadow-hover: 0 4px 14px rgba(0, 0, 0, .3);
+
+  /* Semantic Aliases Mapped to Established Tokens */
+  --bg-elevated: var(--card-subtle);
+  --bg-card: var(--card);
+  --bg-input: var(--card-subtle);
+  --border-subtle: var(--line);
+  --border-medium: var(--line-strong);
+  --ink-primary: var(--tx);
+  --ink-secondary: var(--muted);
+  --ink-tertiary: var(--dim);
+  --accent-rose: var(--acc-rose);
+  --accent-teal: var(--acc3);
+  --accent-indigo: var(--acc2);
+  --accent-magenta: var(--acc);
+  --accent-amber: var(--acc-amber);
 }
+
+.table-row-hover:hover {
+  background: var(--card-hover) !important;
+}
+

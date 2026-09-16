@@ -9,6 +9,46 @@ export interface Principal {
   authn_method?: string;
 }
 
+export interface AuthProviders {
+  configured: boolean;
+  name: string | null;
+  login_path: string | null;
+}
+
+export interface AuthSession {
+  principal: Principal;
+  expires_at: number | null;
+  csrf_token: string | null;
+  authentication: 'sso' | 'bearer';
+}
+
+export interface SsoDefinition {
+  display_name: string;
+  issuer: string;
+  client_id: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  jwks_uri: string;
+  redirect_uri: string;
+  token_auth_method: 'client_secret_basic' | 'client_secret_post' | 'none';
+  client_secret_reference: string;
+  scopes: Array<'openid' | 'profile' | 'email'>;
+  session_ttl_seconds: number;
+}
+
+export interface SsoConfiguration {
+  draft_id: string;
+  definition: SsoDefinition;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'REVOKED';
+  content_hash: string;
+  author_subject: string;
+  project_id: string;
+  created_at: number;
+  reviewer_subject: string | null;
+  reviewed_at: number | null;
+  review_reason: string | null;
+}
+
 export interface ProjectRedactionRule {
   id: string;
   label: string;
@@ -318,6 +358,13 @@ export interface ParameterDefinitionRow {
   enabled?: boolean;
   tool: string;
   variable_name: string;
+  label?: string;
+  section?: string | null;
+  display_order?: number | null;
+  is_required?: boolean;
+  ownership?: string;
+  validation_rules?: Record<string, unknown> | null;
+  runtime_binding?: string | null;
   value_type: ConnectorValueType;
   description: string;
   default_value: unknown;
@@ -390,6 +437,8 @@ export interface Run {
     findings: Array<{ summary: string; evidence_ids: string[] }>;
     uncertainties: string[];
     recommended_actions: string[];
+    follow_up_questions?: string[];
+    presentation?: string;
   };
   capability: string;
   prompt: string;
@@ -516,6 +565,7 @@ export interface CapabilityItem {
   };
   safety_profile?: CapabilitySafetyProfile;
   is_authorized?: boolean;
+  runtime_supported?: boolean;
   rejection_reason?: string | null;
   allowed_skills?: string[];
 }
@@ -792,30 +842,14 @@ export interface SkillFrontmatter {
   [key: string]: unknown;
 }
 
-export interface SkillMlflowMetrics {
-  contract_status?: number;
-  citation_rate?: number;
-  temporal_precision?: number;
-  secrets_absent?: number;
-  instruction_chars?: number;
-  quality_score?: number;
-  [key: string]: number | undefined;
-}
-
-export interface SkillMlflowReport {
-  run_id: string;
-  experiment_id: string;
-  experiment_name: string;
-  status: string;
-  stage_executed: string;
-  timestamp: number;
-  baseline_metrics: SkillMlflowMetrics;
-  candidate_metrics: SkillMlflowMetrics;
-  improvement: {
-    delta: number;
-    status: 'IMPROVED' | 'MAINTAINED' | 'REGRESSED';
-    summary: string;
-  };
+export interface SkillCreatePayload {
+  id: string;
+  name: string;
+  description: string;
+  instruction: string;
+  capabilities: string[];
+  actions: string[];
+  project_override: boolean;
 }
 
 export interface SkillSaveResponse {
@@ -827,7 +861,13 @@ export interface SkillSaveResponse {
   is_overridden_in_project: boolean;
   project_instruction: string;
   project_enabled: boolean;
-  mlflow: SkillMlflowReport;
+  effective_hash: string;
+  validation: {
+    status: 'PASSED';
+    checks: string[];
+    model_execution: 'NOT_RUN';
+    quality_evaluation: 'NOT_RUN';
+  };
 }
 
 export interface SkillItem {
@@ -836,6 +876,15 @@ export interface SkillItem {
   status?: string;
   size_bytes?: number;
   sha256?: string;
+  effective_hash?: string;
+  capabilities?: string[];
+  managed_in_database?: boolean;
+  content_hash?: string;
+  author_subject?: string;
+  reviewer_subject?: string | null;
+  review_reason?: string | null;
+  created_at?: number;
+  reviewed_at?: number | null;
   source?: string;
   stage?: string;
   immutable?: boolean;
@@ -1081,6 +1130,15 @@ export interface KnowledgeItem {
   media_type: string;
   size_bytes: number;
   status: string;
+  content_hash?: string;
+  revision?: number;
+  author_subject?: string;
+  reviewer_subject?: string | null;
+  reviewed_at?: number | null;
+  review_reason?: string | null;
+  can_review?: boolean;
+  can_edit?: boolean;
+  needs_revision?: boolean;
   created_at?: number;
   updated_at?: number;
   upload?: {
@@ -1089,6 +1147,7 @@ export interface KnowledgeItem {
     size_bytes: number;
     warnings: string[];
     original_retained: boolean;
+    processing_status?: string;
   };
 }
 
@@ -1099,6 +1158,7 @@ export interface KnowledgePayload {
   content: string;
   media_type?: string;
   status?: string;
+  expected_hash?: string;
 }
 
 export interface RuntimeStageItem {

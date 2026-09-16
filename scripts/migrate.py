@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations" / "history"
 
 
 async def migrate(url):
@@ -20,6 +20,18 @@ async def migrate(url):
     try:
         async with engine.begin() as c:
             await c.execute(text("SELECT pg_advisory_xact_lock(726320260911)"))
+            # Historical migrations grant data privileges to this role. Reserve
+            # it without login before applying them; the deployment job supplies
+            # credentials afterward. Never modify an existing role here.
+            await c.exec_driver_sql("""DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rca_app') THEN
+                    BEGIN
+                        CREATE ROLE rca_app NOLOGIN NOSUPERUSER NOCREATEDB
+                            NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+                    EXCEPTION WHEN duplicate_object THEN NULL;
+                    END;
+                END IF;
+            END $$;""")
             await c.execute(text("CREATE SCHEMA IF NOT EXISTS platform"))
             await c.execute(
                 text("""CREATE TABLE IF NOT EXISTS platform.schema_migrations (

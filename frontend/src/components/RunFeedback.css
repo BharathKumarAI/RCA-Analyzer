@@ -1,0 +1,18 @@
+.run-feedback { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.run-feedback-rating { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.run-feedback-rating > span { margin-right: 4px; }
+.run-feedback-rating button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); color: var(--muted); cursor: pointer; font-size: 12px; }
+.run-feedback-rating button[aria-pressed="true"] { color: var(--acc); border-color: var(--acc); background: var(--card-subtle); }
+.run-feedback button:disabled { opacity: .55; cursor: default; }
+.run-feedback-note { margin-top: 10px; max-width: 560px; }
+.run-feedback-note summary { cursor: pointer; padding: 5px 0; }
+.run-feedback-note form { margin-top: 10px; }
+.run-feedback-note label { display: block; color: var(--tx); margin-bottom: 8px; line-height: 1.6; }
+.run-feedback-note label span { color: var(--muted); }
+.run-feedback-note textarea { display: block; width: 100%; resize: vertical; min-height: 90px; max-height: 260px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--tx); background: var(--card); font: inherit; line-height: 1.6; }
+.run-feedback-note form > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 10px; }
+.run-feedback p { font-size: 11px; line-height: 1.7; }
+.run-feedback-error { color: var(--danger); overflow-wrap: anywhere; }
+.run-feedback-error button { margin-left: 8px; padding: 5px; font: inherit; color: inherit; background: none; border: 0; text-decoration: underline; cursor: pointer; }
+.run-feedback-status { display: block; margin-top: 6px; min-height: 1em; font-size: 11px; }
+.run-feedback button:focus-visible, .run-feedback summary:focus-visible, .run-feedback textarea:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }

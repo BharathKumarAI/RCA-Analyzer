@@ -1,7 +1,7 @@
 .PHONY: help setup dev test lint eval smoke db-deploy db-migrate docker-up docker-down clean config-validate config-import config-export config-diff harness-types
 
 help:
-	@echo "RCA Analyzer commands"
+	@echo "RCA assist commands"
 	@echo "make setup       Install runtime and development dependencies"
 	@echo "make dev         Run the local API server"
 	@echo "make test        Run the test suite"

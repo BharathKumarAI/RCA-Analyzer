@@ -90,13 +90,17 @@ async def deploy():
                 await c.exec_driver_sql(
                     f"REVOKE INSERT, UPDATE, DELETE ON {table} FROM rca_app"
                 )
-            # UI saves append immutable snapshots and advance an existing seeded
-            # pointer. They cannot replace history, remove it, or change scope.
+            # UI saves append immutable snapshots. Creating an authorized project
+            # adds its initial scope and pointer; existing scope keys and history
+            # remain protected from replacement or deletion.
             await c.exec_driver_sql(
                 "GRANT INSERT ON platform.configuration_bundles TO rca_app"
             )
             await c.exec_driver_sql(
                 "GRANT UPDATE (content_hash) ON platform.active_configuration TO rca_app"
+            )
+            await c.exec_driver_sql(
+                "GRANT INSERT ON project.projects, platform.active_configuration TO rca_app"
             )
             for table in (
                 "governance.parameter_audit",

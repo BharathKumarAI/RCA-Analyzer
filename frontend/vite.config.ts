@@ -12,20 +12,15 @@ export default defineConfig({
     tailwindcss(),
     react(),
     {
-      name: 'root-redirect',
+      name: 'workspace-routes',
       configureServer(server) {
-        server.middlewares.use((req, res, next) => {
+        server.middlewares.use((req, _res, next) => {
           const requestUrl = req.url || '';
           const [pathname, search = ''] = requestUrl.split('?');
-          if (pathname === '/' || pathname === '') {
-            res.writeHead(302, { Location: '/admin/' });
-            res.end();
-            return;
-          }
           // The production app is mounted at /admin/, while project workspaces
           // intentionally live at /p/<project_key>/. Let Vite serve the same
           // SPA entry for a direct project URL so browser refreshes work in dev.
-          if (pathname === '/p' || pathname.startsWith('/p/')) {
+          if (pathname === '/' || pathname === '' || pathname === '/workspace' || pathname === '/workspace/' || pathname === '/admins' || pathname.startsWith('/admins/') || pathname === '/p' || pathname.startsWith('/p/')) {
             req.url = `/admin/${search ? `?${search}` : ''}`;
           }
           next();

@@ -23,7 +23,7 @@ def enforce_api_access(principal, method: str, path: str):
     roles = set(principal.roles)
     if not roles:
         raise HTTPException(403, "An active platform role is required")
-    if path in {"/api/v1/me", "/api/v1/access"} or path.startswith("/api/v1/playground/"):
+    if path in {"/api/v1/me", "/api/v1/access", "/api/v1/auth/session", "/api/v1/auth/logout", "/api/v1/projects"} or path.startswith(("/api/v1/playground/", "/api/v1/project-access-requests")):
         return
     if not project_access(principal):
         raise HTTPException(403, "Project membership role required")
@@ -31,6 +31,8 @@ def enforce_api_access(principal, method: str, path: str):
         return  # Existing endpoint checks still enforce operation-specific rights.
     if method in {"GET", "HEAD", "OPTIONS"}:
         return
-    if method == "POST" and path in {"/api/v1/runs", "/api/v1/files", "/api/v1/chats"}:
+    if method == "POST" and path in {"/api/v1/runs", "/api/v1/files", "/api/v1/chats", "/api/v1/chat/resolve"}:
         return  # Persisting a bounded analysis and its inputs is permitted.
+    if method == "POST" and path.startswith("/api/v1/projects/") and path.endswith("/select"):
+        return  # Selection separately verifies active membership; it cannot grant roles.
     raise HTTPException(403, "This project role can analyze and view, but cannot modify project data or settings")

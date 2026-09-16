@@ -16,7 +16,7 @@ PROJECT_FOLDERS = {
     "configuration/users": "Active delegated user preferences, named with scope_key(subject).\n",
     "artifacts/framework/objects/agents": "Immutable canonical agent definitions. SQLAlchemy approval and active pointers control execution.\n",
     "artifacts/framework/optimizations/objects": "Immutable optimization datasets and evaluated bundles; review state lives in SQLAlchemy.\n",
-    "artifacts/chats": "Separate chat_<id>/uploads and chat_<id>/created branches. See docs/blob-storage.md.\n",
+    "artifacts/chats": "Separate chat_<id>/uploads and chat_<id>/created branches. See docs/reference/data-access-and-operations.md#blob-storage.\n",
     "exports": "Operator-managed exports; not an execution input.\n",
 }
 for kind in FRAMEWORK_TYPES:

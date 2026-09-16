@@ -117,6 +117,12 @@ platform_knowledge = Table(
     Column("upload", JSON().with_variant(JSONB, "postgresql"), nullable=True),
     Column("size_bytes", Integer, nullable=False, default=0),
     Column("status", String(32), nullable=False, default="active"),
+    Column("revision", Integer, nullable=False, default=0),
+    Column("content_hash", String(128)),
+    Column("author_subject", String(256)),
+    Column("reviewer_subject", String(256)),
+    Column("reviewed_at", Float),
+    Column("review_reason", String(2000)),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
 )
@@ -200,7 +206,7 @@ platform_ui_settings = Table(
     metadata,
     Column("tenant_id", String(256), primary_key=True),
     Column("project_id", String(256), primary_key=True),
-    Column("brand_name", String(120), nullable=False, default="RCA Analyzer"),
+    Column("brand_name", String(120), nullable=False, default="RCA assist"),
     Column("workspace_label", String(120), nullable=False, default="Investigation workspace"),
     Column("default_theme", String(16), nullable=False, default="light"),
     Column("default_page", String(64), nullable=False, default="overview"),
@@ -330,6 +336,9 @@ DEFAULT_PERMISSIONS = [
 DEFAULT_UI_NAVIGATION = [
     {"page": page, "label": label, "description": description, "group": group, "visible": visible}
     for page, label, description, group, visible in (
+        ("chat", "Chat", "Ask questions and investigate together", "Workspace", True),
+        ("insights", "Insights", "Review measured usage and performance", "Workspace", True),
+        ("metrics", "Telemetry & Metrics", "Review SRE performance, SLOs, and model telemetry", "Monitoring", True),
         ("overview", "Overview", "Health and recent investigations", "Admin console", True),
         ("runs", "Investigations", "Review grounded incident reports", "Monitoring", True),
         ("capabilities", "Capabilities", "Manage investigation capabilities", "Configuration", True),
@@ -351,6 +360,13 @@ DEFAULT_UI_NAVIGATION = [
         ("billing", "Billing", "Manage budgets and quotas", "Monitoring", True),
         ("settings", "Platform settings", "Configure the workspace", "Admin console", True),
         ("harness-library", "Harness library", "Manage workflow templates", "Configuration", True),
+        ("triage-board", "Live Triage Board", "SLA-driven queue & autonomous triage", "Workspace", True),
+        ("tickets", "Incidents & Tickets", "Enterprise ticket and incident desk", "Workspace", True),
+        ("rca-workbench", "RCA Workbench", "Multi-methodology root cause analysis", "Workspace", True),
+        ("feedback", "SRE Feedback Loop", "Calibrate model prompts and queries", "Workspace", True),
+        ("artifacts", "Artifacts & Storage", "Manage investigation artifacts and skills", "Workspace", True),
+        ("orchestration", "Agent Orchestration", "Visual workflow DAG and topology", "Workspace", True),
+        ("docs", "Playbooks & Docs", "Operational playbooks and schema tester", "Workspace", True),
     )
 ]
 
@@ -452,14 +468,7 @@ DEFAULT_REDACTION_PATTERNS = [
     },
 ]
 
-DEFAULT_PRICING_MATRIX = {
-    "gemini-2.5-flash": {"input_per_million": 0.15, "output_per_million": 0.60},
-    "gemini-2.5-flash-lite": {"input_per_million": 0.075, "output_per_million": 0.30},
-    "gemini-2.5-pro": {"input_per_million": 1.25, "output_per_million": 5.00},
-    "gemini-1.5-pro": {"input_per_million": 1.25, "output_per_million": 5.00},
-    "gemini-1.5-flash": {"input_per_million": 0.075, "output_per_million": 0.30},
-    "ocr-parser": {"input_per_million": 0.20, "output_per_million": 0.20},
-}
+DEFAULT_PRICING_MATRIX = {}
 
 DEFAULT_RUNTIME_STAGES = [
     {
@@ -1567,15 +1576,20 @@ class PlatformAdminStore:
                 platform_ui_settings.c.project_id == project_id,
             ))).mappings().first()
             if row:
-                return dict(row)
+                data = dict(row)
+                nav_pages = {item["page"] for item in data.get("navigation", [])}
+                missing = [item for item in DEFAULT_UI_NAVIGATION if item["page"] not in nav_pages]
+                if missing:
+                    data["navigation"] = list(data.get("navigation", [])) + missing
+                return data
             now = time.time()
             initial = {
                 "tenant_id": tenant_id,
                 "project_id": project_id,
-                "brand_name": "RCA Analyzer",
+                "brand_name": "RCA assist",
                 "workspace_label": "Investigation workspace",
                 "default_theme": "light",
-                "default_page": "overview",
+                "default_page": "chat",
                 "welcome_title": "Investigate with confidence",
                 "welcome_description": "Trace incidents from evidence to action.",
                 "navigation": DEFAULT_UI_NAVIGATION,
@@ -1609,8 +1623,8 @@ class PlatformAdminStore:
                 try:
                     await conn.execute(insert(platform_ui_settings).values(
                         tenant_id=tenant_id, project_id=project_id,
-                        brand_name="RCA Analyzer", workspace_label="Investigation workspace",
-                        default_theme="light", default_page="overview",
+                        brand_name="RCA assist", workspace_label="Investigation workspace",
+                        default_theme="light", default_page="chat",
                         welcome_title="Investigate with confidence",
                         welcome_description="Trace incidents from evidence to action.",
                         navigation=DEFAULT_UI_NAVIGATION, version=1, updated_at=now,

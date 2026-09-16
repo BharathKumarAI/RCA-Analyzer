@@ -24,7 +24,7 @@ function asComponents(graph: StudioGraph, files: Record<string, string>): Record
     const details = node.details || {};
     const kind = node.kind.toLowerCase();
     const isWorkflow = ['workflow', 'group', 'graph', 'sequence', 'parallel', 'loop', 'join', 'router', 'function'].some(token => kind.includes(token));
-    const source = node.source === 'python' || node.source === 'code' ? 'python' : node.source === 'registry' ? 'prism_registry' : 'adk_yaml';
+    const source = node.source === 'python' || node.source === 'code' ? 'python' : node.source === 'registry' ? 'rca_assist_registry' : 'adk_yaml';
     const origin = { source: source as AdkAgentComponent['origin']['source'], editable: node.editable !== false && node.enabled !== false, filePath: node.ref || node.source || undefined, componentId: node.id };
     if (isWorkflow) {
       const children = graph.nodes.filter(child => child.parent === node.id);
@@ -62,12 +62,12 @@ function asComponents(graph: StudioGraph, files: Record<string, string>): Record
 
 function toHarness(workspace: WorkspaceState, previous?: HarnessDefinition): HarnessDefinition {
   const fileEntries = Object.entries(workspace.files || {});
-  const configurationFiles: ConfigFileDefinition[] = fileEntries.map(([path, content]) => ({ path, content, kind: path.includes('prism') || path.includes('harness') ? 'prism_harness' : 'adk_agent' }));
+  const configurationFiles: ConfigFileDefinition[] = fileEntries.map(([path, content]) => ({ path, content, kind: path.includes('rca_assist') || path.includes('harness') ? 'rca_assist_harness' : 'adk_agent' }));
   const root = workspace.graph.nodes.find(node => !node.parent || /root|orchestrator/i.test(node.kind)) || workspace.graph.nodes[0];
   const components = asComponents(workspace.graph, workspace.files || {});
   const supported = Array.isArray(workspace.compatibility?.supported) ? workspace.compatibility.supported.map(String) : [];
   return {
-    apiVersion: 'prism/v1', compatibility: { adkVersion: String(workspace.compatibility?.adk_version || workspace.compatibility?.adkVersion || '2.9.0'), agentConfigSchemaVersion: String(workspace.compatibility?.schema_version || workspace.compatibility?.agentConfigSchemaVersion || ''), features: { agentConfig: supported.includes('LlmAgent'), workflowRuntime: supported.some(item => ['Workflow', 'SequentialAgent', 'ParallelAgent'].includes(item)), taskApi: supported.includes('Task'), plugins: supported.includes('Plugin'), a2a: supported.includes('A2A') } },
+    apiVersion: 'rca_assist/v1', compatibility: { adkVersion: String(workspace.compatibility?.adk_version || workspace.compatibility?.adkVersion || '2.9.0'), agentConfigSchemaVersion: String(workspace.compatibility?.schema_version || workspace.compatibility?.agentConfigSchemaVersion || ''), features: { agentConfig: supported.includes('LlmAgent'), workflowRuntime: supported.some(item => ['Workflow', 'SequentialAgent', 'ParallelAgent'].includes(item)), taskApi: supported.includes('Task'), plugins: supported.includes('Plugin'), a2a: supported.includes('A2A') } },
     metadata: { id: `${workspace.capability}-harness`, name: String(workspace.capability || previous?.metadata.name || 'Harness Studio'), projectId: previous?.metadata.projectId || '', tenantId: previous?.metadata.tenantId || '', version: Number(workspace.revision || 0) || 1, revision: workspace.revision, etag: workspace.revision, updatedAt: new Date().toISOString(), updatedBy: 'workspace' },
     adk: { root: { type: 'registry', componentId: root?.id || '' }, components, configurationFiles, activeFilePath: previous?.adk.activeFilePath && configurationFiles.some(file => file.path === previous.adk.activeFilePath) ? previous.adk.activeFilePath : configurationFiles[0]?.path || '' },
     harness: previous?.harness || { tools: [], connectors: [], skills: [], memory: [], policies: [], optimizers: [], evaluations: [], observability: { tracing: true, feedback: false }, extensions: {} },

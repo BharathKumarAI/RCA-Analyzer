@@ -33,7 +33,7 @@ class ConnectorMockServer:
         self.requests: list[str] = []
         self.forced_status: int | None = None
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PRISM local connector tests")])
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "RCA assist local connector tests")])
         now = datetime.now(timezone.utc)
         certificate = (
             x509.CertificateBuilder().subject_name(subject).issuer_name(subject)

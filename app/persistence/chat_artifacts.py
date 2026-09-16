@@ -21,6 +21,7 @@ from sqlalchemy import (
 
 from app.connectors.providers.blob import ConfigurationBlobStore
 from app.persistence.store import metadata
+from app.policy.redaction import redact
 from app.runtime.run_contract import TERMINAL_STATUSES
 
 artifacts = Table(
@@ -162,7 +163,7 @@ class ChatArtifactStore:
             )
         return [self._public(row) for row in rows]
 
-    async def download(self, chat_id, artifact_id, principal):
+    async def _owned_record(self, chat_id, artifact_id, principal):
         await self.store.require_chat(chat_id, principal)
         async with self.store.engine.connect() as c:
             row = (
@@ -183,8 +184,29 @@ class ChatArtifactStore:
             )
         if row is None:
             raise PermissionError("Artifact not found")
+        return row
+
+    async def download(self, chat_id, artifact_id, principal):
+        row = await self._owned_record(chat_id, artifact_id, principal)
         data = await self._blobs(chat_id, artifact_id).get("sha256:" + row["sha256"])
         return self._public(row), data
+
+    async def preview(self, chat_id, artifact_id, principal):
+        row = await self._owned_record(chat_id, artifact_id, principal)
+        if row["processed_expires_at"] <= time.time():
+            raise TimeoutError("Processed attachment expired")
+        data = await self._blobs(chat_id, artifact_id, "processed").get(row["processed_hash"])
+        parsed = json.loads(data)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("text"), str):
+            raise ValueError("Invalid processed artifact")
+        warnings = parsed.get("warnings", [])
+        if not isinstance(warnings, list) or any(not isinstance(item, str) for item in warnings):
+            raise ValueError("Invalid processed artifact warnings")
+        limit = min(20000, self.settings.max_evidence_chars)
+        text = redact(parsed["text"], max_text=limit + 1)
+        return {"filename": row["filename"], "media_type": row["media_type"],
+                "text": text[:limit], "truncated": len(text) > limit,
+                "warnings": redact(warnings, max_text=1000)}
 
     def _output_blobs(self, chat_id, run_id, status):
         if not re.fullmatch(r"chat_[0-9a-f]{32}", chat_id) or not re.fullmatch(

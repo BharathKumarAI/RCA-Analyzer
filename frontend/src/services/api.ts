@@ -1,9 +1,9 @@
 import type {
-  Principal, AgentConfiguration, Run, ToolDefinition, AuditLog, SystemHealth, SystemDiagnostics, CapabilityItem, ConnectorTemplateItem, RuntimeConfig,
+  Principal, AuthProviders, AuthSession, SsoDefinition, SsoConfiguration, AgentConfiguration, Run, ToolDefinition, AuditLog, SystemHealth, SystemDiagnostics, CapabilityItem, ConnectorTemplateItem, RuntimeConfig,
   ProjectConnectorInstanceItem, CandidateTestResponse, EnvironmentConnectionItem,
   ConnectorsHealthResponse, AlertsResponse, NotificationsResponse, ProjectSetupResponse,
   ParameterDefinitionRow,
-  ConnectorHealthRecord, SkillItem, SkillSaveResponse, ProjectValidationResult, ConnectionTestResponse,
+  ConnectorHealthRecord, SkillItem, SkillSaveResponse, SkillCreatePayload, ProjectValidationResult, ConnectionTestResponse,
   HarnessResponse, HarnessSelection,
   UserItem, UserPayload, RoleItem, RolePayload, BillingConfig, BillingPayload,
   PolicyConfig, FileLimitsConfig, CleanupResult, KnowledgeItem, KnowledgePayload,
@@ -12,6 +12,18 @@ import type {
 } from '../types/api';
 // Session credentials stay in memory; discard storage left by older builds.
 let inMemoryToken: string | null = null;
+let inMemoryCsrf: string | null = null;
+let cookieSession = false;
+let sessionGeneration = 0;
+let projectContext: string | null = (() => {
+  if (typeof window === 'undefined') return null;
+  const match = window.location?.pathname?.match(/^\/p\/([^/]+)/);
+  try { return match ? decodeURIComponent(match[1]) : null; } catch { return null; }
+})();
+export const getProjectContext = () => projectContext;
+export const setProjectContext = (projectId: string | null) => {
+  if (projectContext !== projectId) { projectContext = projectId; sessionGeneration += 1; }
+};
 if (typeof window !== 'undefined') {
   for (const name of ['sessionStorage', 'localStorage'] as const) {
     try { window[name].removeItem('rca_auth_token'); } catch { /* Storage may be disabled. */ }
@@ -23,18 +35,31 @@ export const setSessionToken = (token: string | null) => {
     throw new ApiError(400, 'The session token contains invalid characters. Paste the complete token on one line, without quotes or extra text.');
   }
   inMemoryToken = value;
+  inMemoryCsrf = null;
+  cookieSession = false;
+  sessionGeneration += 1;
 };
 export const getSessionToken = () => inMemoryToken;
 export const hasSessionToken = () => Boolean(inMemoryToken);
+export const hasSessionAuthentication = () => Boolean(inMemoryToken || cookieSession);
+export const getSessionGeneration = () => sessionGeneration;
+export function authHeaders(initial?: HeadersInit, method = 'GET'): Headers {
+  const headers = new Headers(initial);
+  // A project is a requested context. The server checks membership and roles.
+  if (projectContext) headers.set('X-RCA-Project', projectContext);
+  if (inMemoryToken) headers.set('Authorization', `Bearer ${inMemoryToken}`);
+  else if (inMemoryCsrf && !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) headers.set('X-CSRF-Token', inMemoryCsrf);
+  return headers;
+}
 export class ApiError extends Error { constructor(public status: number, message: string, public details: unknown = null) { super(message); this.name = 'ApiError'; } }
 type ApiRequestOptions = Omit<RequestInit, 'body'> & { body?: unknown };
 export async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const headers = new Headers(options.headers); headers.set('Accept', 'application/json'); if (inMemoryToken) headers.set('Authorization', `Bearer ${inMemoryToken}`);
+  const headers = authHeaders(options.headers, options.method); headers.set('Accept', 'application/json');
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) { headers.set('Content-Type', 'application/json'); options = { ...options, body: JSON.stringify(options.body) }; }
   const { body, ...requestInit } = options;
   let response: Response;
   try {
-    response = await fetch(path, { ...requestInit, headers, body: body as BodyInit | null | undefined });
+    response = await fetch(path, { ...requestInit, credentials: 'same-origin', headers, body: body as BodyInit | null | undefined });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'TimeoutError';
     throw new ApiError(0, timedOut
@@ -45,11 +70,36 @@ export async function request<T>(path: string, options: ApiRequestOptions = {}):
     const message = typeof value === 'string' ? value : Array.isArray(value) ? value.map(item => item && typeof item === 'object' && 'msg' in item ? `${Array.isArray(item.loc) ? item.loc.join('.') + ': ' : ''}${item.msg}` : JSON.stringify(item)).join('; ') : `HTTP ${response.status}`; throw new ApiError(response.status, message, detail); }
   return response.status === 204 ? null as T : response.json() as Promise<T>;
 }
-function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run_id, mode: raw.mode, result: raw.result, capability: raw.capability, prompt: result?.summary || raw.reason || '', status: raw.status === 'SUCCEEDED' ? 'COMPLETED' : raw.status, created_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', completed_at: raw.updated_at ? new Date(raw.updated_at * 1000).toISOString() : undefined, duration_seconds: raw.created_at && raw.updated_at ? Math.max(0, raw.updated_at - raw.created_at) : undefined, stages: raw.stage ? [{ name: raw.stage, status: raw.status === 'RUNNING' ? 'running' : 'completed', agent: raw.stage, duration_ms: 0 }] : [], evidence_count: raw.evidence_count ?? 0, findings: result?.summary || raw.reason, raw }; }
+export function mapRun(raw: any): Run { const result = raw.result; return { id: raw.run_id, mode: raw.mode, result: raw.result, capability: raw.capability, prompt: raw.prompt || result?.summary || raw.reason || '', status: raw.status === 'SUCCEEDED' ? 'COMPLETED' : raw.status, created_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', completed_at: raw.updated_at ? new Date(raw.updated_at * 1000).toISOString() : undefined, duration_seconds: raw.created_at && raw.updated_at ? Math.max(0, raw.updated_at - raw.created_at) : undefined, stages: raw.stage ? [{ name: raw.stage, status: raw.status === 'RUNNING' ? 'running' : 'completed', agent: raw.stage, duration_ms: 0 }] : [], evidence_count: raw.evidence_count ?? 0, findings: result?.summary || raw.reason, raw }; }
 function mapAgent(raw: any): AgentConfiguration { const d = raw.definition || raw; return { id: raw.draft_id || d.id, name: d.name, role: 'Specialist', description: d.description || '', status: raw.status === 'APPROVED' ? 'active' : raw.status === 'PENDING' ? 'pending' : raw.status === 'REVOKED' ? 'deprecated' : 'draft', model: d.model_profile || d.stage_model || 'configured', temperature: 0, thinking_budget: 0, max_steps: 0, tools: [...(d.tools || [])], permissions: [], rag_sources: [], prompt: d.instruction || '', accuracy: 0, hallucination_rate: 0, avg_latency_sec: 0, version: d.version || '', updated_at: raw.created_at ? new Date(raw.created_at * 1000).toISOString() : '', author: raw.author_subject, content_hash: raw.content_hash, approved_by: raw.reviewer_subject, rejection_reason: raw.review_reason }; }
 export async function fetchHealth(): Promise<SystemHealth> { const started = performance.now(); const data = await request<any>('/api/v1/health'); return { status: data.status, latency_ms: Math.round(performance.now() - started), tenant_id: data.tenant_id, project_id: data.project_id, mode: data.mode, active_runs: data.active_runs, total_runs: data.total_runs, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 }; }
 export async function fetchPrincipal(): Promise<Principal> {
   return request<Principal>('/api/v1/me', { signal: AbortSignal.timeout(15_000) });
+}
+export async function fetchAuthProviders(): Promise<AuthProviders> {
+  return request('/api/v1/auth/providers', { signal: AbortSignal.timeout(15_000) });
+}
+export async function fetchAuthSession(): Promise<AuthSession> {
+  const generation = sessionGeneration;
+  const session = await request<AuthSession>('/api/v1/auth/session', { signal: AbortSignal.timeout(15_000) });
+  if (generation === sessionGeneration) {
+    cookieSession = session.authentication === 'sso';
+    inMemoryCsrf = cookieSession ? session.csrf_token : null;
+  }
+  return session;
+}
+export async function logoutSession(): Promise<void> {
+  await request('/api/v1/auth/logout', { method: 'POST' });
+  setSessionToken(null);
+}
+export async function fetchSsoConfigurations(): Promise<{ active: SsoConfiguration | null; drafts: SsoConfiguration[] }> {
+  return request('/api/v1/auth/configurations');
+}
+export async function createSsoConfiguration(definition: SsoDefinition): Promise<SsoConfiguration> {
+  return request('/api/v1/auth/configurations', { method: 'POST', body: definition });
+}
+export async function reviewSsoConfiguration(id: string, action: 'approve' | 'reject' | 'revoke', expectedHash: string, reason: string): Promise<SsoConfiguration> {
+  return request(`/api/v1/auth/configurations/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: { expected_hash: expectedHash, reason } });
 }
 export async function fetchProjectRedaction(): Promise<ProjectRedactionPolicy> {
   return request<ProjectRedactionPolicy>('/api/v1/project/redaction');
@@ -204,7 +254,7 @@ export async function deleteRole(id: string): Promise<void> { await request(`/ap
 export async function fetchPermissions(): Promise<string[]> { return request<string[]>('/api/v1/permissions'); }
 
 export async function fetchBilling(): Promise<BillingConfig> { return request<BillingConfig>('/api/v1/billing'); }
-export async function updateBilling(payload: BillingPayload): Promise<BillingConfig> { return request('/api/v1/billing', { method: 'PUT', body: payload }); }
+export async function updateBilling(payload: Omit<BillingPayload, 'pricing_matrix'>): Promise<BillingConfig> { return request('/api/v1/billing', { method: 'PUT', body: payload }); }
 
 export async function fetchPolicy(): Promise<PolicyConfig> { return request<PolicyConfig>('/api/v1/policy'); }
 export async function updatePolicy(payload: Partial<PolicyConfig>): Promise<PolicyConfig> { return request('/api/v1/policy', { method: 'PUT', body: payload }); }
@@ -219,14 +269,24 @@ export async function triggerRetentionCleanup(): Promise<CleanupResult> { return
 
 export async function fetchKnowledge(): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge'); }
 export async function createKnowledgeDoc(payload: KnowledgePayload): Promise<KnowledgeItem> { return request('/api/v1/knowledge', { method: 'POST', body: payload }); }
-export async function uploadKnowledgeDoc(file: File, title: string, category?: string): Promise<KnowledgeItem> {
+export async function uploadKnowledgeDoc(file: File, title: string, category?: string, replacement?: { doc_id: string; expected_hash: string }, tags: string[] = []): Promise<KnowledgeItem> {
   const body = new FormData();
   body.append('file', file);
   body.append('title', title);
   if (category?.trim()) body.append('category', category.trim());
+  if (replacement) { body.append('doc_id', replacement.doc_id); body.append('expected_hash', replacement.expected_hash); }
+  body.append('tags', JSON.stringify(tags));
   return request<KnowledgeItem>('/api/v1/knowledge/upload', { method: 'POST', body });
 }
 export async function updateKnowledgeDoc(id: string, payload: KnowledgePayload): Promise<KnowledgeItem> { return request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }
+export async function reviewKnowledgeDoc(id: string, action: 'submit' | 'approve' | 'reject' | 'revoke', expectedHash: string, reason: string): Promise<KnowledgeItem> {
+  return request(`/api/v1/knowledge/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: { expected_hash: expectedHash, reason } });
+}
+export async function downloadKnowledgeDoc(id: string): Promise<Blob> {
+  const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}/download`, { headers: authHeaders(), credentials: 'same-origin' });
+  if (!response.ok) throw new ApiError(response.status, 'The original document could not be downloaded. Refresh the library and try again.');
+  return response.blob();
+}
 export async function deleteKnowledgeDoc(id: string): Promise<void> { await request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
 
 export async function fetchRuntimeStages(): Promise<RuntimeStageItem[]> { return request<RuntimeStageItem[]>('/api/v1/runtime/stages'); }
@@ -281,6 +341,13 @@ export async function defineParameter(tool: string, name: string, body: {
   allow_project_override: boolean;
   scope?: 'platform' | 'project' | 'platform_only';
   icon: string;
+  label?: string | null;
+  section?: string | null;
+  display_order?: number | null;
+  is_required?: boolean;
+  ownership?: string;
+  validation_rules?: Record<string, unknown> | null;
+  runtime_binding?: string | null;
   category?: string;
   subcategory?: string | null;
   allowed_values?: unknown[] | null;
@@ -294,17 +361,26 @@ export async function deleteParameterDefinition(tool: string, name: string, revi
 }
 export async function resetParameterOverride(tool: string, name: string, revision: number): Promise<void> { await request(`/api/v1/parameters/${encodeURIComponent(tool)}/${encodeURIComponent(name)}/override?expected_revision=${revision}`, { method: 'DELETE' }); }
 export async function fetchSkills(): Promise<SkillItem[]> { return request<SkillItem[]>('/api/v1/skills'); }
+export async function createSkill(payload: SkillCreatePayload): Promise<SkillItem> {
+  return request<SkillItem>('/api/v1/skills', { method: 'POST', body: payload });
+}
+export async function reviewSkill(skillId: string, action: 'approve' | 'reject' | 'revoke', expectedHash: string, reason: string): Promise<SkillItem> {
+  return request<SkillItem>(`/api/v1/skills/${encodeURIComponent(skillId)}/${action}`, {
+    method: 'POST', body: { expected_hash: expectedHash, reason },
+  });
+}
 export async function saveProjectSkill(
   skillId: string,
-  payload: { instruction: string; enabled?: boolean; actions?: string[] }
+  payload: { instruction: string; enabled?: boolean; actions?: string[]; expected_hash?: string }
 ): Promise<SkillSaveResponse> {
   return request<SkillSaveResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}`, {
     method: 'POST',
     body: payload,
   });
 }
-export async function resetProjectSkill(skillId: string): Promise<{ reset: boolean; skill_id: string; status: string }> {
-  return request<{ reset: boolean; skill_id: string; status: string }>(`/api/v1/skills/${encodeURIComponent(skillId)}`, {
+export async function resetProjectSkill(skillId: string, expectedHash?: string): Promise<{ reset: boolean; skill_id: string; status: string }> {
+  const query = expectedHash ? `?expected_hash=${encodeURIComponent(expectedHash)}` : '';
+  return request<{ reset: boolean; skill_id: string; status: string }>(`/api/v1/skills/${encodeURIComponent(skillId)}${query}`, {
     method: 'DELETE',
   });
 }
@@ -395,7 +471,7 @@ export async function previewMcpImport(source: string, format: 'json' | 'command
   });
 }
 
-export async function setProjectAvailability(kind: 'connectors' | 'capabilities', id: string, enabled: boolean, expectedEnabled: boolean): Promise<void> {
+export async function setProjectAvailability(kind: 'connectors' | 'capabilities' | 'skills', id: string, enabled: boolean, expectedEnabled: boolean): Promise<void> {
   await request(`/api/v1/project/availability/${kind}/${encodeURIComponent(id)}`, {
     method: 'PUT', body: { enabled, expected_enabled: expectedEnabled },
   });

@@ -1,0 +1,40 @@
+.chat-files-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; color: var(--tx); }
+.chat-files-panel h3, .chat-files-panel h4, .chat-files-panel h5, .chat-files-panel p { margin: 0; }
+.chat-files-panel h3 { font-size: 16px; line-height: 24px; font-weight: 600; }
+.chat-files-panel h4 { font-size: 14px; line-height: 22px; font-weight: 600; }
+.chat-files-panel h5 { font-size: 13px; line-height: 20px; font-weight: 600; }
+.chat-files-panel p, .chat-files-panel li { font-size: 12px; line-height: 20px; }
+.chat-files-panel p { color: var(--muted); }
+.chat-files-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chat-files-panel header p { margin-top: 4px; }
+.chat-files-panel header button { display: grid; place-items: center; width: 32px; min-height: 32px; flex-shrink: 0; background: transparent; border: 0; border-radius: 4px; color: var(--muted); cursor: pointer; }
+.chat-files-panel button:focus-visible, .chat-file-preview pre:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 3px; }
+.chat-files-panel button:disabled { cursor: not-allowed; opacity: .55; }
+.chat-files-panel button:active { transform: translateY(1px); }
+.chat-files-panel header button:hover { background: var(--card-hover); color: var(--tx); }
+.chat-file-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.chat-file-list li + li { border-top: 1px solid var(--line); }
+.chat-file-list button { width: 100%; min-width: 0; display: flex; align-items: flex-start; gap: 10px; padding: 12px 8px; color: var(--tx); background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; text-align: left; }
+.chat-file-list button:hover { background: var(--card-hover); }
+.chat-file-list button[aria-pressed='true'] { background: var(--card-active); border-color: var(--line-strong); }
+.chat-file-list button > svg { flex-shrink: 0; margin-top: 2px; color: var(--muted); }
+.chat-file-list button > span { display: block; min-width: 0; }
+.chat-file-list strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 13px; font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.chat-file-list small { display: block; margin-top: 4px; font-size: 11px; line-height: 18px; color: var(--muted); }
+.chat-files-action, .chat-files-error button { padding: 8px 0; background: none; border: 0; color: var(--acc); font-size: 12px; line-height: 20px; cursor: pointer; text-align: left; }
+.chat-files-action:hover, .chat-files-error button:hover { text-decoration: underline; text-underline-offset: 4px; }
+.chat-file-reports { padding-top: 20px; border-top: 1px solid var(--line); }
+.chat-file-reports > p { margin-top: 6px; }
+.chat-files-empty { padding: 8px 0; }
+.chat-file-preview { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.chat-file-preview header h4 { overflow-wrap: anywhere; }
+.chat-file-preview pre { font: inherit; font-size: 12px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; margin: 0; padding: 12px; color: var(--tx); background: var(--card-subtle); border: 1px solid var(--line); border-radius: 6px; }
+.chat-files-panel .chat-files-error, .chat-files-error p { color: var(--acc-rose); }
+.chat-file-warnings { padding: 12px; color: var(--muted); background: var(--card-subtle); border-radius: 6px; }
+.chat-file-warnings ul, .chat-file-report-preview ul { padding-left: 18px; margin: 8px 0 0; }
+.chat-file-report-preview { max-height: 360px; overflow: auto; }
+.chat-file-report-preview .answer-markdown { font-size: 13px; }
+.chat-file-report-preview h5 { margin-top: 16px; }
+.chat-file-download { align-self: flex-start; min-height: 40px; font-size: 12px; line-height: 20px; padding: 8px 12px; gap: 8px; white-space: normal; }
+.chat-files-panel .chat-file-expiry { font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { .chat-files-panel button { transform: none !important; } }

@@ -1,4 +1,4 @@
-// PRISM Agent Harness Studio Canonical Domain Model
+// RCA assist Agent Harness Studio Canonical Domain Model
 
 export interface AdkCompatibility {
   adkVersion: string; // e.g. "2.0.0"
@@ -12,7 +12,7 @@ export interface AdkCompatibility {
   };
 }
 
-export type ComponentSourceType = 'adk_yaml' | 'python' | 'prism_registry' | 'generated' | 'external';
+export type ComponentSourceType = 'adk_yaml' | 'python' | 'rca_assist_registry' | 'generated' | 'external';
 
 export interface ComponentOrigin {
   source: ComponentSourceType;
@@ -22,7 +22,7 @@ export interface ComponentOrigin {
 }
 
 export interface ComponentSchemaDescriptor {
-  source: 'prism_registry' | 'explicit_json_schema' | 'adk_config_type' | 'pydantic' | 'none';
+  source: 'rca_assist_registry' | 'explicit_json_schema' | 'adk_config_type' | 'pydantic' | 'none';
   schema?: Record<string, unknown>;
 }
 
@@ -128,7 +128,7 @@ export interface ConfigFileDefinition {
   path: string;
   content: string;
   isDirty?: boolean;
-  kind: 'adk_agent' | 'prism_harness' | 'env_example';
+  kind: 'adk_agent' | 'rca_assist_harness' | 'env_example';
 }
 
 export type HarnessEdgeRelation =
@@ -157,7 +157,7 @@ export interface HarnessEdge {
 }
 
 export interface HarnessDefinition {
-  apiVersion: 'prism/v1';
+  apiVersion: 'rca_assist/v1';
   compatibility: AdkCompatibility;
   metadata: {
     id: string;

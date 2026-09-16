@@ -31,7 +31,7 @@ from app.connectors.providers.registry import (
 
 
 
-def application_lifespan(settings=None, *, connectors=None, model_factory=None):
+def application_lifespan(settings=None, *, connectors=None, model_factory=None, managed_projects=True):
     @asynccontextmanager
     async def lifespan(api):
         configured = settings or Settings.from_env()
@@ -52,6 +52,10 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             await api.state.run_events.initialize()
             api.state.parameters = ParameterStore(api.state.store.engine)
             await api.state.parameters.initialize()
+            from app.configuration.oidc import OidcService
+            api.state.oidc = OidcService(api.state.store.engine, configured)
+            await api.state.oidc.initialize()
+            cleanup.push_async_callback(api.state.oidc.aclose)
             from app.configuration.project_templates import ProjectTemplateStore
             api.state.project_templates = ProjectTemplateStore(api.state.store.engine)
             await api.state.project_templates.initialize()
@@ -59,6 +63,12 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
             await api.state.integrations.initialize()
             api.state.platform_admin = PlatformAdminStore(api.state.store.engine)
             await api.state.platform_admin.initialize()
+            if managed_projects:
+                from app.configuration.projects import ProjectStore
+                api.state.projects = ProjectStore(api.state.store.engine, configured)
+                await api.state.projects.initialize()
+            from app.configuration.knowledge import KnowledgeService
+            api.state.knowledge = KnowledgeService(api.state.store.engine, configured)
             api.state.integration_probe_limiter = asyncio.Semaphore(4)
             configured, parameters = await load_effective_settings(
                 api.state.store.engine,
@@ -177,13 +187,18 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None):
                 connector_enabled_adapters=enabled_connector_adapters,
             )
             api.state.runner.harness_workspace = api.state.harness_workspace
+            api.state.runner.knowledge = api.state.knowledge
             api.state.runner.run_events = api.state.run_events
             cleanup.push_async_callback(api.state.runner.aclose)
             from app.runtime.playground import Playground
             api.state.playground = Playground(api.state.runner)
             await api.state.playground.initialize()
             await api.state.runner.session_service.prepare_tables()
-            telemetry = setup_telemetry() if configured.mode == "live" else None
+            if managed_projects:
+                from app.runtime.projects import ProjectRuntimeManager
+                api.state.project_runtimes = ProjectRuntimeManager(api, model_factory)
+                cleanup.push_async_callback(api.state.project_runtimes.aclose)
+            telemetry = setup_telemetry() if managed_projects and configured.mode == "live" else None
             try:
                 yield
             finally:

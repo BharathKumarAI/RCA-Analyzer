@@ -1,0 +1,26 @@
+.session-dialog { display: flex; flex-direction: column; gap: 24px; }
+.session-dialog h2, .session-dialog p { margin: 0; text-wrap: pretty; }
+.session-dialog h2 { font-size: 20px; line-height: 28px; }
+.session-dialog p { color: var(--muted); font-size: 14px; line-height: 20px; }
+.session-heading { display: flex; align-items: center; gap: 12px; }
+.session-heading > svg { color: var(--acc); flex-shrink: 0; }
+.session-heading > button { margin-left: auto; }
+.session-dialog .session-error { color: var(--acc-rose); }
+.session-company-signin { display: flex; flex-direction: column; gap: 12px; }
+.session-company-signin .btn { min-height: 40px; padding: 8px 12px; color: var(--tx-inverse); font-size: 16px; line-height: 24px; }
+.session-identity { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; padding: 16px; margin: 0; border-radius: var(--radius-md); background: var(--card-subtle); font-size: 14px; line-height: 20px; }
+.session-identity dt { color: var(--muted); }
+.session-identity dd { margin: 0; overflow-wrap: anywhere; }
+.session-token-access { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 16px; }
+.session-token-access summary { font-size: 14px; line-height: 20px; cursor: pointer; }
+.session-token-access summary:hover { color: var(--acc); }
+.session-token-access[open] summary { margin-bottom: 16px; }
+.session-token-access form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.session-token-access label { font-size: 14px; line-height: 20px; }
+.session-token-access textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 12px; font-family: var(--font-mono); font-size: 12px; line-height: 20px; }
+.session-token-access .btn { align-self: flex-start; }
+.session-footer { display: flex; gap: 12px; justify-content: flex-end; }
+.session-dialog :is(summary, button, a, textarea):focus-visible { outline: 2px solid var(--line-focus); outline-offset: 4px; }
+.session-dialog button:disabled { opacity: .55; cursor: not-allowed; }
+.session-dialog .btn { white-space: normal; }
+@media(max-width: 480px) { .session-identity { grid-template-columns: minmax(0, 1fr); gap: 8px; } .session-identity dd + dt { margin-top: 8px; } }

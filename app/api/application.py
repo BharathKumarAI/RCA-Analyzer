@@ -7,7 +7,7 @@ from pathlib import Path
 from app.persistence.lineage import ingestion_context
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.identity.auth import authenticated_principal
@@ -19,19 +19,28 @@ from app.api.routes import platform_configuration
 from app.api.routes import project_templates, integrations, harness_workspace, ui_settings, project_editor, connectors_api
 from app.api.routes import project_redaction
 from app.api.routes import knowledge_uploads, playground
+from app.api.routes import authentication
+from app.api.routes import telemetry
+from app.api.routes import metrics
+from app.api.routes import feedback
+from app.api.routes import projects
+from app.api.routes import project_access
+from app.api.routes import triage
+from app.runtime.projects import ProjectLeaseMiddleware
 
 
 def create_app(settings=None, *, connectors=None, model_factory=None):
     lifespan = application_lifespan(
         settings, connectors=connectors, model_factory=model_factory
     )
-    api = FastAPI(title="RCA Analyzer", version="0.2.0", lifespan=lifespan)
+    api = FastAPI(title="RCA assist", version="0.2.0", lifespan=lifespan)
 
     @api.middleware("http")
     async def authenticate_and_limit(request, call_next):
         # Run before multipart parsing: unauthenticated clients cannot consume the
         # parser pool or spool uploads to disk.
-        if request.url.path.startswith("/api/"):
+        public_auth = request.method == "GET" and request.url.path in authentication.PUBLIC_AUTH_PATHS
+        if request.url.path.startswith("/api/") and not public_auth:
             try:
                 request.state.principal = await authenticated_principal(request)
                 enforce_api_access(request.state.principal, request.method, request.url.path.rstrip("/"))
@@ -93,8 +102,15 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             ):
                 response = await call_next(request)
             response.headers["X-Content-Type-Options"] = "nosniff"
-            response.headers["Cache-Control"] = "no-store"
-            if request.url.path.startswith(("/admin", "/p/")) or request.url.path == "/":
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+                if response.status_code == 200 and request.url.path.startswith("/admin/assets/")
+                else "public, max-age=86400"
+                if response.status_code == 200 and request.url.path.startswith("/admin/fonts/")
+                else "no-store"
+            )
+            response.headers["Referrer-Policy"] = "no-referrer"
+            if request.url.path.startswith(("/admin", "/p/", "/workspace")) or request.url.path == "/":
                 response.headers["Content-Security-Policy"] = (
                     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
                 )
@@ -103,6 +119,8 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
         finally:
             if is_upload:
                 limiter.release()
+
+    api.add_middleware(ProjectLeaseMiddleware)
 
     @api.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
@@ -122,6 +140,13 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
     api.include_router(project_redaction.router)
     api.include_router(knowledge_uploads.router)
     api.include_router(playground.router)
+    api.include_router(authentication.router)
+    api.include_router(telemetry.router)
+    api.include_router(metrics.router)
+    api.include_router(feedback.router)
+    api.include_router(projects.router)
+    api.include_router(project_access.router)
+    api.include_router(triage.router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     web_dir = Path(__file__).resolve().parents[2] / "web"
@@ -137,7 +162,11 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
             return FileResponse(admin_dir / "index.html")
 
         @api.get("/", include_in_schema=False)
-        async def root_redirect():
-            return RedirectResponse(url="/admin/")
+        @api.get("/workspace", include_in_schema=False)
+        @api.get("/workspace/", include_in_schema=False)
+        @api.get("/admins", include_in_schema=False)
+        @api.get("/admins/{page:path}", include_in_schema=False)
+        async def application_entry(page: str = ""):
+            return FileResponse(admin_dir / "index.html")
 
     return api

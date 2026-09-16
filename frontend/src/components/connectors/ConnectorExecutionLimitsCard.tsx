@@ -22,7 +22,7 @@ export const ConnectorExecutionLimitsCard: React.FC<ConnectorExecutionLimitsCard
   readOnly = false,
 }) => {
   return (
-    <div className="prism-execution-limits-section">
+    <div className="rca_assist-execution-limits-section">
       <div style={{ marginBottom: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Sliders size={15} style={{ color: 'var(--acc, #2563eb)' }} />
@@ -35,97 +35,97 @@ export const ConnectorExecutionLimitsCard: React.FC<ConnectorExecutionLimitsCard
         </p>
       </div>
 
-      <div className="prism-form-grid-2">
-        <div className="prism-form-group">
-          <label className="prism-label">
-            Request Timeout (seconds) <span className="prism-req">*</span>
+      <div className="rca_assist-form-grid-2">
+        <div className="rca_assist-form-group">
+          <label className="rca_assist-label">
+            Request Timeout (seconds) <span className="rca_assist-req">*</span>
           </label>
           <input
             type="number"
-            className="prism-input"
+            className="rca_assist-input"
             value={timeoutSeconds}
             min={1}
             max={120}
             disabled={readOnly}
             onChange={e => onTimeoutChange(Number(e.target.value) || timeoutDefault)}
           />
-          <span className="prism-field-caption">
+          <span className="rca_assist-field-caption">
             Maximum execution time for requests to this connector (Default: {timeoutDefault}s)
           </span>
         </div>
 
-        <div className="prism-form-group">
-          <label className="prism-label">
-            Retry Attempts <span className="prism-req">*</span>
+        <div className="rca_assist-form-group">
+          <label className="rca_assist-label">
+            Retry Attempts <span className="rca_assist-req">*</span>
           </label>
           <input
             type="number"
-            className="prism-input"
+            className="rca_assist-input"
             value={retryAttempts ?? 3}
             min={0}
             max={10}
             disabled={readOnly}
             onChange={e => onRetryAttemptsChange && onRetryAttemptsChange(Number(e.target.value) ?? (retryAttemptsDefault ?? 3))}
           />
-          <span className="prism-field-caption">
+          <span className="rca_assist-field-caption">
             Number of automatic retries on transient network errors (Default: {retryAttemptsDefault ?? 3})
           </span>
         </div>
 
-        <div className="prism-form-group">
-          <label className="prism-label">
-            Retry Backoff (seconds) <span className="prism-req">*</span>
+        <div className="rca_assist-form-group">
+          <label className="rca_assist-label">
+            Retry Backoff (seconds) <span className="rca_assist-req">*</span>
           </label>
           <input
             type="number"
-            className="prism-input"
+            className="rca_assist-input"
             value={retryBackoff ?? 5}
             min={1}
             max={60}
             disabled={readOnly}
             onChange={e => onRetryBackoffChange && onRetryBackoffChange(Number(e.target.value) ?? (retryBackoffDefault ?? 5))}
           />
-          <span className="prism-field-caption">
+          <span className="rca_assist-field-caption">
             Exponential or linear backoff delay between retry attempts (Default: {retryBackoffDefault ?? 5}s)
           </span>
         </div>
 
-        <div className="prism-form-group">
-          <label className="prism-label">
-            Rate Limit (requests/min) <span className="prism-req">*</span>
+        <div className="rca_assist-form-group">
+          <label className="rca_assist-label">
+            Rate Limit (requests/min) <span className="rca_assist-req">*</span>
           </label>
           <input
             type="number"
-            className="prism-input"
+            className="rca_assist-input"
             value={rateLimit ?? 100}
             min={1}
             max={1000}
             disabled={readOnly}
             onChange={e => onRateLimitChange && onRateLimitChange(Number(e.target.value) ?? (rateLimitDefault ?? 100))}
           />
-          <span className="prism-field-caption">
+          <span className="rca_assist-field-caption">
             Maximum request frequency allowed to the remote API (Default: {rateLimitDefault ?? 100} req/min)
           </span>
         </div>
 
         {hasMaxResponseBytes && onMaxResponseBytesChange && (
-          <div className="prism-form-group full-width">
-            <label className="prism-label">Max Response Bytes</label>
+          <div className="rca_assist-form-group full-width">
+            <label className="rca_assist-label">Max Response Bytes</label>
             <input
               type="number"
-              className="prism-input"
+              className="rca_assist-input"
               value={maxResponseBytes ?? maxBytesDefault}
               min={1024}
               disabled={readOnly}
               onChange={e => onMaxResponseBytesChange(Number(e.target.value) || maxBytesDefault)}
             />
-            <span className="prism-field-caption">
+            <span className="rca_assist-field-caption">
               Payload limit: {(((maxResponseBytes ?? maxBytesDefault) / (1024 * 1024))).toFixed(1)} MB
             </span>
           </div>
         )}
 
-        <div className="prism-form-group full-width" style={{ marginTop: '4px' }}>
+        <div className="rca_assist-form-group full-width" style={{ marginTop: '4px' }}>
           <div
             style={{
               display: 'flex',

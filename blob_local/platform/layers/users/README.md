@@ -16,4 +16,4 @@ skills:
 
 The matching [project example](../projects/README.md) explicitly delegates `presentation` and `incident-triage`. User preferences guide model instructions; they do not change tools or the server's workflow graph. A user cannot change capability enablement, roles, connector access, model profiles, budgets, workflow controls or stage prompts. Skill action restrictions accumulate; project denials cannot be restored.
 
-No credentials, API keys or executable imports belong here. See the [application ownership matrix](../../../../docs/architecture.md#configuration-ownership-and-inheritance).
+No credentials, API keys or executable imports belong here. See the [application ownership matrix](../../../../docs/configuration.md#scope-and-precedence).

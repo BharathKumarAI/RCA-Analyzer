@@ -384,76 +384,76 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
     const { brandColor, iconType } = conn;
     if (iconType === 'jira') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <span style={{ fontSize: size * 0.5, fontWeight: 800 }}>J</span>
         </div>
       );
     }
     if (iconType === 'splunk') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Activity size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'confluence') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <BookOpen size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'signalfx') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Activity size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'qtest') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <CheckCircle2 size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'unix') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Terminal size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'oracle') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Database size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'kafka') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Radio size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'kubernetes') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <Layers size={size * 0.5} />
         </div>
       );
     }
     if (iconType === 'gitlab') {
       return (
-        <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+        <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
           <GitBranch size={size * 0.5} />
         </div>
       );
     }
     return (
-      <div className="prism-header-avatar" style={{ width: size, height: size, background: brandColor }}>
+      <div className="rca_assist-header-avatar" style={{ width: size, height: size, background: brandColor }}>
         <Sparkles size={size * 0.5} />
       </div>
     );

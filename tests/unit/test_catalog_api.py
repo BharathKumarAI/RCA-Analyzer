@@ -228,7 +228,7 @@ def test_project_setup_and_validation_enforces_platform_rules():
             assert any("invalid characters" in err for err in v_bad_res.json()["errors"])
 
 
-def test_skills_endpoint_and_project_override_with_mlflow():
+def test_skills_endpoint_and_project_override_validation():
     with tempfile.TemporaryDirectory() as tmpdir:
         settings, token = settings_for(tmpdir)
         app = create_app(settings, connectors=connectors())
@@ -256,7 +256,7 @@ def test_skills_endpoint_and_project_override_with_mlflow():
             assert db_res.status_code == 403
             assert "immutable" in db_res.json()["detail"]
 
-            # 3. POST /api/v1/skills/incident-triage saves override, executes stage, and runs MLflow evaluation
+            # Saving validates configuration; model quality requires a real evaluation run.
             save_skill_res = client.post(
                 "/api/v1/skills/incident-triage",
                 headers=headers,
@@ -270,10 +270,10 @@ def test_skills_endpoint_and_project_override_with_mlflow():
             assert eval_data["saved"] is True
             assert eval_data["skill_id"] == "incident-triage"
             assert eval_data["stage"] == "triage"
-            assert "mlflow" in eval_data
-            assert eval_data["mlflow"]["status"] == "COMPLETED"
-            assert "run_id" in eval_data["mlflow"]
-            assert eval_data["mlflow"]["candidate_metrics"]["contract_status"] == 1.0
+            assert "mlflow" not in eval_data
+            assert eval_data["validation"]["status"] == "PASSED"
+            assert eval_data["validation"]["model_execution"] == "NOT_RUN"
+            assert eval_data["validation"]["quality_evaluation"] == "NOT_RUN"
 
             # 4. Subsequent GET /api/v1/skills reflects project override
             skills_res2 = client.get("/api/v1/skills", headers=headers)
@@ -285,3 +285,35 @@ def test_skills_endpoint_and_project_override_with_mlflow():
             reset_res = client.delete("/api/v1/skills/incident-triage", headers=headers)
             assert reset_res.status_code == 200
             assert reset_res.json()["reset"] is True
+
+            # 6. PUT /api/v1/project/availability/skills/{skill_id} toggles project availability
+            toggle_res = client.put(
+                "/api/v1/project/availability/skills/incident-triage",
+                headers=headers,
+                json={"enabled": False, "expected_enabled": True},
+            )
+            assert toggle_res.status_code == 200
+            assert toggle_res.json() == {"id": "incident-triage", "project_enabled": False}
+
+            # Verify reflected in skills catalog
+            skills_res3 = client.get("/api/v1/skills", headers=headers)
+            triage_skill3 = next(s for s in skills_res3.json() if s["id"] == "incident-triage")
+            assert triage_skill3["project_enabled"] is False
+
+            # Immutable skill cannot be altered by project availability
+            immutable_res = client.put(
+                "/api/v1/project/availability/skills/database-rca",
+                headers=headers,
+                json={"enabled": False, "expected_enabled": True},
+            )
+            assert immutable_res.status_code == 403
+
+            # Re-enable
+            reenable_res = client.put(
+                "/api/v1/project/availability/skills/incident-triage",
+                headers=headers,
+                json={"enabled": True, "expected_enabled": False},
+            )
+            assert reenable_res.status_code == 200
+            assert reenable_res.json()["project_enabled"] is True
+

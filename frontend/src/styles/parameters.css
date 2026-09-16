@@ -671,6 +671,21 @@
   border: 1px solid rgba(148, 163, 184, 0.25);
 }
 
+.param-scope-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: capitalize;
+}
+
+.param-governance-select {
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+}
+
 /* Type Badges */
 .param-type-badge {
   font-size: 10px;
@@ -1247,12 +1262,6 @@
 }
 
 /* ---------------- Taxonomy & Rebrand Styling ---------------- */
-.param-pill-badge.inherit {
-  background: rgba(148, 163, 184, 0.12);
-  color: #94a3b8;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-}
-
 .param-pill-badge.disabled {
   background: rgba(239, 68, 68, 0.12);
   color: #ef4444;
@@ -1336,17 +1345,8 @@
   font-family: var(--font-mono);
 }
 
-/* Row & Card State Accents */
-.param-table tbody tr.is-state-set {
-  border-left: 3px solid #22c55e;
-}
-
-.param-table tbody tr.is-state-inherit {
-  border-left: 3px solid var(--line);
-}
-
+/* Card State Accents */
 .param-table tbody tr.is-state-disabled {
-  border-left: 3px solid #ef4444;
   opacity: 0.78;
 }
 

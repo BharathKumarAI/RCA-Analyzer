@@ -126,6 +126,7 @@ audit = Table(
     Column("actor_subject", String(256), nullable=False),
     Column("action", String(32), nullable=False),
     Column("revision", Integer, nullable=False),
+    Column("details", JSON().with_variant(JSONB, "postgresql")),
     Column("created_at", Float, nullable=False),
     schema="governance",
 )

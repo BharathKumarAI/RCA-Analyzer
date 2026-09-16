@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import ts from '../frontend/node_modules/typescript/lib/typescript.js';
+
+const moduleUrl = source => `data:text/javascript;base64,${Buffer.from(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText).toString('base64')}`;
+const apiUrl = moduleUrl(await fs.readFile(new URL('../frontend/src/services/api.ts', import.meta.url), 'utf8'));
+const api = await import(apiUrl);
+const artifactSource = await fs.readFile(new URL('../frontend/src/services/artifacts.ts', import.meta.url), 'utf8');
+const artifacts = await import(moduleUrl(artifactSource.replace("from './api'", `from '${apiUrl}'`)));
+api.setSessionToken('test-only-token');
+api.setProjectContext('project-a');
+let latest;
+globalThis.fetch = async (path, init) => {
+  latest = { path, ...init };
+  return path.endsWith('/download') ? new Response('original file') : Response.json(path.includes('/preview') ? { filename: 'notes.md', media_type: 'text/markdown', text: 'Saved extracted text', truncated: true, warnings: ['Long content'] } : []);
+};
+await artifacts.fetchChatArtifacts('chat/with spaces', 123.5);
+assert.equal(latest.path, '/api/v1/chats/chat%2Fwith%20spaces/artifacts?limit=100&before=123.5');
+assert.equal(latest.headers.get('X-RCA-Project'), 'project-a');
+assert.equal(latest.headers.get('Authorization'), 'Bearer test-only-token');
+const preview = await artifacts.fetchChatArtifactPreview('chat-1', 'artifact/id');
+assert.equal(latest.path, '/api/v1/chats/chat-1/artifacts/artifact%2Fid/preview');
+assert.equal(preview.truncated, true);
+assert.deepEqual(preview.warnings, ['Long content']);
+assert.equal(await (await artifacts.downloadChatArtifact('chat-1', 'artifact/id')).text(), 'original file');
+assert.equal(latest.headers.get('X-RCA-Project'), 'project-a', 'downloads keep the selected project authorization context');
+assert.equal(latest.credentials, 'same-origin');
+await artifacts.downloadChatReport('chat-1', 'run/id');
+assert.equal(latest.path, '/api/v1/chats/chat-1/created/run%2Fid/download');
+globalThis.fetch = async () => new Response('expired', { status: 404 });
+await assert.rejects(artifacts.downloadChatArtifact('chat-1', 'artifact-1'), error => error.status === 404 && /no longer available/.test(error.message));
+globalThis.fetch = async () => Response.json({ detail: 'Preview expired; original may remain available.' }, { status: 410 });
+await assert.rejects(artifacts.fetchChatArtifactPreview('chat-1', 'artifact-1'), error => error.status === 410 && /original/.test(error.message));
+console.log('Conversation files preserve project auth, original downloads, preview limits and expiry errors');

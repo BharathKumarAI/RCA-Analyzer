@@ -1,4 +1,4 @@
-"""ADK-compatible RCA Analyzer agent package."""
+"""ADK-compatible RCA assist agent package."""
 
 from .agent import root_agent
 

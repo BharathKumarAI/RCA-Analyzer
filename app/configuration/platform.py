@@ -9,7 +9,7 @@ from app.inputs.files import FileLimits
 from app.models.profiles import ModelProfiles
 from app.optimization.models import OptimizationConfig
 from app.tools.catalog import ALLOWED_ACTIONS
-from app.configuration.models import ConnectorTemplate
+from app.configuration.models import ConnectorTemplate, CatalogSkillRecord
 
 STAGES = {"triage", "logs", "extraction", "synthesis", "router", "orchestrator"}
 
@@ -114,6 +114,9 @@ class PlatformConfiguration:
                     )
                 ).mappings().all()
                 for r in rows:
+                    if r["config_type"] == "skill":
+                        db_configs.setdefault("skill_catalog", []).append(r["content_json"])
+                        continue
                     db_configs[r["config_key"]] = r["content_json"]
         except Exception:
             db_configs = {}
@@ -173,8 +176,12 @@ class PlatformConfiguration:
                 for row in rows
             ]
 
+        skill_records = sorted((CatalogSkillRecord.model_validate(item) for item in configs.get("skill_catalog", [])),
+                               key=lambda item: item.definition.id)
         registry = registry or CapabilityRegistry(
-            str(settings.content_root / "capabilities"), settings.projects_root
+            str(settings.content_root / "capabilities"), settings.projects_root,
+            managed_skills=[record.definition for record in skill_records],
+            active_skill_ids=[record.definition.id for record in skill_records if record.status == "APPROVED"],
         )
         profiles = ModelProfiles.model_validate(read("model_profiles.yaml"))
         prompts = read("prompts.yaml")

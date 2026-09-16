@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 from sqlalchemy import select, update
 
-from app.persistence.store import InvestigationStore, attachments
+from app.persistence.store import InvestigationStore, attachments, runs
 from app.identity.principals import Role, UserPrincipal
 from app.runtime.run_contract import RunContract, RunRequest
 
@@ -88,12 +88,14 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_counts_refresh_expired_work(self):
         contract = make_contract(self.principal)
-        await self.store.create_run(contract, None, "request", time.time() + 0.01)
+        await self.store.create_run(contract, None, "request", time.time() + 60)
         counts = await self.store.run_counts(self.principal)
         self.assertEqual(counts["total"], 1)
         self.assertEqual(counts["active"], 1)
-        await asyncio.sleep(0.01)
-        await self.store.get_run(contract.run_id, self.principal)
+        # Move the persisted deadline into the past without relying on machine
+        # speed; run_counts itself must refresh the expired run's status.
+        async with self.store.engine.begin() as connection:
+            await connection.execute(update(runs).where(runs.c.run_id == contract.run_id).values(deadline=1))
         counts = await self.store.run_counts(self.principal)
         self.assertEqual(counts["active"], 0)
         self.assertEqual(counts["by_status"]["FAILED"], 1)

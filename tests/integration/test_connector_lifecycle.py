@@ -418,6 +418,20 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
             assert enable_ok.json()["enabled"] is True
             assert enable_ok.json()["status"] == "enabled"
 
+            # Project-managed providers can be constructed per run even when
+            # there is no deployment client. Chat must still offer native work.
+            deployment_clients = app.state.runner.connectors
+            app.state.runner.connectors = {}
+            try:
+                capabilities = client.get("/api/v1/capabilities?all=true", headers=headers)
+                assert capabilities.status_code == 200
+                availability = {item["id"]: item for item in capabilities.json()}
+                assert availability["ticket_review"]["runtime_supported"] is True
+                assert availability["incident_triage"]["runtime_supported"] is True
+                assert availability["database_rca"]["runtime_supported"] is False
+            finally:
+                app.state.runner.connectors = deployment_clients
+
             # 8. Disable
             disable_res = client.post(
                 "/api/v1/projects/payments/connectors/jira_main/disable",

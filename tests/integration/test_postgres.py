@@ -158,7 +158,8 @@ async def test_postgres_migrations_parameters_lineage_and_native_sessions(tmp_pa
             )
 
         project_definition = edited_platform.model_copy(
-            update={"name": "Payments MCP", "endpoint": "https://payments-mcp.postgres.example.test"}
+            update={"name": "Payments MCP", "endpoint": "https://payments-mcp.postgres.example.test",
+                    "environment_dependency": "independent", "tool_environment": "Shared"}
         )
         with ingestion_context("api", batch_id="integration-project", actor="integration-owner"):
             await integration_store.save(
@@ -234,7 +235,12 @@ async def test_postgres_migrations_parameters_lineage_and_native_sessions(tmp_pa
             assert (
                 await c.scalar(
                     text(
-                        "SELECT count(*) FROM information_schema.columns WHERE column_name IN ('created_time','created_by','edited_time','edited_by','etl_src_system','etl_batch_id') AND table_schema IN ('platform','project','runtime','governance','optimization')"
+                        "SELECT count(*) FROM information_schema.columns c "
+                        "WHERE column_name IN ('created_time','created_by','edited_time','edited_by','etl_src_system','etl_batch_id') "
+                        "AND table_schema IN ('platform','project','runtime','governance','optimization') "
+                        "AND EXISTS (SELECT 1 FROM information_schema.triggers t "
+                        "WHERE t.event_object_schema=c.table_schema AND t.event_object_table=c.table_name "
+                        "AND t.trigger_name='stamp_etl_lineage')"
                     )
                 )
                 == 114

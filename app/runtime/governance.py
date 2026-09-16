@@ -200,7 +200,7 @@ class RunGovernance:
         try:
             request, projections = fit_evidence(request, {
                 self.evidence_marker: self.evidence,
-                self.attachment_marker: [item for item in self.evidence if item["source"] == "attachments"],
+                self.attachment_marker: [item for item in self.evidence if item["source"] in {"attachments", "knowledge"}],
             }, self.failures, self.settings.max_context_chars)
         except ContextLimitExceeded:
             self.context_limit_exceeded = True

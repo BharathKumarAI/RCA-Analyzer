@@ -20,7 +20,7 @@ from app.configuration.models import (
 class ConfigurationLayers:
     """Load once, then resolve only by authenticated tenant/project/subject."""
 
-    def __init__(self, root: Path, skill_names, capabilities, projects_root: Path):
+    def __init__(self, root: Path, skill_names, capabilities, projects_root: Path, additional_skill_rules=None):
         legacy = root.with_name("skill_layers")
         if legacy.exists() or legacy.is_symlink():
             raise ValueError("Migrate skill_layers to layers before startup")
@@ -48,6 +48,10 @@ class ConfigurationLayers:
             raise ValueError("Configuration layer directory cannot be a symlink")
         path = root / "platform.yaml"
         self.policy = read(path, PlatformRules) if path.exists() else PlatformRules()
+        if additional_skill_rules:
+            self.policy = self.policy.model_copy(update={
+                "skills": {**self.policy.skills, **additional_skill_rules}
+            })
         self.rules = self.policy.skills
         if set(self.rules) - set(skill_names):
             raise ValueError("Platform policy references an unknown skill")
@@ -247,6 +251,7 @@ class ConfigurationLayers:
                 and rule is not None
                 and not rule.immutable
                 and rule.project_override
+                and name in optimized_contents
                 and optimized_contents[name] != text
             ):
                 text, source = optimized_contents[name], "project_optimization"

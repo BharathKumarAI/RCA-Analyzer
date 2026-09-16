@@ -44,7 +44,7 @@ async def test_configuration_save_with_minimum_database_privileges():
         async with engine.begin() as c:
             await c.exec_driver_sql(f'GRANT USAGE ON SCHEMA platform TO "{role}"')
             # Apply the actual upgrade policy to an isolated role and database.
-            source = Path("migrations/005_configuration_save_privileges.sql").read_text()
+            source = Path("migrations/history/005_configuration_save_privileges.sql").read_text()
             await c.exec_driver_sql(source.replace("rca_app", role))
 
         @asynccontextmanager

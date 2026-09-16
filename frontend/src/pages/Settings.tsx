@@ -50,6 +50,7 @@ import type {
 import { ConfigurationEditor } from '../components/ConfigurationEditor';
 import { ParameterSettingsPanel } from '../components/ParameterSettingsPanel';
 import { WorkspacePresentationSettings } from '../components/WorkspacePresentationSettings';
+import { SsoSettings } from '../components/SsoSettings';
 import '../styles/settings.css';
 
 interface SettingsProps {
@@ -59,6 +60,7 @@ interface SettingsProps {
 }
 
 const tabs = [
+  'Company sign-in',
   'Platform Execution & Boundaries',
   'File Processing & Formats',
   'Connection Diagnostics',
@@ -71,7 +73,7 @@ const tabs = [
 type TabName = (typeof tabs)[number];
 
 export function Settings({ principal, health, onUiSettingsChanged }: SettingsProps) {
-  const [tab, setTab] = useState<TabName>('Platform Execution & Boundaries');
+  const [tab, setTab] = useState<TabName>(() => new URLSearchParams(window.location.search).get('section') === 'company-sign-in' ? 'Company sign-in' : 'Platform Execution & Boundaries');
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [loading, setLoading] = useState(false);
@@ -344,7 +346,7 @@ export function Settings({ principal, health, onUiSettingsChanged }: SettingsPro
   function generateDeploymentExport(): string {
     const extList = fileForm.allowed_extensions.join(',');
     return `# ==============================================================================
-# RCA Analyzer - Platform Deployment Configuration Export
+# RCA assist - Platform Deployment Configuration Export
 # Generated from live server runtime at ${new Date().toISOString()}
 # Scope: ${principal.tenant_id} / ${principal.project_id}
 # ==============================================================================
@@ -574,6 +576,7 @@ RCA_ALLOWED_EXTENSIONS=${extList}
             className={`btn ${tab === name ? 'btn-primary' : 'btn-secondary'}`}
             onClick={e => {
               e.preventDefault();
+              if (name !== tab && !window.dispatchEvent(new Event('rca:before-navigation', { cancelable: true }))) return;
               setTab(name);
             }}
           >
@@ -581,6 +584,8 @@ RCA_ALLOWED_EXTENSIONS=${extList}
           </button>
         ))}
       </div>
+
+      {tab === 'Company sign-in' && <SsoSettings principal={principal} />}
 
       {/* TAB 1: Platform Execution & Boundaries */}
       {tab === 'Platform Execution & Boundaries' && (

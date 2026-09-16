@@ -116,7 +116,11 @@ class OptimizationService:
         )
 
     def check_platform(self):
-        if read_platform(self.settings)[1] != self.platform_hash:
+        from app.capabilities.registry import CapabilityRegistry
+        registry = CapabilityRegistry(str(self.settings.content_root / "capabilities"),
+            self.settings.projects_root, managed_skills=self.registry.managed_skills,
+            active_skill_ids=self.registry.active_skill_ids)
+        if read_platform(self.settings, registry)[1] != self.platform_hash:
             raise ValueError(
                 "Platform files changed; restart before evaluating or approving content"
             )
@@ -136,9 +140,9 @@ class OptimizationService:
         self.check_platform()
         report = await self._artifact(row.report_hash)
         if report["platform_hash"] != self.platform_hash:
-            raise ValueError(
-                "Approved content belongs to a different platform baseline"
-            )
+            # New trusted skills change the baseline. Stale optimized text must
+            # not hide them or prevent the current capability from executing.
+            return None
         return {
             "bundle": report["bundle"],
             "revision_hash": row.report_hash,

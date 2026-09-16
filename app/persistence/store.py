@@ -117,7 +117,16 @@ class InvestigationStore:
         )
 
     async def initialize(self):
-        await initialize_tables(self.engine, metadata)
+        from app.persistence.feedback import feedback
+        await initialize_tables(self.engine, feedback.metadata)
+        # Standalone replay/runner users also snapshot approved model prices.
+        # Initialize/verify the one shared catalog table they now require.
+        from app.configuration.parameters import system_configurations
+        configuration_metadata = MetaData()
+        system_configurations.to_metadata(configuration_metadata)
+        await initialize_tables(self.engine, configuration_metadata)
+        from app.persistence.chat_messages import initialize
+        await initialize(self.engine)
 
     async def aclose(self):
         await self.engine.dispose()
@@ -162,6 +171,7 @@ class InvestigationStore:
             mode=contract["mode"],
             capability=contract["capability"],
             chat_id=contract["request"].get("chat_id"),
+            prompt=contract["request"].get("text", ""),
         )
 
     async def create_run(
@@ -639,7 +649,11 @@ class InvestigationStore:
                 from app.persistence.run_events import run_events
 
                 await c.execute(delete(run_events).where(run_events.c.run_id.in_(old)))
+            from app.persistence.feedback import feedback
+            await c.execute(delete(feedback).where(feedback.c.run_id.in_(old)))
             await c.execute(delete(chat_runs).where(chat_runs.c.run_id.in_(old)))
+            from app.persistence.chat_messages import messages
+            removed_messages = await c.execute(delete(messages).where(messages.c.created_at < cutoff, scoped(messages)))
             await c.execute(delete(evidence).where(evidence.c.run_id.in_(old)))
             result2 = await c.execute(
                 delete(runs).where(
@@ -650,7 +664,7 @@ class InvestigationStore:
                     )
                 )
             )
-            return (result.rowcount or 0) + (result2.rowcount or 0)
+            return (result.rowcount or 0) + (result2.rowcount or 0) + (removed_messages.rowcount or 0)
 
     async def create_chat(self, principal):
         record = dict(
@@ -680,7 +694,15 @@ class InvestigationStore:
         return {"chat_id": row.chat_id, "created_at": row.created_at}
 
     async def list_chats(self, principal, limit=50, before=None):
-        q = select(chats).where(
+        from app.persistence.chat_messages import messages
+        latest = (select(runs.c.contract_json).join(chat_runs, chat_runs.c.run_id == runs.c.run_id)
+                  .where(chat_runs.c.chat_id == chats.c.chat_id,
+                         self._scope(runs, principal), runs.c.subject == principal.subject)
+                  .order_by(runs.c.created_at.desc(), runs.c.run_id).limit(1).scalar_subquery())
+        latest_question = (select(messages.c.content).where(messages.c.chat_id == chats.c.chat_id,
+            self._scope(messages, principal), messages.c.subject == principal.subject,
+            messages.c.role == "user").order_by(messages.c.sequence.desc()).limit(1).scalar_subquery())
+        q = select(chats, latest.label("latest_contract"), latest_question.label("latest_question")).where(
             self._scope(chats, principal), chats.c.subject == principal.subject
         )
         if before is not None:
@@ -689,7 +711,9 @@ class InvestigationStore:
             rows = (
                 await c.execute(q.order_by(chats.c.created_at.desc()).limit(limit))
             ).all()
-        return [{"chat_id": r.chat_id, "created_at": r.created_at} for r in rows]
+        return [{"chat_id": r.chat_id, "created_at": r.created_at,
+                 "title": json.loads(r.latest_contract)["request"]["text"][:120]
+                 if r.latest_contract else (r.latest_question or "New conversation")[:120]} for r in rows]
 
     async def list_chat_runs(self, chat_id, principal, limit=50, before=None):
         await self.require_chat(chat_id, principal)

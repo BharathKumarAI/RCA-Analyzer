@@ -1,4 +1,4 @@
-import { getSessionToken } from '../../services/api';
+import { authHeaders } from '../../services/api';
 import type { CatalogItem, GraphEdge, GraphNode, Permissions, Workspace } from './types/workspace.generated';
 
 export type StudioSeverity = 'error' | 'warning' | 'info';
@@ -63,16 +63,14 @@ export interface StudioRunEvent {
 type ApiRequestOptions = Omit<RequestInit, 'body'> & { body?: unknown };
 
 async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const headers = new Headers(options.headers);
+  const headers = authHeaders(options.headers, options.method);
   headers.set('Accept', 'application/json');
-  const token = getSessionToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
     options = { ...options, body: JSON.stringify(options.body) };
   }
   const { body, ...requestInit } = options;
-  const response = await fetch(path, { ...requestInit, headers, body: body as BodyInit | null | undefined });
+  const response = await fetch(path, { ...requestInit, credentials: 'same-origin', headers, body: body as BodyInit | null | undefined });
   if (!response.ok) {
     let detail = response.statusText;
     try {
@@ -135,11 +133,9 @@ export function importStudioBundle(file: File, capability: string): Promise<Stud
 }
 
 export async function exportStudioBundle(capability: string, draftId?: string | null): Promise<Blob> {
-  const headers = new Headers({ Accept: 'application/zip, application/octet-stream' });
-  const token = getSessionToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const headers = authHeaders({ Accept: 'application/zip, application/octet-stream' });
   const params = query(capability, draftId ? `draft_id=${encodeURIComponent(draftId)}` : '');
-  const response = await fetch(`/api/v1/harness/export?${params}`, { headers });
+  const response = await fetch(`/api/v1/harness/export?${params}`, { headers, credentials: 'same-origin' });
   if (!response.ok) throw new Error(`Export failed (${response.status})`);
   return response.blob();
 }
@@ -153,16 +149,17 @@ export async function streamStudioRun(
   prompt: string,
   onEvent: (event: StudioRunEvent) => void,
   signal?: AbortSignal,
+  options?: { chatId?: string; attachmentIds?: string[]; incidentId?: string; idempotencyKey?: string },
 ): Promise<Record<string, unknown>> {
-  const headers = new Headers({ Accept: 'text/event-stream, application/json' });
+  const headers = authHeaders({ Accept: 'text/event-stream, application/json' }, 'POST');
   headers.set('Content-Type', 'application/json');
-  const token = getSessionToken();
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (options?.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey);
   const response = await fetch(`/api/v1/runs?stream=true`, {
     method: 'POST',
+    credentials: 'same-origin',
     headers,
     signal,
-    body: JSON.stringify({ capability, prompt }),
+    body: JSON.stringify({ capability, prompt, ...(options?.chatId ? { chat_id: options.chatId } : {}), ...(options?.attachmentIds ? { attachment_ids: options.attachmentIds } : {}), ...(options?.incidentId ? { incident_id: options.incidentId } : {}) }),
   });
   if (!response.ok) throw new Error(`Run failed (${response.status})`);
 
@@ -177,34 +174,38 @@ export async function streamStudioRun(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let eventType = 'message';
   let last: Record<string, unknown> = {};
-  const emit = (raw: string) => {
-    const data = raw.trim();
+  let terminal = false;
+  const emit = (frame: string) => {
+    const lines = frame.split('\n');
+    const type = lines.find(line => line.startsWith('event:'))?.slice(6).trim() || 'progress';
+    const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
     if (!data) return;
-    try {
-      const parsed = JSON.parse(data) as Record<string, unknown>;
-      last = parsed;
-      onEvent({ type: eventType === 'message' ? String(parsed.type || 'progress') : eventType, data: parsed });
-    } catch {
-      onEvent({ type: eventType === 'message' ? 'progress' : eventType, data: { message: data } });
-    }
-    eventType = 'message';
+    const parsed: unknown = JSON.parse(data);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('The investigation returned an unreadable update.');
+    last = parsed as Record<string, unknown>;
+    terminal ||= type === 'complete' || type === 'error';
+    onEvent({ type, data: last });
   };
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      if (line.startsWith('event:')) eventType = line.slice(6).trim();
-      else if (line.startsWith('data:')) emit(line.slice(5));
-      else if (!line.trim()) eventType = 'message';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      buffer = buffer.replace(/\r\n/g, '\n');
+      let boundary: number;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        emit(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+      }
+      if (buffer.length > 2_000_000) throw new Error('An investigation update exceeded the allowed size.');
+      if (done) break;
     }
-    if (done) break;
+    if (buffer.trim()) emit(buffer);
+    if (!terminal) throw new Error('The connection ended before the investigation finished. Reload this conversation to check its saved status.');
+    return last;
+  } finally {
+    reader.releaseLock();
   }
-  emit(buffer);
-  return last;
 }
 
 export function downloadStudioBlob(blob: Blob, filename: string): void {

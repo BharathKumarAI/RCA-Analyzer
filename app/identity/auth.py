@@ -18,6 +18,20 @@ async def authenticated_principal(request: Request) -> UserPrincipal:
     if getattr(request.state, "principal", None) is not None:
         return request.state.principal
     settings = request.app.state.settings
+    if not request.headers.get("Authorization") and request.cookies.get("__Host-rca_session"):
+        identity = getattr(request.app.state, "oidc", None)
+        verified = await identity.session(request.cookies["__Host-rca_session"]) if identity else None
+        if verified is None:
+            raise HTTPException(401, "Your sign-in session expired. Sign in again.")
+        session, configuration = verified
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            try:
+                identity.check_csrf(request, session, configuration)
+            except PermissionError as exc:
+                raise HTTPException(403, str(exc)) from None
+        request.state.browser_session = session
+        principal = await principal_for_subject(request, session.subject)
+        return await _prepare_principal(request, principal)
     if not settings.auth_configured:
         raise HTTPException(503, "Authentication is not configured")
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
@@ -42,7 +56,22 @@ async def authenticated_principal(request: Request) -> UserPrincipal:
             "Invalid or expired bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
-    subject = claims["sub"]
+    principal = await principal_for_subject(request, claims["sub"])
+    return await _prepare_principal(request, principal)
+
+
+async def principal_for_subject(request: Request, subject: str) -> UserPrincipal:
+    """Membership always comes from the server, including after verified SSO."""
+    settings = request.app.state.settings
+    projects = getattr(request.app.state, "projects", None)
+    if projects is not None:
+        selected = request.headers.get("X-RCA-Project")
+        if selected is not None and (not selected or len(selected) > 256 or any(ord(char) < 32 for char in selected)):
+            raise HTTPException(400, "Invalid project selector")
+        try:
+            return await projects.principal(subject, selected)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from None
     principal = None
     admin_store = getattr(request.app.state, "platform_admin", None)
     if admin_store is not None:
@@ -76,4 +105,17 @@ async def authenticated_principal(request: Request) -> UserPrincipal:
         raise HTTPException(
             403, "Identity is outside this deployment's connector scope"
         )
+    return principal
+
+
+async def _prepare_principal(request, principal):
+    from app.configuration.skill_catalog import refresh_skill_catalog
+    manager = getattr(request.app.state, "project_runtimes", None)
+    if manager is not None:
+        try:
+            await manager.bind(request, principal)
+        except (ValueError, OSError):
+            raise HTTPException(503, "Project configuration is unavailable. Ask an administrator to check this workspace.") from None
+    await refresh_skill_catalog(request)
+    request.state.principal = principal
     return principal

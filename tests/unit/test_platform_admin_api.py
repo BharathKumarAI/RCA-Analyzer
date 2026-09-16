@@ -116,9 +116,6 @@ def test_platform_admin_crud_endpoints():
                     "rate_limit_tpm": 500000,
                     "alert_threshold_percent": 85,
                     "webhook_url": "https://hooks.internal.example.com/alerts",
-                    "pricing_matrix": {
-                        "gemini-2.5-flash": {"input_per_million": 0.15, "output_per_million": 0.60},
-                    },
                 },
             )
             assert update_billing.status_code == 200
@@ -191,10 +188,10 @@ def test_platform_admin_crud_endpoints():
                     "tags": ["payments", "checkout"],
                     "content": "# Runbook for Payments Outage\nStep 1: Check upstream...",
                     "media_type": "text/markdown",
-                    "status": "active",
+                    "status": "draft",
                 },
             )
-            assert create_kb.status_code == 200
+            assert create_kb.status_code == 201
             doc_id = create_kb.json()["id"]
 
             update_kb = client.put(
@@ -206,14 +203,18 @@ def test_platform_admin_crud_endpoints():
                     "tags": ["payments", "checkout", "v2"],
                     "content": "# Updated Runbook\nCheck Splunk payments index first.",
                     "media_type": "text/markdown",
-                    "status": "active",
+                    "status": "draft",
+                    "expected_hash": create_kb.json()["content_hash"],
                 },
             )
             assert update_kb.status_code == 200
             assert update_kb.json()["title"] == "Payment Gateway Runbook v2"
-
+            review_body = {"expected_hash": update_kb.json()["content_hash"], "reason": "Reviewed the updated runbook"}
+            assert client.post(f"/api/v1/knowledge/{doc_id}/submit", headers=headers, json=review_body).status_code == 200
+            assert client.post(f"/api/v1/knowledge/{doc_id}/approve", headers=token("owner"), json=review_body).status_code == 200
+            assert client.post(f"/api/v1/knowledge/{doc_id}/revoke", headers=headers, json=review_body).status_code == 200
             delete_kb = client.delete(f"/api/v1/knowledge/{doc_id}", headers=headers)
-            assert delete_kb.status_code == 204
+            assert delete_kb.status_code == 405
 
             # 7. Runtime Stages Tuning
             stages_res = client.get("/api/v1/runtime/stages", headers=headers)
@@ -500,4 +501,3 @@ def test_notifications_read_tracking_and_marking():
                 assert all_after_res.json()["unread_count"] == 0
                 for item in all_after_res.json()["items"]:
                     assert item["read"] is True
-

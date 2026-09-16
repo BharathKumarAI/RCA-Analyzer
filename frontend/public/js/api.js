@@ -1,5 +1,5 @@
 /**
- * Authenticated API Client for RCA Analyzer.
+ * Authenticated API Client for RCA assist.
  * 
  * Token is stored strictly IN-MEMORY in a private closure.
  * Never persisted in localStorage, sessionStorage, or cookies.

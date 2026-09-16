@@ -141,6 +141,7 @@ class Settings(BaseModel):
             "optimizations",
             "chats",
             "framework-uploads",
+            "knowledge",
         }:
             raise ValueError("Unknown project artifact kind")
         override = (
@@ -169,7 +170,7 @@ class Settings(BaseModel):
             self.auth_issuer
             and self.auth_audience
             and self.auth_public_key
-            and self.principals
+            and (self.principals or self.database_configuration)
         )
 
     def validate_runtime(self) -> None:

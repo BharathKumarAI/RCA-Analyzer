@@ -134,7 +134,7 @@
   font-weight: 600;
 }
 .connector-form input:not([type="checkbox"]),
-.connector-form select:not(.prism-gov-inline-select),
+.connector-form select:not(.rca_assist-gov-inline-select),
 .connector-form textarea {
   width: 100%;
   min-width: 0;
@@ -149,14 +149,14 @@
   font-weight: 400;
 }
 
-.connector-form .prism-field-gov-control {
+.connector-form .rca_assist-field-gov-control {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
 }
 
-.connector-form .prism-gov-select-pill {
+.connector-form .rca_assist-gov-select-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -169,8 +169,8 @@
   box-sizing: border-box;
 }
 
-.connector-form select.prism-gov-inline-select,
-.connector-form .prism-gov-inline-select {
+.connector-form select.rca_assist-gov-inline-select,
+.connector-form .rca_assist-gov-inline-select {
   appearance: none !important;
   -webkit-appearance: none !important;
   background: transparent !important;
@@ -605,7 +605,7 @@
     flex-wrap: wrap;
   }
   .connector-form input:not([type="checkbox"]),
-  .connector-form select:not(.prism-gov-inline-select),
+  .connector-form select:not(.rca_assist-gov-inline-select),
   .connector-form textarea {
     font-size: 16px;
   }
@@ -666,7 +666,7 @@
   color: #e2e8f0;
 }
 [data-theme="dark"] .connector-form input:not([type="checkbox"]),
-[data-theme="dark"] .connector-form select:not(.prism-gov-inline-select),
+[data-theme="dark"] .connector-form select:not(.rca_assist-gov-inline-select),
 [data-theme="dark"] .connector-form textarea {
   background: #0f172a;
   border-color: #334155;

@@ -57,12 +57,13 @@ import {
   ProjectEnvironment,
   TeamMember,
   ConnectorInstance,
-  PrismFullConfigurationData,
+  RcaAssistFullConfigurationData,
   formatToYaml,
 } from '../utils/projectSetupConfig';
 import '../styles/project-setup.css';
 import { ProjectHarnessSetup } from '../components/ProjectHarnessSetup';
 import { ParameterSettingsPanel } from '../components/ParameterSettingsPanel';
+import { KnowledgeDocumentForm } from '../components/KnowledgeDocumentForm';
 
 
 const STEPS = [
@@ -141,7 +142,7 @@ const YamlCodeViewer: React.FC<{ code: string; maxHeight?: number | string }> = 
   );
 };
 
-export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOverview: () => void }> = ({ onNewInvestigation, onOverview }) => {
+export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOverview: () => void; onApplied?: () => void }> = ({ onNewInvestigation, onOverview, onApplied }) => {
   const [applied, setApplied] = useState(false);
   const [validatedSnapshot, setValidatedSnapshot] = useState('');
   const [conflictDraft, setConflictDraft] = useState<Record<string, unknown> | null>(null);
@@ -149,7 +150,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
   const [savedDraft, setSavedDraft] = useState('');
   const needsDraftBaseline = useRef(true);
   const [initialDraft, setInitialDraft] = useState<Record<string, unknown>>({});
-  const [currentStep, setCurrentStep] = useState<number>(1);
+  const [currentStep, setCurrentStep] = useState<number>(() => STEPS.find(step => step.id === new URLSearchParams(window.location.search).get('step'))?.number || 1);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<ProjectSetupResponse | null>(null);
@@ -274,7 +275,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
       setEditorVersion(editor.version);
       setInitialDraft(editor.document);
       setSavedDraft(JSON.stringify(editor.document));
-      const document = editor.document as Partial<PrismFullConfigurationData>;
+      const document = editor.document as Partial<RcaAssistFullConfigurationData>;
       setProjectName(''); setResponsibility(''); setStatus('active'); setObjective(''); setTimezone(''); setTags([]);
       setEnvironments([]); setTeamDl(''); setTeamsChannel(''); setMembers({ managers: [], owners: [], analysts: [] });
       const metadata = document.metadata;
@@ -343,7 +344,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
     void fetchPrincipal().then(setPrincipal).catch(() => setPrincipal(null));
   }, []);
 
-  const prismFullConfig = useMemo(() => ({
+  const rca_assistFullConfig = useMemo(() => ({
     metadata: { ...((initialDraft.metadata || {}) as object), id: projectId, name: projectName, status, responsibility: [responsibility], objective, timezone, tags },
     projectScope: { ...((initialDraft.projectScope || {}) as object), environments, teamDl, teamsChannel, members },
     connectors: persistedConnectorSummaries,
@@ -482,7 +483,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `prism_${projectId || 'project'}_config.yaml`;
+    a.download = `rca_assist_${projectId || 'project'}_config.yaml`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -523,7 +524,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
   };
 
   const canEdit = Boolean(principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role)));
-  const { connectors: _connectors, ...authoringDocument } = prismFullConfig;
+  const { connectors: _connectors, ...authoringDocument } = rca_assistFullConfig;
   const draftDocument = { ...initialDraft, ...authoringDocument };
   delete (draftDocument as Record<string, unknown>).connectors;
   const draftText = JSON.stringify(draftDocument);
@@ -596,6 +597,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
       const result = await saveProjectSetup(backendSaveYaml, payload?.project_revision, editor.version);
       setPayload(result);
       setApplied(true);
+      onApplied?.();
       setStatusNotice({ text: 'Project settings applied. New investigations use the saved environments and configured harness. Monitoring drafts do not start automatic work.', type: 'success' });
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) setHasConflict(true);
@@ -766,6 +768,12 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
         <button className="btn btn-secondary" onClick={() => { if (window.confirm('Replace your entries with the latest saved draft?')) void refresh(); }}>Reload saved settings</button></div>
         {conflictDraft && <div className="ps-draft-comparison"><div><h3>Your entries</h3><pre>{formatToYaml(draftDocument)}</pre></div><div><h3>Latest saved draft</h3><pre>{formatToYaml(conflictDraft)}</pre></div></div>}
       </section>}
+      {canEdit && principal && <details className="ps-card project-knowledge-panel">
+        <summary>Add project knowledge</summary>
+        <p>Upload runbooks and reference documents for <strong>{principal.project_id}</strong> during setup or at any time afterward. Documents save separately from the setup draft and require approval before investigations use them.</p>
+        <KnowledgeDocumentForm onSaved={item => setStatusNotice({ type: 'success', text: `${item.title} saved as a knowledge draft. Open Project knowledge to review it and request approval.` })} />
+        <p><a href="#knowledge">Open project knowledge to review documents and approvals</a></p>
+      </details>}
       {/* Main Responsive Layout: 2-Column Default, 3-Column / Drawer when Blueprint is toggled */}
       <div className="ps-wizard-grid">
         {/* Left Stepper Column */}

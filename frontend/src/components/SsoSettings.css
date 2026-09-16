@@ -1,0 +1,37 @@
+.sso-settings { padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--tx); min-width: 0; }
+.sso-settings > header, .sso-versions > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.sso-settings h2 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+.sso-settings h3 { margin: 0; font-size: 19px; }
+.sso-settings p { color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 75ch; }
+.sso-settings > header p { margin: 0; }
+.sso-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.sso-actions .btn { min-height: 40px; }
+.sso-settings > form, .sso-versions { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); }
+.sso-settings fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.sso-settings legend { font-size: 17px; font-weight: 600; padding: 0; margin-bottom: 8px; }
+.sso-settings label { display: flex; flex-direction: column; gap: 8px; font-size: 14px; font-weight: 500; margin-bottom: 20px; min-width: 0; }
+.sso-settings label > span { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.sso-settings input:not([type='checkbox']), .sso-settings select, .sso-settings textarea { width: 100%; min-width: 0; box-sizing: border-box; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); padding: 10px 12px; color: var(--tx); font: inherit; }
+.sso-settings textarea { resize: vertical; }
+.sso-settings :is(input, select, textarea, button):focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+.sso-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.sso-settings .sso-scopes { margin: 4px 0 24px; }
+.sso-scopes legend { font-size: 14px; }
+.sso-scopes label { flex-direction: row; align-items: center; min-height: 36px; margin-bottom: 0; font-weight: 400; }
+.sso-scopes input { width: 17px; height: 17px; accent-color: var(--acc); }
+.sso-versions > header > span { border: 1px solid var(--line-strong); padding: 4px 10px; border-radius: 6px; font-size: 12px; text-transform: capitalize; white-space: nowrap; }
+.sso-versions dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); font-size: 13px; line-height: 1.6; margin: 24px 0; }
+.sso-versions dt, .sso-versions dd { padding: 10px 0; margin: 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.sso-versions dt { color: var(--muted); padding-right: 20px; }
+.sso-message { display: flex; align-items: flex-start; gap: 10px; margin: 20px 0; padding: 14px; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 8px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.sso-message svg { flex-shrink: 0; margin-top: 2px; }
+.sso-message.is-error { color: var(--acc-rose); }
+.sso-message.is-success svg { color: var(--acc3); }
+@media (max-width: 700px) {
+  .sso-settings { padding: 18px; }
+  .sso-settings > header { flex-direction: column; gap: 16px; }
+  .sso-form-row { grid-template-columns: 1fr; gap: 0; }
+  .sso-versions dl { grid-template-columns: 1fr; }
+  .sso-versions dt { padding-bottom: 2px; border: 0; }
+  .sso-versions dd { padding-top: 2px; }
+}

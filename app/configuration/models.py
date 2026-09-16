@@ -60,6 +60,60 @@ class SkillRule(StrictModel):
     actions: tuple[Action, ...] = ()
 
 
+class CatalogSkill(StrictModel):
+    """Trusted platform instructions; tools remain bounded by capability policy."""
+
+    id: SkillId
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    instruction: str = Field(min_length=1, max_length=16000)
+    capabilities: tuple[str, ...] = Field(min_length=1, max_length=32)
+    actions: tuple[str, ...] = Field(default=(), max_length=32)
+    project_override: Literal[False] = False
+
+    @field_validator("name", "description", "instruction")
+    @classmethod
+    def nonempty_text(cls, value):
+        if not value.strip():
+            raise ValueError("Text cannot be blank")
+        return value.strip()
+
+    @field_validator("actions", "capabilities")
+    @classmethod
+    def unique_entries(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("Entries must be unique")
+        return value
+
+    @field_validator("actions")
+    @classmethod
+    def implemented_actions(cls, value):
+        if set(value) - ALLOWED_ACTIONS:
+            raise ValueError("Skill actions must reference implemented tools")
+        return value
+
+
+class CatalogSkillReview(StrictModel):
+    action: Literal["approve", "reject", "revoke"]
+    reviewer_subject: str
+    reviewed_at: float
+    reason: str
+    content_hash: str
+
+
+class CatalogSkillRecord(StrictModel):
+    definition: CatalogSkill
+    status: Literal["PENDING", "APPROVED", "REJECTED", "REVOKED"]
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    author_subject: str
+    project_id: str
+    created_at: float
+    reviewer_subject: str | None = None
+    reviewed_at: float | None = None
+    review_reason: str | None = None
+    review_history: tuple[CatalogSkillReview, ...] = ()
+
+
 PreferenceName = Literal["presentation", "detail"]
 ProjectSection = Literal[
     "skills",

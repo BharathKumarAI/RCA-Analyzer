@@ -19,7 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.capabilities.resolver import CapabilityResolver
 from app.tools.catalog import TOOL_ACTIONS
+from app.connectors.providers.registry import NATIVE_FACTORIES
 from app.configuration.models import ProjectLayer
+from app.configuration.models import CatalogSkill
 from app.configuration.harness_bundles import BUILTINS
 from app.configuration.project_templates import project_template_context
 from app.configuration.connector_catalog import refresh_published_templates
@@ -33,6 +35,12 @@ from app.identity.principals import Role, UserPrincipal
 from app.observability.otel import telemetry_status
 from app.persistence.platform_admin import DEFAULT_PERMISSIONS, DEFAULT_SYSTEM_ROLES
 from app.api.dependencies import Principal, require_roles
+from app.api.schemas import ReviewRequest
+from app.configuration.knowledge import KnowledgeInput as KnowledgeCreatePayload
+from app.configuration.knowledge import KnowledgeUpdate as KnowledgeUpdatePayload
+from app.api.routes.knowledge_uploads import knowledge_result
+from app.configuration.model_pricing import ModelRate, read_pricing
+from app.persistence.telemetry import telemetry
 
 router = APIRouter()
 
@@ -83,15 +91,17 @@ class RoleUpdatePayload(BaseModel):
 
 
 class BillingUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
     tier: str = "Standard"
-    monthly_spend_budget: float = 500.0
-    monthly_token_budget: int = 50000000
+    monthly_spend_budget: float = Field(default=500.0, ge=0, le=1000000000)
+    monthly_token_budget: int = Field(default=50000000, ge=0, le=1000000000000)
     max_concurrent_investigations: int = 4
     rate_limit_rpm: int = 60
     rate_limit_tpm: int = 250000
     alert_threshold_percent: int = 80
     webhook_url: str | None = ""
-    pricing_matrix: dict[str, Any] = {}
+    pricing_matrix: dict[str, ModelRate] = Field(default_factory=dict, max_length=128)
 
 
 class PolicyUpdatePayload(BaseModel):
@@ -112,24 +122,6 @@ class FileLimitsUpdatePayload(BaseModel):
     allowed_extensions: list[str] = [".txt", ".log", ".json", ".csv"]
     retention_days: int = 90
     auto_prune_enabled: bool = True
-
-
-class KnowledgeCreatePayload(BaseModel):
-    title: str
-    category: str = "Runbooks"
-    tags: list[str] = []
-    content: str
-    media_type: str = "text/markdown"
-    status: str = "active"
-
-
-class KnowledgeUpdatePayload(BaseModel):
-    title: str
-    category: str = "Runbooks"
-    tags: list[str] = []
-    content: str
-    media_type: str = "text/markdown"
-    status: str = "active"
 
 
 class RuntimeStageUpdatePayload(BaseModel):
@@ -175,7 +167,7 @@ class PlatformSettingsUpdatePayload(BaseModel):
 
 
 _PROJECT_SETUP_SAMPLE_YAML = """# ==============================================================================
-# RCA Analyzer - Project Configuration Template
+# RCA assist - Project Configuration Template
 # ==============================================================================
 # Governed by platform policy (platform.yaml).
 # Delegated sections: skills, capabilities, disabled_connectors, limits, workflow, prompts, preferences, environments.
@@ -369,7 +361,7 @@ def _project_file_candidates(
     ]
 
 
-async def _save_project_file(request: Request, principal: Principal, content: str) -> Path:
+async def _save_project_file(request: Request, principal: Principal, content: str, *, expected_bundle_hash=None, expected_editor_version=None) -> Path:
     """Write the active materialization and persist it when DB configuration is enabled."""
     projects_root = Path(request.app.state.settings.projects_root)
     target_file = (
@@ -386,15 +378,25 @@ async def _save_project_file(request: Request, principal: Principal, content: st
             request.app.state.settings,
             f"projects/{project_prefix(principal.tenant_id, principal.project_id)}/configuration/project.yaml",
             content,
+            expected_bundle_hash=expected_bundle_hash,
+            expected_editor_version=expected_editor_version,
         )
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(dir=target_file.parent, prefix=".project-")
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content)
-        os.replace(temporary, target_file)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    def materialize():
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(dir=target_file.parent, prefix=".project-")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(content)
+            os.replace(temporary, target_file)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    if expected_editor_version is not None and not request.app.state.settings.database_configuration:
+        from app.configuration.projects import apply_project_details
+        async with request.app.state.store.engine.begin() as connection:
+            await apply_project_details(connection, request.app.state.settings, expected_editor_version)
+            materialize()
+    else:
+        materialize()
     return target_file
 
 
@@ -1070,9 +1072,63 @@ def _parse_skill_content(text: str) -> tuple[dict[str, Any], str]:
 
 
 class SkillSavePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     instruction: str
     enabled: bool = True
     actions: list[str] | None = None
+    expected_hash: str | None = None
+
+
+def _skill_effective_hash(source, override):
+    return content_hash({"platform": source, "project": override})
+
+
+def _skill_lock(request):
+    if not hasattr(request.app.state, "skill_write_lock"):
+        request.app.state.skill_write_lock = asyncio.Lock()
+    return request.app.state.skill_write_lock
+
+
+async def _skill_project_data(request, principal):
+    """Read the authoritative project document before checking an edit version."""
+    settings = request.app.state.settings
+    relative = f"projects/{project_prefix(principal.tenant_id, principal.project_id)}/configuration/project.yaml"
+    bundle_hash = None
+    if settings.database_configuration:
+        from sqlalchemy import select
+        from app.configuration.database_bundle import active, bundles
+        async with request.app.state.store.engine.connect() as connection:
+            row = (await connection.execute(select(bundles.c.files, bundles.c.content_hash).join(active,
+                (bundles.c.tenant_id == active.c.tenant_id) & (bundles.c.project_id == active.c.project_id)
+                & (bundles.c.content_hash == active.c.content_hash)).where(
+                    active.c.tenant_id == principal.tenant_id, active.c.project_id == principal.project_id))).first()
+        if row is None or content_hash(row.files) != row.content_hash:
+            raise HTTPException(409, "Active configuration is unavailable or changed. Reload before saving.")
+        source, bundle_hash = row.files.get(relative), row.content_hash
+    else:
+        path = Path(settings.projects_root) / relative.removeprefix("projects/")
+        source = path.read_text() if path.is_file() else None
+    try:
+        data = load_yaml_data(source) if source else {}
+        if not isinstance(data, dict):
+            raise ValueError("Project configuration must be a mapping")
+        data.update(tenant_id=principal.tenant_id, project_id=principal.project_id)
+        ProjectLayer.model_validate(data)
+    except (ValueError, yaml.YAMLError):
+        raise HTTPException(422, "Existing project configuration is invalid") from None
+    return data, bundle_hash
+
+
+def _check_skill_version(request, skill_id, data, expected_hash):
+    registry = request.app.state.registry
+    if skill_id not in registry.skill_contents:
+        raise HTTPException(404, "Skill is not registered in the platform catalog")
+    layer = ProjectLayer.model_validate(data)
+    override = layer.skills.get(skill_id)
+    current = _skill_effective_hash(registry.skill_contents[skill_id],
+                                   override.model_dump(mode="json") if override else None)
+    if expected_hash is not None and expected_hash != current:
+        raise HTTPException(409, "Skill changed. Reload before saving.")
 
 
 @router.get("/api/v1/skills")
@@ -1088,16 +1144,23 @@ async def skills(request: Request, principal: Principal):
         rule = rules.get(skill_id)
         frontmatter, instruction_body = _parse_skill_content(source)
         override = project_skills.get(skill_id)
+        record = next((item for item in getattr(request.app.state, "skill_records", ())
+                       if item.definition.id == skill_id), None)
 
         result.append(
             {
                 "id": skill_id,
-                "name": skill_id,
-                "status": "configured",
+                "name": frontmatter.get("name") or skill_id,
+                "status": record.status if record else "configured",
                 "size_bytes": len(source.encode("utf-8")),
                 "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "effective_hash": _skill_effective_hash(source, override.model_dump(mode="json") if override else None),
+                "capabilities": list(record.definition.capabilities) if record else
+                [cap.id for cap in registry.list_all() if skill_id in cap.skills],
+                "managed_in_database": any(item.id == skill_id for item in registry.managed_skills),
                 "source": "platform",
-                "stage": SKILL_STAGE_MAP.get(skill_id, "synthesis"),
+                "stage": "workflow" if any(item.id == skill_id for item in registry.managed_skills)
+                else SKILL_STAGE_MAP.get(skill_id, "synthesis"),
                 "immutable": bool(rule.immutable) if rule else False,
                 "allowed_actions": list(rule.actions) if rule else [],
                 "project_override": bool(rule.project_override) if rule else False,
@@ -1111,9 +1174,58 @@ async def skills(request: Request, principal: Principal):
                 "project_actions": list(override.actions)
                 if (override and override.actions is not None)
                 else None,
+                **({key: getattr(record, key) for key in (
+                    "content_hash", "author_subject", "reviewer_subject", "review_reason", "created_at", "reviewed_at"
+                )} if record else {}),
+                **({"review_history": [review.model_dump(mode="json") for review in record.review_history]} if record else {}),
             }
         )
     return result
+
+
+@router.post("/api/v1/skills", status_code=201)
+async def create_platform_skill(payload: CatalogSkill, request: Request, principal: Principal):
+    """Submit an instruction skill for independent review before capability activation."""
+    require_roles(principal, {Role.PLATFORM_ADMIN})
+    from app.configuration.skill_catalog import create_skill, refresh_skill_catalog, SkillConflict
+
+    registry = request.app.state.registry
+    if payload.id in registry.skill_contents:
+        raise HTTPException(409, "Skill already exists. Choose a different ID.")
+    for capability_id in payload.capabilities:
+        resolved = CapabilityResolver(registry).resolve(capability_id, principal, check_health=False)
+        if not resolved.is_authorized or set(payload.actions) - set(resolved.capability.allowed_actions):
+            raise HTTPException(422, "Select available capabilities and actions permitted by every selected capability.")
+    try:
+        await create_skill(request.app.state.store.engine, principal, payload, registry)
+    except SkillConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    await refresh_skill_catalog(request)
+    return next(item for item in await skills(request, principal) if item["id"] == payload.id)
+
+
+@router.post("/api/v1/skills/{skill_id}/{action}")
+async def review_platform_skill(skill_id: str, action: Literal["approve", "reject", "revoke"],
+                                body: ReviewRequest, request: Request, principal: Principal):
+    require_roles(principal, {Role.PLATFORM_ADMIN})
+    if not body.reason.strip():
+        raise HTTPException(422, "A review reason is required")
+    from app.configuration.skill_catalog import review_skill, refresh_skill_catalog, SkillConflict
+    try:
+        await review_skill(request.app.state.store.engine, principal, skill_id, action,
+                           body.expected_hash, body.reason.strip(), request.app.state.registry)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from None
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except SkillConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    await refresh_skill_catalog(request)
+    return next(item for item in await skills(request, principal) if item["id"] == skill_id)
 
 
 @router.post("/api/v1/skills/{skill_id}")
@@ -1123,7 +1235,12 @@ async def save_project_skill(
     request: Request,
     principal: Principal,
 ):
-    """Save a project-level skill override, update project configuration, trigger the stage, and run MLflow validation."""
+    async with _skill_lock(request):
+        return await _save_project_skill(skill_id, payload, request, principal)
+
+
+async def _save_project_skill(skill_id, payload, request, principal):
+    """Save a policy-validated project instruction override without claiming model execution."""
     if not {
         Role.PLATFORM_ADMIN,
         Role.PROJECT_OWNER,
@@ -1138,6 +1255,9 @@ async def save_project_skill(
         raise HTTPException(
             404, f"Skill '{skill_id}' is not registered in the platform catalog"
         )
+
+    if any(item.id == skill_id for item in registry.managed_skills) and skill_id not in registry.active_skill_ids:
+        raise HTTPException(409, "Only approved skills can be customized for a project")
 
     rule = registry.inheritance.rules.get(skill_id)
     if not rule or rule.immutable:
@@ -1167,26 +1287,8 @@ async def save_project_skill(
             422, "Skill instruction exceeds maximum limit of 16,000 characters"
         )
 
-    projects_root = Path(request.app.state.settings.projects_root)
-    target_file = (
-        projects_root
-        / project_prefix(principal.tenant_id, principal.project_id)
-        / "configuration"
-        / "project.yaml"
-    )
-
-    project_data: dict[str, Any] = {}
-    if target_file.exists():
-        try:
-            loaded = load_yaml_data(target_file.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(422, f"Existing project configuration cannot be read: {exc}") from exc
-        if not isinstance(loaded, dict):
-            raise HTTPException(422, "Existing project configuration must be a YAML dictionary")
-        project_data = loaded
-
-    project_data["tenant_id"] = principal.tenant_id
-    project_data["project_id"] = principal.project_id
+    project_data, bundle_hash = await _skill_project_data(request, principal)
+    _check_skill_version(request, skill_id, project_data, payload.expected_hash)
 
     if "skills" not in project_data or not isinstance(project_data["skills"], dict):
         project_data["skills"] = {}
@@ -1204,202 +1306,55 @@ async def save_project_skill(
     except Exception as exc:
         raise HTTPException(422, f"Project skill configuration is invalid: {exc}") from exc
 
-    await _save_project_file(
-        request, principal, yaml.safe_dump(project_data, sort_keys=False)
-    )
-    registry.inheritance.projects[(principal.tenant_id, principal.project_id)] = validated_layer
-
-    # Stage execution mapping & MLflow evaluation
-    stage_name = SKILL_STAGE_MAP.get(skill_id, "triage")
-    raw_platform_skill = registry.skill_contents.get(skill_id, "")
-    _, platform_body = _parse_skill_content(raw_platform_skill)
-
-    baseline_chars = len(platform_body)
-    candidate_chars = len(instruction_text)
-
-    # Deterministic contract assertions
-    cites_evidence = bool(
-        re.search(
-            r"\b(cite|evidence|id|evidence_id)\b", instruction_text, re.IGNORECASE
-        )
-    )
-    temporal_anchor = bool(
-        re.search(
-            r"\b(anchor|timestamp|temporal|window|time)\b",
-            instruction_text,
-            re.IGNORECASE,
-        )
-    )
-    no_secrets = not any(
-        w in instruction_text.lower()
-        for w in ["secret-key", "token-val", "password123"]
-    )
-
-    contract_status = 1.0 if (cites_evidence and candidate_chars >= 30) else 0.75
-    citation_rate = 1.0 if cites_evidence else 0.50
-    temporal_precision = 1.0 if temporal_anchor else 0.70
-    secrets_absent = 1.0 if no_secrets else 0.0
-
-    baseline_score = 0.90
-    candidate_score = min(
-        1.0,
-        0.80
-        + (0.08 if cites_evidence else 0.0)
-        + (0.06 if temporal_anchor else 0.0)
-        + (0.06 if no_secrets else 0.0),
-    )
-    quality_gain = round(candidate_score - baseline_score, 3)
-
-    run_id = f"eval-{uuid.uuid4().hex[:12]}"
-    experiment_id = "1"
-    experiment_name = "rca-skill-evaluations"
-
     try:
-        import mlflow
-
-        mlflow_uri = (
-            request.app.state.settings.optimization_tracking_uri.get_secret_value()
-        )
-        mlflow.set_tracking_uri(mlflow_uri)
-        exp = mlflow.get_experiment_by_name(experiment_name)
-        if exp is None:
-            try:
-                experiment_id = mlflow.create_experiment(experiment_name)
-            except Exception:
-                pass
-        else:
-            experiment_id = exp.experiment_id
-        mlflow.set_experiment(experiment_name)
-        with mlflow.start_run(run_name=f"eval-{skill_id}-{stage_name}") as run:
-            run_id = run.info.run_id
-            experiment_id = run.info.experiment_id
-            mlflow.log_params(
-                {
-                    "skill_id": skill_id,
-                    "stage": stage_name,
-                    "tenant_id": principal.tenant_id,
-                    "project_id": principal.project_id,
-                    "author_subject": principal.subject,
-                    "baseline_chars": baseline_chars,
-                    "candidate_chars": candidate_chars,
-                    "actions": ",".join(payload.actions or rule.actions),
-                }
-            )
-            mlflow.log_metrics(
-                {
-                    "contract_status": contract_status,
-                    "citation_rate": citation_rate,
-                    "temporal_precision": temporal_precision,
-                    "secrets_absent": secrets_absent,
-                    "baseline_quality": baseline_score,
-                    "candidate_quality": candidate_score,
-                    "quality_gain": quality_gain,
-                }
-            )
-    except Exception:
-        pass
+        await _save_project_file(request, principal, yaml.safe_dump(project_data, sort_keys=False),
+                                 expected_bundle_hash=bundle_hash)
+    except ValueError:
+        raise HTTPException(409, "Configuration changed. Reload before saving.") from None
+    registry.inheritance.projects[(principal.tenant_id, principal.project_id)] = validated_layer
 
     return {
         "saved": True,
         "skill_id": skill_id,
-        "stage": stage_name,
+        "stage": "workflow" if any(item.id == skill_id for item in registry.managed_skills)
+        else SKILL_STAGE_MAP.get(skill_id, "synthesis"),
         "project_id": principal.project_id,
         "tenant_id": principal.tenant_id,
         "is_overridden_in_project": True,
         "project_instruction": instruction_text,
         "project_enabled": payload.enabled,
-        "mlflow": {
-            "run_id": run_id,
-            "experiment_id": str(experiment_id),
-            "experiment_name": experiment_name,
-            "status": "COMPLETED",
-            "stage_executed": stage_name,
-            "timestamp": time.time(),
-            "baseline_metrics": {
-                "contract_status": 1.0,
-                "citation_rate": 1.0,
-                "temporal_precision": 0.85,
-                "instruction_chars": baseline_chars,
-                "quality_score": baseline_score,
-            },
-            "candidate_metrics": {
-                "contract_status": contract_status,
-                "citation_rate": citation_rate,
-                "temporal_precision": temporal_precision,
-                "secrets_absent": secrets_absent,
-                "instruction_chars": candidate_chars,
-                "quality_score": candidate_score,
-            },
-            "improvement": {
-                "delta": quality_gain,
-                "status": "IMPROVED"
-                if quality_gain > 0
-                else ("MAINTAINED" if quality_gain == 0 else "REGRESSED"),
-                "summary": (
-                    f"Candidate instruction passed all contract assertions for the '{stage_name}' stage."
-                    + (
-                        f" Observed quality improvement (+{quality_gain * 100:.1f}%)."
-                        if quality_gain > 0
-                        else " Baseline performance preserved."
-                    )
-                ),
-            },
+        "effective_hash": _skill_effective_hash(registry.skill_contents[skill_id],
+            validated_layer.skills[skill_id].model_dump(mode="json")),
+        "validation": {
+            "status": "PASSED",
+            "checks": ["Instruction size", "Platform override policy", "Permitted tool actions", "Project configuration schema"],
+            "model_execution": "NOT_RUN",
+            "quality_evaluation": "NOT_RUN",
         },
     }
 
 
 @router.delete("/api/v1/skills/{skill_id}")
 async def reset_project_skill(
-    skill_id: str, request: Request, principal: Principal
+    skill_id: str, request: Request, principal: Principal, expected_hash: str | None = None
 ):
-    """Reset a project skill override back to the platform baseline."""
-    if not {
-        Role.PLATFORM_ADMIN,
-        Role.PROJECT_OWNER,
-    }.intersection(principal.roles):
-        raise HTTPException(
-            403,
-            "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project skill overrides",
-        )
-
-    projects_root = Path(request.app.state.settings.projects_root)
-    target_file = (
-        projects_root
-        / project_prefix(principal.tenant_id, principal.project_id)
-        / "configuration"
-        / "project.yaml"
-    )
-
-    if target_file.exists():
-        try:
-            project_data = load_yaml_data(target_file.read_text(encoding="utf-8"))
-            if (
-                isinstance(project_data, dict)
-                and "skills" in project_data
-                and skill_id in project_data["skills"]
-            ):
-                del project_data["skills"][skill_id]
-                try:
-                    validated_layer = ProjectLayer.model_validate(project_data)
-                except Exception as exc:
-                    raise HTTPException(422, f"Project skill configuration is invalid: {exc}") from exc
-                await _save_project_file(
-                    request,
-                    principal,
-                    yaml.safe_dump(project_data, sort_keys=False),
-                )
-                registry = request.app.state.registry
-                registry.inheritance.projects[
-                    (principal.tenant_id, principal.project_id)
-                ] = validated_layer
-        except Exception as exc:
-            raise HTTPException(500, f"Failed to reset project skill: {exc}")
-
-    return {
-        "reset": True,
-        "skill_id": skill_id,
-        "status": "reverted_to_platform_baseline",
-    }
+    """Reset a project instruction override using the current database revision."""
+    require_roles(principal, {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER})
+    async with _skill_lock(request):
+        data, bundle_hash = await _skill_project_data(request, principal)
+        _check_skill_version(request, skill_id, data, expected_hash)
+        if skill_id in data.get("skills", {}):
+            del data["skills"][skill_id]
+            validated = ProjectLayer.model_validate(data)
+            try:
+                await _save_project_file(request, principal, yaml.safe_dump(data, sort_keys=False),
+                                         expected_bundle_hash=bundle_hash)
+            except ValueError:
+                raise HTTPException(409, "Configuration changed. Reload before saving.") from None
+            request.app.state.registry.inheritance.projects[
+                (principal.tenant_id, principal.project_id)
+            ] = validated
+    return {"reset": True, "skill_id": skill_id, "status": "reverted_to_platform_baseline"}
 
 
 ROLE_TIER_MAP = {
@@ -1622,42 +1577,39 @@ async def audit(request: Request, principal: Principal, limit: int = 100):
 
 @router.get("/api/v1/billing")
 async def get_billing(request: Request, principal: Principal):
-    """Retrieve billing, compute tiers, token quotas, and live spend analytics."""
+    """Month-to-date measured usage; unknown model charges remain unknown."""
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
     config = await request.app.state.platform_admin.get_billing(principal.tenant_id, principal.project_id)
-    counts = await request.app.state.store.run_counts(principal)
-    total_runs = counts.get("total", 0)
-    runs_list = await request.app.state.store.list_runs(principal, limit=50)
-    total_evidence = sum(getattr(r, "evidence_count", 0) for r in runs_list)
-    estimated_tokens = (total_runs * 1500) + (total_evidence * 2500)
-    pricing = config.get("pricing_matrix", {})
-    flash_rate = pricing.get("gemini-2.5-flash", {}).get("output_per_million", 0.60)
-    estimated_spend = round((estimated_tokens / 1_000_000.0) * flash_rate, 2)
-
+    today = datetime.now(timezone.utc).date()
+    measured = await telemetry(request.app.state.store.engine, principal, today.replace(day=1), today)
+    usage = measured["summary"]
+    prices = await read_pricing(request.app.state.store.engine, principal)
+    spend = usage["estimated_cost_usd"]
+    budget = config.get("monthly_spend_budget")
     return {
         **config,
+        "pricing_matrix": prices["rates"], "pricing_revision": prices["revision"],
         "usage": {
-            "total_runs": total_runs,
-            "active_runs": counts.get("active", 0),
-            "completed_runs": counts.get("by_status", {}).get("SUCCEEDED", 0),
-            "failed_runs": counts.get("by_status", {}).get("FAILED", 0),
-            "total_evidence_collected": total_evidence,
-            "estimated_tokens_processed": estimated_tokens,
-            "month_to_date_spend_usd": estimated_spend,
-            "budget_consumed_percent": min(100.0, round((estimated_spend / max(config.get("monthly_spend_budget", 500.0), 1.0)) * 100, 1)),
-        }
+            **usage, "total_runs": usage["runs"], "completed_runs": usage["succeeded_runs"],
+            "total_evidence_collected": usage["evidence_items"],
+            "measured_tokens_processed": usage["total_tokens"],
+            "month_to_date_spend_usd": spend,
+            "budget_consumed_percent": round(spend / budget * 100, 1) if spend is not None and budget and budget > 0 else None,
+        }, "coverage": measured["coverage"],
     }
 
 
 @router.put("/api/v1/billing")
 async def update_billing(payload: BillingUpdatePayload, request: Request, principal: Principal):
-    """Update compute tier, monthly budgets, rate limits, and model pricing."""
+    """Save planning values; model prices use their dedicated independent review."""
     require_roles(principal, MANAGEMENT_ROLES)
     if not hasattr(request.app.state, "platform_admin"):
         raise HTTPException(500, "Platform admin store not initialized")
+    if "pricing_matrix" in payload.model_fields_set:
+        raise HTTPException(422, "Submit model prices through the reviewed model-pricing endpoint")
     return await request.app.state.platform_admin.update_billing(
-        principal.tenant_id, principal.project_id, payload.model_dump()
+        principal.tenant_id, principal.project_id, payload.model_dump(exclude={"pricing_matrix"})
     )
 
 
@@ -1770,62 +1722,32 @@ async def execute_persistence_cleanup(request: Request, principal: Principal):
 
 @router.get("/api/v1/knowledge")
 async def knowledge(request: Request, principal: Principal):
-    """Report runbooks, knowledge documents, and retained attachments."""
-    docs = []
-    if hasattr(request.app.state, "platform_admin"):
-        docs = await request.app.state.platform_admin.list_knowledge(principal.tenant_id, principal.project_id)
-    try:
-        attachments = await request.app.state.store.list_attachments(principal)
-        for att in attachments:
-            docs.append({
-                "id": att["id"],
-                "doc_id": att["id"],
-                "title": att.get("filename") or att["id"],
-                "category": "Attachments",
-                "tags": ["attachment", att.get("content_type", "file")],
-                "content": f"Attachment {att.get('filename')} ({att.get('size_bytes', 0)} bytes)",
-                "media_type": att.get("content_type", "file"),
-                "size_bytes": att.get("size_bytes", 0),
-                "status": "stored",
-                "created_at": att.get("created_at", time.time()),
-                "updated_at": att.get("created_at", time.time()),
-            })
-    except Exception:
-        pass
-    return docs
+    """Project knowledge has its own review lifecycle; chat attachments stay in chat."""
+    return await knowledge_result(request.app.state.knowledge.list(principal))
 
 
-@router.post("/api/v1/knowledge")
+@router.post("/api/v1/knowledge", status_code=201)
 async def create_knowledge(payload: KnowledgeCreatePayload, request: Request, principal: Principal):
-    """Add a new runbook or knowledge document to the corpus."""
+    """Save a draft; separate independent review is required before runtime use."""
     require_roles(principal, MANAGEMENT_ROLES)
-    if not hasattr(request.app.state, "platform_admin"):
-        raise HTTPException(500, "Platform admin store not initialized")
-    return await request.app.state.platform_admin.upsert_knowledge(
-        principal.tenant_id, principal.project_id, None, payload.title, payload.category, payload.tags, payload.content, payload.media_type, payload.status
-    )
+    return await knowledge_result(request.app.state.knowledge.save(
+        principal, payload, max_text_chars=request.app.state.file_limits.max_text_chars))
 
 
 @router.put("/api/v1/knowledge/{doc_id}")
 async def update_knowledge(doc_id: str, payload: KnowledgeUpdatePayload, request: Request, principal: Principal):
-    """Update an existing knowledge document."""
+    """Create a new draft revision without carrying approval across a content change."""
     require_roles(principal, MANAGEMENT_ROLES)
-    if not hasattr(request.app.state, "platform_admin"):
-        raise HTTPException(500, "Platform admin store not initialized")
-    return await request.app.state.platform_admin.upsert_knowledge(
-        principal.tenant_id, principal.project_id, doc_id, payload.title, payload.category, payload.tags, payload.content, payload.media_type, payload.status
-    )
+    return await knowledge_result(request.app.state.knowledge.save(
+        principal, payload, doc_id=doc_id, expected_hash=payload.expected_hash,
+        max_text_chars=request.app.state.file_limits.max_text_chars))
 
 
 @router.delete("/api/v1/knowledge/{doc_id}", status_code=204)
 async def delete_knowledge(doc_id: str, request: Request, principal: Principal):
-    """Delete a runbook or knowledge document."""
+    """Reviewed knowledge retains its revision history; use explicit revocation."""
     require_roles(principal, MANAGEMENT_ROLES)
-    if not hasattr(request.app.state, "platform_admin"):
-        raise HTTPException(500, "Platform admin store not initialized")
-    deleted = await request.app.state.platform_admin.delete_knowledge(principal.tenant_id, principal.project_id, doc_id)
-    if not deleted:
-        raise HTTPException(404, "Knowledge item not found")
+    raise HTTPException(405, "Knowledge revisions are retained. Revoke an approved document to remove it from future investigations.")
 
 
 @router.get("/api/v1/runtime/stages")
@@ -2016,6 +1938,9 @@ async def capabilities(request: Request, principal: Principal, all: bool = False
         project = registry.inheritance.project(principal)
         item["project_enabled"] = not project or cap.id not in project.capabilities or project.capabilities[cap.id].enabled
         item["is_authorized"] = resolved.is_authorized
+        item["runtime_supported"] = set(resolved.capability.requires.connectors).issubset(
+            set(NATIVE_FACTORIES) | set(request.app.state.runner.connectors)
+        )
         item["rejection_reason"] = resolved.rejection_reason
         item["allowed_skills"] = list(resolved.allowed_skills)
         item["required_connectors"] = list(resolved.required_connectors)
@@ -2820,7 +2745,11 @@ async def save_project_setup(
         }
         if validated.get("project_template"):
             persisted["project_template"] = validated["project_template"]
-        await _save_project_file(request, principal, yaml.safe_dump(persisted, sort_keys=False))
+        try:
+            await _save_project_file(request, principal, yaml.safe_dump(persisted, sort_keys=False),
+                expected_editor_version=payload.expected_editor_version)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from None
         request.app.state.registry.inheritance.projects[
             (principal.tenant_id, principal.project_id)
         ] = ProjectLayer.model_validate(persisted)
@@ -2835,7 +2764,7 @@ class ProjectAvailabilityPayload(BaseModel):
 
 @router.put("/api/v1/project/availability/{kind}/{resource_id}")
 async def set_project_availability(
-    kind: Literal["connectors", "capabilities"], resource_id: str,
+    kind: Literal["connectors", "capabilities", "skills"], resource_id: str,
     payload: ProjectAvailabilityPayload, request: Request, principal: Principal,
 ):
     """Persist the narrowing policy used by capability resolution and preflight."""
@@ -2845,9 +2774,18 @@ async def set_project_availability(
         request.app.state.availability_lock = asyncio.Lock()
     async with request.app.state.availability_lock:
         registry = request.app.state.registry
-        known = _all_connectors(request)[0] if kind == "connectors" else {cap.id for cap in registry.list_all()}
+        if kind == "connectors":
+            known = _all_connectors(request)[0]
+        elif kind == "capabilities":
+            known = {cap.id for cap in registry.list_all()}
+        else:
+            known = set(registry.skill_contents.keys())
         if resource_id not in known:
             raise HTTPException(404, "Unknown project resource")
+        if kind == "skills":
+            rule = registry.inheritance.rules.get(resource_id)
+            if rule and rule.immutable:
+                raise HTTPException(403, f"Skill '{resource_id}' is marked immutable in platform policy and cannot be altered by projects")
         project = registry.inheritance.project(principal)
         content = project.model_dump(mode="json", exclude_unset=True) if project else {
             "tenant_id": principal.tenant_id, "project_id": principal.project_id,
@@ -2860,11 +2798,16 @@ async def set_project_availability(
             else:
                 disabled.add(resource_id)
             content["disabled_connectors"] = sorted(disabled)
-        else:
+        elif kind == "capabilities":
             override = content.setdefault("capabilities", {}).setdefault(resource_id, {})
+            current = override.get("enabled", True)
+            override["enabled"] = payload.enabled
+        else:
+            override = content.setdefault("skills", {}).setdefault(resource_id, {})
             current = override.get("enabled", True)
             override["enabled"] = payload.enabled
         if current != payload.expected_enabled:
             raise HTTPException(409, "Availability changed. Refresh before trying again.")
         await save_project_setup(ProjectConfigPayload(yaml=yaml.safe_dump(content)), request, principal)
         return {"id": resource_id, "project_enabled": payload.enabled}
+

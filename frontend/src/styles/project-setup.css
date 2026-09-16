@@ -1,9 +1,9 @@
 /* ==========================================================================
-   PRISM Project Setup Wizard & Scoped Configuration Stylesheet
+   RCA assist Project Setup Wizard & Scoped Configuration Stylesheet
    Elevated Layout, Visibility & Harmonious Color Palette
    ========================================================================== */
 
-/* ---------------- Scoped PRISM Design Tokens ---------------- */
+/* ---------------- Scoped RCA assist Design Tokens ---------------- */
 .project-setup-page {
   /* High-Contrast Executive Cloud Platform Palette (Light Mode) */
   --ps-primary: #2563eb;
@@ -59,6 +59,7 @@
   gap: 18px;
   animation: psFadeIn 0.2s ease-out;
   width: 100%;
+  padding-bottom: 32px;
 }
 
 /* Dark Mode Tokens Override */
@@ -2056,10 +2057,10 @@
 .project-setup-page .hero-title { font-size: 24px; line-height: 32px; text-wrap: balance; }
 .project-setup-page .hero-actions-row { flex-wrap: wrap; }
 .project-setup-page .ps-wizard-grid { grid-template-columns: 240px minmax(0, 1fr); align-items: start; }
-.project-setup-page .ps-main-col { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.project-setup-page .ps-main-col { display: flex; flex-direction: column; gap: 24px; min-width: 0; padding-bottom: 32px; }
 .ps-review-sections { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .ps-review-sections .btn { white-space: normal; text-align: left; }
-.ps-wizard-footer { position: sticky; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--ps-border); border-radius: 8px; background: var(--ps-card-bg); }
+.ps-wizard-footer { position: sticky; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border: 1px solid var(--ps-border); border-radius: 8px; background: var(--ps-card-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08); }
 .ps-wizard-footer > span { color: var(--ps-text-muted); font-size: 14px; }
 .ps-harness-setup h3 { margin-top: 24px; font-size: 18px; line-height: 28px; }
 .ps-agent-list { list-style: none; padding: 0; }

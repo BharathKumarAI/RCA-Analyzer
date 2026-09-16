@@ -2263,7 +2263,7 @@ export function Users({ onSelectPage, initialTab = 'directory' }: UsersProps) {
               </h3>
             </div>
             <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.6 }}>
-              The RCA Analyzer backend enforces strict cryptographic isolation. Each deployment has one configured
+              The RCA assist backend enforces strict cryptographic isolation. Each deployment has one configured
               tenant/project boundary from <code>RCA_TENANT_ID</code> and <code>RCA_PROJECT_ID</code>. The server validates
               the RS256 JWT signature, issuer, audience, expiry, and server-side subject membership before executing any runs
               or uploads. Role and scope parameters are <b>never</b> accepted from request bodies.

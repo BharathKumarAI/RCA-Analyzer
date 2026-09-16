@@ -97,7 +97,7 @@ async def seed_bundle(engine, settings, expected_bundle_hash=None):
         ) from None
 
 
-async def _store_bundle(engine, settings, files, digest, expected_bundle_hash):
+async def _store_bundle(engine, settings, files, digest, expected_bundle_hash, *, expected_editor_version=None):
     async with engine.begin() as c:
         scope = (
             active.c.tenant_id == settings.tenant_id,
@@ -154,6 +154,9 @@ async def _store_bundle(engine, settings, files, digest, expected_bundle_hash):
                     content_hash=digest,
                 )
             )
+        if expected_editor_version is not None:
+            from app.configuration.projects import apply_project_details
+            await apply_project_details(c, settings, expected_editor_version)
     return digest
 
 
@@ -208,7 +211,7 @@ async def load_bundle(engine, settings, cleanup):
     )
 
 
-async def update_bundle_file(engine, settings, relative_path: str, content: str):
+async def update_bundle_file(engine, settings, relative_path: str, content: str, *, expected_bundle_hash=None, expected_editor_version=None):
     """Persist one declarative project file and atomically activate its bundle."""
     if not isinstance(relative_path, str) or not (
         relative_path.startswith("projects/") or relative_path.startswith("config/")
@@ -234,6 +237,8 @@ async def update_bundle_file(engine, settings, relative_path: str, content: str)
         ).first()
     if row is None:
         raise ValueError("Seed project configuration before saving project files")
+    if expected_bundle_hash is not None and row.content_hash != expected_bundle_hash:
+        raise ValueError("Active configuration changed; reload before saving")
     validate_files(row.files)
     if content_hash(row.files) != row.content_hash:
         raise ValueError("Configuration bundle failed integrity verification")
@@ -241,7 +246,8 @@ async def update_bundle_file(engine, settings, relative_path: str, content: str)
     files[relative_path] = content
     validate_files(files)
     digest = content_hash(files)
-    return await _store_bundle(engine, settings, files, digest, row.content_hash)
+    return await _store_bundle(engine, settings, files, digest, row.content_hash,
+        expected_editor_version=expected_editor_version)
 
 
 async def load_effective_settings(engine, settings, cleanup, *, connector_template_store=None):
@@ -252,10 +258,10 @@ async def load_effective_settings(engine, settings, cleanup, *, connector_templa
         # The active bundle is the source for declarative configuration in a
         # database-backed deployment. Loading it before seeding prevents the
         # process-local checkout from contributing stale template definitions.
-        platform = PlatformConfiguration.load(configured)
+        platform = await PlatformConfiguration.load_async(engine, configured)
     else:
         configured = settings
-        platform = PlatformConfiguration.load(configured)
+        platform = await PlatformConfiguration.load_async(engine, configured)
 
     templates = (
         await published_parameter_templates(platform.connector_templates, connector_template_store)

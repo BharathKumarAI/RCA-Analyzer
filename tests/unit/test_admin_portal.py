@@ -31,15 +31,19 @@ def test_admin_portal_mount_and_security_headers():
         app = create_app(settings)
 
         with TestClient(app) as client:
-            # 1. Root redirects to /admin/
-            res = client.get("/", follow_redirects=False)
-            assert res.status_code == 307
-            assert res.headers["location"] == "/admin/"
+            # Public entry and deep links serve only the shell, without API access.
+            for path in ("/", "/workspace", "/admins/skills", "/p/project_1/overview"):
+                res = client.get(path, follow_redirects=False)
+                assert res.status_code == 200
+                assert "RCA assist" in res.text
+                assert res.headers["X-Frame-Options"] == "DENY"
+                assert res.headers["Cache-Control"] == "no-store"
+                assert "frame-ancestors 'none'" in res.headers["Content-Security-Policy"]
 
             # 2. /admin/ serves index.html with 200
             res = client.get("/admin/")
             assert res.status_code == 200
-            assert "RCA Analyzer" in res.text
+            assert "RCA assist" in res.text
             assert "Investigation workspace" in res.text
 
             # 3. Security headers: nosniff, CSP, X-Frame-Options
@@ -59,6 +63,8 @@ def test_admin_portal_mount_and_security_headers():
                 response = client.get(path)
                 assert response.status_code == 200, path
                 assert response.content
+                if path.startswith("/admin/assets/"):
+                    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
 
             # 5. /api/v1/* remains protected by bearer token auth
             res_api = client.get("/api/v1/runs")

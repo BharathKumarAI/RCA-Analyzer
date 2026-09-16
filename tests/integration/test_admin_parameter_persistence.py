@@ -1,7 +1,7 @@
 """Admin parameter edits survive new application instances, including zero."""
 
 from fastapi.testclient import TestClient
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
 from app.api.application import create_app
 from app.configuration.parameters import projects
@@ -14,11 +14,16 @@ def test_parameter_zero_override_and_reset_survive_restart(tmp_path):
     with TestClient(create_app(settings)) as client:
         async def register_project():
             async with client.app.state.parameters.engine.begin() as connection:
-                await connection.execute(insert(projects).values(
-                    tenant_id=settings.tenant_id,
-                    project_id=settings.project_id,
-                    project_name="Payments",
+                existing = await connection.execute(select(projects).where(
+                    projects.c.tenant_id == settings.tenant_id,
+                    projects.c.project_id == settings.project_id,
                 ))
+                if existing.first() is None:
+                    await connection.execute(insert(projects).values(
+                        tenant_id=settings.tenant_id,
+                        project_id=settings.project_id,
+                        project_name="Payments",
+                    ))
 
         client.portal.call(register_project)
         response = client.put(

@@ -12,10 +12,7 @@ import {
   Key,
   Database,
   Cpu,
-  Server,
   Layers,
-  Activity,
-  Terminal,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -28,10 +25,6 @@ import {
   Check,
   ToggleLeft,
   ToggleRight,
-  Radio,
-  BookOpen,
-  GitBranch,
-  CheckSquare,
   List,
   Grid,
   Copy,
@@ -47,10 +40,12 @@ import {
   defineParameter,
   deleteParameterDefinition,
   fetchParameters,
+  fetchConnectorTemplates,
   fetchParameterTaxonomy,
   fetchPrincipal,
   resetParameterOverride,
   setParameterOverride,
+  saveConnectorFieldGovernance,
   ApiError
 } from '../services/api';
 import {
@@ -59,7 +54,9 @@ import {
   type ParameterEffectiveState,
   type ParameterScope,
   type Principal,
-  type ConnectorValueType
+  type ConnectorValueType,
+  type ConnectorTemplateItem,
+  type GovernanceTier
 } from '../types/api';
 import {
   parseNumericValue,
@@ -87,7 +84,6 @@ const displayValue = (value: unknown): string => {
 const formatValueType = (valueType: ParameterDefinitionRow['value_type']) =>
   valueType.replace(/_/g, ' ');
 
-// Known tools metadata registry (toolCategory distinguishes from parameter taxonomy category)
 interface ToolMeta {
   displayName: string;
   toolCategory: string;
@@ -95,106 +91,31 @@ interface ToolMeta {
   icon: React.ReactNode;
 }
 
-const TOOL_REGISTRY: Record<string, ToolMeta> = {
-  runtime: {
-    displayName: 'Runtime Engine',
-    toolCategory: 'System & Execution',
-    description: 'Execution concurrency limits, evidence ceilings, timeouts, and operational thresholds.',
-    icon: <Cpu size={16} />,
-  },
-  itsm: {
-    displayName: 'ITSM / Jira Service',
-    toolCategory: 'Incident & Ticketing',
-    description: 'Issue tracker connector parameters, transition endpoints, timeout, and authentication.',
-    icon: <Layers size={16} />,
-  },
-  log_search: {
-    displayName: 'Log Search / Splunk',
-    toolCategory: 'Observability & Logs',
-    description: 'Search query windows, result caps, log analytics transport, and endpoints.',
-    icon: <Search size={16} />,
-  },
-  confluence: {
-    displayName: 'Confluence Knowledge',
-    toolCategory: 'Documentation & Wiki',
-    description: 'Atlassian wiki connector, documentation spaces, and runbook ingestion settings.',
-    icon: <BookOpen size={16} />,
-  },
-  kubernetes: {
-    displayName: 'Kubernetes Cluster',
-    toolCategory: 'Containers & Clusters',
-    description: 'Cluster API endpoints, namespace selectors, pod event correlation thresholds.',
-    icon: <Server size={16} />,
-  },
-  kafka: {
-    displayName: 'Apache Kafka Stream',
-    toolCategory: 'Messaging & Events',
-    description: 'Broker cluster bootstrap addresses, consumer group offsets, and lag tolerances.',
-    icon: <Radio size={16} />,
-  },
-  oracle: {
-    displayName: 'Oracle Database',
-    toolCategory: 'Data & Storage',
-    description: 'Enterprise relational database connector, connection pools, and query timeouts.',
-    icon: <Database size={16} />,
-  },
-  gitlab: {
-    displayName: 'GitLab DevSecOps',
-    toolCategory: 'Code & CI/CD',
-    description: 'Repository commit lineage, deployment pipeline hooks, and MR review settings.',
-    icon: <GitBranch size={16} />,
-  },
-  signalfx: {
-    displayName: 'SignalFx Telemetry',
-    toolCategory: 'Metrics & APM',
-    description: 'Real-time metrics streaming, detector query resolution, and chart thresholds.',
-    icon: <Activity size={16} />,
-  },
-  qtest: {
-    displayName: 'qTest QA Platform',
-    toolCategory: 'Quality & Testing',
-    description: 'Test run results, execution suite mappings, and release cycle validation.',
-    icon: <CheckSquare size={16} />,
-  },
-  unix: {
-    displayName: 'Unix / Linux Host',
-    toolCategory: 'Infrastructure & OS',
-    description: 'System diagnostics, remote SSH connection limits, and shell telemetry limits.',
-    icon: <Terminal size={16} />,
-  },
-  jira: {
-    displayName: 'Jira Native Provider',
-    toolCategory: 'Incident & Ticketing',
-    description: 'Native Jira REST API connectivity parameters and operational bounds.',
-    icon: <Layers size={16} />,
-  },
-  splunk: {
-    displayName: 'Splunk Native Provider',
-    toolCategory: 'Observability & Logs',
-    description: 'Native Splunk search jobs, REST API credentials, and dispatch settings.',
-    icon: <Search size={16} />,
-  },
+const TOOL_ICONS: Record<string, React.ReactNode> = {
+  runtime: <Cpu size={16} />,
+  itsm: <Layers size={16} />,
+  log_search: <Search size={16} />,
 };
 
-function getToolMeta(toolName: string): ToolMeta {
-  if (TOOL_REGISTRY[toolName.toLowerCase()]) {
-    return TOOL_REGISTRY[toolName.toLowerCase()];
-  }
+function getToolMeta(toolName: string, templates: ConnectorTemplateItem[]): ToolMeta {
+  const template = templates.find(item => item.system_name === toolName);
   const formatted = toolName
     .replace(/[_-]/g, ' ')
     .replace(/\b\w/g, char => char.toUpperCase());
   return {
-    displayName: formatted,
-    toolCategory: 'Custom Service',
-    description: `Configured parameters and operational settings for ${formatted}.`,
-    icon: <Sliders size={16} />,
+    displayName: template?.name || formatted,
+    toolCategory: template?.category || '',
+    description: template?.description || '',
+    icon: TOOL_ICONS[toolName] || <Sliders size={16} />,
   };
 }
 
 export function ParameterStudio() {
   const [parameters, setParameters] = useState<ParameterDefinitionRow[]>([]);
+  const [templates, setTemplates] = useState<ConnectorTemplateItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [savingGovernance, setSavingGovernance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
@@ -323,14 +244,21 @@ export function ParameterStudio() {
     setLoading(true);
     setError(null);
     try {
-      const items = await fetchParameters();
+      const [items, publishedTemplates] = await Promise.all([
+        fetchParameters(),
+        fetchConnectorTemplates('published').catch(() => null),
+      ]);
       setParameters(items);
+      setTemplates(publishedTemplates || []);
+      if (!publishedTemplates) setError('Connector names could not load. Showing parameter tool keys instead; reload to retry.');
       if (activeParam) {
         const updated = items.find(i => parameterKey(i) === parameterKey(activeParam));
         if (updated) setActiveParam(updated);
       }
+      return Boolean(publishedTemplates);
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'Unable to load parameter catalog from deployment.');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -469,10 +397,10 @@ export function ParameterStudio() {
     if (!providerSearch.trim()) return uniqueTools;
     const q = providerSearch.toLowerCase();
     return uniqueTools.filter(t => {
-      const meta = getToolMeta(t);
+      const meta = getToolMeta(t, templates);
       return t.toLowerCase().includes(q) || meta.displayName.toLowerCase().includes(q);
     });
-  }, [uniqueTools, providerSearch]);
+  }, [uniqueTools, providerSearch, templates]);
 
   // Overall Statistics
   const stats = useMemo(() => {
@@ -544,7 +472,7 @@ export function ParameterStudio() {
         const q = searchQuery.toLowerCase();
         const key = parameterKey(item).toLowerCase();
         const desc = (item.description || '').toLowerCase();
-        const toolName = getToolMeta(item.tool).displayName.toLowerCase();
+        const toolName = getToolMeta(item.tool, templates).displayName.toLowerCase();
         const main = (item.main || item.tool).toLowerCase();
         const cat = (item.category || '').toLowerCase();
         const subcat = (item.subcategory || '').toLowerCase();
@@ -575,6 +503,7 @@ export function ParameterStudio() {
     subcategoryFilter,
     effectiveStateFilter,
     searchQuery,
+    templates,
   ]);
 
   // Group filtered parameters by tool -> category
@@ -868,6 +797,13 @@ export function ParameterStudio() {
         allowed_values: typedAllowedValues.length > 0 ? typedAllowedValues : null,
         enabled: editEnabled,
         icon: activeParam.icon || 'sliders',
+        label: activeParam.label || null,
+        section: activeParam.section || null,
+        display_order: activeParam.display_order ?? null,
+        is_required: activeParam.is_required || false,
+        ownership: activeParam.ownership || 'runtime',
+        validation_rules: activeParam.validation_rules || null,
+        runtime_binding: activeParam.runtime_binding || null,
         expected_revision: activeParam.revision,
       });
 
@@ -922,7 +858,7 @@ export function ParameterStudio() {
   };
 
   // Active provider metadata if single provider selected
-  const activeSelectedMeta = selectedTool !== 'ALL' ? getToolMeta(selectedTool) : null;
+  const activeSelectedMeta = selectedTool !== 'ALL' ? getToolMeta(selectedTool, templates) : null;
   const normalizedNewSubcategory = newSubcategory.trim();
   const normalizedEditSubcategory = editSubcategory.trim();
   const newSubcategoryOptions = getSubcategories(newCategory, normalizedNewSubcategory);
@@ -970,7 +906,7 @@ export function ParameterStudio() {
               >
                 {uniqueTools.map(t => (
                   <option key={t} value={t}>
-                    {getToolMeta(t).displayName} ({t})
+                    {getToolMeta(t, templates).displayName} ({t})
                   </option>
                 ))}
                 <option value="__custom__">+ Define New Tool or Service…</option>
@@ -1250,7 +1186,7 @@ export function ParameterStudio() {
             </div>
             <div className="param-drawer-title-row">
               <span className="param-tool-avatar" style={{ width: 28, height: 28 }}>
-                {getToolMeta(activeParam.tool).icon}
+                {getToolMeta(activeParam.tool, templates).icon}
               </span>
               <h3 className="param-drawer-param-name">{parameterKey(activeParam)}</h3>
             </div>
@@ -1970,6 +1906,48 @@ export function ParameterStudio() {
   );
 
   // Render Table Row
+  const sharedGovernance = (param: ParameterDefinitionRow) => {
+    const template = templates.find(item => item.system_name === param.tool);
+    if (!template?.parameter_fields?.some(field => field.variable_name === param.variable_name)) return null;
+    const field = template.field_governance?.find(item => item.variable_name === param.variable_name);
+    return field ? { template, field } : null;
+  };
+
+  const changeGovernance = async (param: ParameterDefinitionRow, tier: GovernanceTier) => {
+    const shared = sharedGovernance(param);
+    if (!isPlatformAdmin || !shared || savingGovernance) return;
+    if (shared.field.tier === 'project_editable' && tier !== 'project_editable' &&
+        !window.confirm('Removing project edit access clears existing project overrides for this field. Continue?')) return;
+    setSavingGovernance(parameterKey(param));
+    setError(null);
+    try {
+      await saveConnectorFieldGovernance(shared.template.system_name, shared.template.governance_revision || 0, { [param.variable_name]: tier });
+      if (!await load()) return;
+      setNotice({ type: 'success', message: `Field access saved for ${param.label || param.variable_name}. Connector forms and parameter values now use the updated policy.` });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Field access could not be saved. Reload and try again.');
+    } finally {
+      setSavingGovernance(null);
+    }
+  };
+
+  const renderScopeControl = (param: ParameterDefinitionRow) => {
+    const shared = sharedGovernance(param);
+    if (!shared) return <span className="param-scope-label">{param.scope}</span>;
+    if (!isPlatformAdmin) return <span className="param-scope-label">{shared.field.tier.replaceAll('_', ' ')}</span>;
+    return <select
+      className="param-governance-select"
+      aria-label={`${param.label || param.variable_name} field access`}
+      value={shared.field.tier}
+      disabled={Boolean(savingGovernance)}
+      onChange={event => void changeGovernance(param, event.target.value as GovernanceTier)}
+    >
+      <option value="platform_only">Platform Only</option>
+      <option value="project_locked">Project Non-Editable</option>
+      <option value="project_editable" disabled={!shared.field.editable_allowed}>Project Editable</option>
+    </select>;
+  };
+
   const renderTableRow = (param: ParameterDefinitionRow) => {
     const isOverridden = Boolean(param.override_revision && param.override_revision > 0);
     const key = parameterKey(param);
@@ -1997,9 +1975,7 @@ export function ParameterStudio() {
                 </>
               )}
             </div>
-            <span className="param-key-text">
-              {param.variable_name}
-            </span>
+            <span className="param-key-text">{param.label || param.variable_name}</span>
             <span className="param-desc-subtext" title={param.description}>
               {param.description}
             </span>
@@ -2075,22 +2051,12 @@ export function ParameterStudio() {
               <span className="param-pill-badge overridden" title={`Custom project override (rev ${param.override_revision})`}>
                 <Sparkles size={11} /> Override (r{param.override_revision})
               </span>
-            ) : param.effective_state === 'INHERIT' ? (
-              <span className="param-pill-badge inherit" title="Inherits deployment default">
-                <GitBranch size={10} /> Inherits Default
-              </span>
-            ) : (
+            ) : param.effective_state !== 'INHERIT' ? (
               <span className="param-pill-badge default" title="Platform baseline setting">
                 Platform Default
               </span>
-            )}
-            <span style={{ fontSize: 10, color: 'var(--muted)' }}>
-              {param.scope === 'platform_only'
-                ? 'Platform Policy'
-                : param.scope === 'project'
-                ? 'Project Override'
-                : 'Runtime Profile'}
-            </span>
+            ) : null}
+            {renderScopeControl(param)}
           </div>
         </td>
 
@@ -2164,7 +2130,7 @@ export function ParameterStudio() {
                   </>
                 )}
               </div>
-              <span className="param-name">{param.variable_name}</span>
+              <span className="param-name">{param.label || param.variable_name}</span>
             </div>
             <div className="param-card-badges">
               <span className={`param-type-badge ${param.value_type}`}>
@@ -2178,15 +2144,12 @@ export function ParameterStudio() {
                 <span className="param-pill-badge overridden" title="Custom Project Override">
                   <Sparkles size={10} /> Override (r{param.override_revision})
                 </span>
-              ) : param.effective_state === 'INHERIT' ? (
-                <span className="param-pill-badge inherit" title="Using platform default">
-                  Inherits Default
-                </span>
-              ) : (
+              ) : param.effective_state !== 'INHERIT' ? (
                 <span className="param-pill-badge default" title="Platform baseline">
                   Platform Default
                 </span>
-              )}
+              ) : null}
+              {renderScopeControl(param)}
             </div>
           </div>
 
@@ -2508,7 +2471,7 @@ export function ParameterStudio() {
 
             {/* Individual Provider Tools */}
             {filteredSidebarTools.map(toolKey => {
-              const meta = getToolMeta(toolKey);
+              const meta = getToolMeta(toolKey, templates);
               const toolParams = toolsMap.get(toolKey) || [];
               const hasOverrides = toolParams.some(p => p.override_revision && p.override_revision > 0);
               const isSelected = selectedTool === toolKey;
@@ -2852,7 +2815,7 @@ export function ParameterStudio() {
             {/* View Mode: All Providers Grouped by Tool -> Category */}
             {!loading && selectedTool === 'ALL' && filteredToolsMap.size > 0 && (
               Array.from(filteredToolsMap.entries()).map(([toolKey, catMap]) => {
-                const meta = getToolMeta(toolKey);
+                const meta = getToolMeta(toolKey, templates);
                 const isCollapsed = Boolean(collapsedTools[toolKey]);
                 const allToolParams = Array.from(catMap.values()).flat();
                 const toolOverrideCount = allToolParams.filter(p => p.override_revision && p.override_revision > 0).length;

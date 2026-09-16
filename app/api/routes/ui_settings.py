@@ -11,10 +11,11 @@ from app.configuration.service import ADMIN_ROLES
 router = APIRouter(prefix="/api/v1/platform/ui-settings", tags=["ui-settings"])
 
 SUPPORTED_UI_PAGES = frozenset({
-    "overview", "runs", "capabilities", "skills", "runtime", "parameters",
+    "chat", "insights", "metrics", "overview", "runs", "capabilities", "skills", "runtime", "parameters",
     "optimization", "agents", "tools", "alerts", "health-checks", "project-setup",
     "persistence", "policy", "roles", "governance", "knowledge", "users", "billing",
-    "settings", "harness-library",
+    "settings", "harness-library", "triage-board",
+    "tickets", "rca-workbench", "feedback", "docs", "artifacts", "orchestration",
 })
 
 
