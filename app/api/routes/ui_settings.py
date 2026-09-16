@@ -15,7 +15,7 @@ SUPPORTED_UI_PAGES = frozenset({
     "optimization", "agents", "tools", "alerts", "health-checks", "project-setup",
     "persistence", "policy", "roles", "governance", "knowledge", "users", "billing",
     "settings", "harness-library", "triage-board",
-    "tickets", "rca-workbench", "feedback", "docs", "artifacts", "orchestration",
+    "tickets", "rca-workbench", "feedback", "docs", "platform-docs", "artifacts", "orchestration",
 })
 
 
@@ -38,7 +38,7 @@ class UISettingsUpdate(BaseModel):
     default_page: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     welcome_title: str = Field(min_length=1, max_length=200)
     welcome_description: str = Field(default="", max_length=1000)
-    navigation: list[NavigationItem] = Field(min_length=1, max_length=32)
+    navigation: list[NavigationItem] = Field(min_length=1, max_length=len(SUPPORTED_UI_PAGES))
     expected_version: int = Field(ge=1)
 
     @field_validator("navigation")

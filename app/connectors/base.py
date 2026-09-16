@@ -8,6 +8,10 @@ from app.connectors.health import ConnectorHealth
 class ConnectorError(RuntimeError):
     """Safe connector failure without exposing URLs, response bodies, or credentials."""
 
+    def __init__(self, *args, status_code: int | None = None):
+        super().__init__(*args)
+        self.status_code = status_code
+
 
 class BaseConnector(ABC):
     """Base connector interface decoupled from concrete tool wrappers."""

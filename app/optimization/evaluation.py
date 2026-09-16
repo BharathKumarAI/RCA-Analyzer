@@ -5,6 +5,7 @@ sources: the dataset is a versioned, curated snapshot, and model calls are bound
 """
 
 import asyncio
+from copy import deepcopy
 import difflib
 import json
 import math
@@ -38,6 +39,7 @@ from app.optimization.models import Judgment, Revision
 from app.policy.redaction import redact
 from app.runtime.run_contract import RunRequest
 from app.runtime.runner import ExecutionRunner
+from app.tools.catalog import EVIDENCE_CONNECTORS
 
 # MLflow tracking/registry settings and optimization interception are process-wide.
 OPTIMIZATION_LOCK = threading.Lock()
@@ -237,6 +239,34 @@ class FrozenConfigurations:
         return [d for d in self.definitions if d.definition.capability == capability]
 
 
+class RecordedSnapshotConnector(ReplayConnector):
+    async def read_evidence(self):
+        if self.connector_id not in self.case.recorded_sources:
+            raise ValueError("No recorded source snapshot in this benchmark")
+        return deepcopy(self.case.recorded_sources[self.connector_id])
+
+
+class ReplayExecutionRunner(ExecutionRunner):
+    """Replay captured source identities against recorded providers, never live clients."""
+
+    def __init__(self, *args, recorded_scope=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.recorded_scope = recorded_scope
+
+    async def _knowledge_scope(self, principal, capability, request, runtime):
+        scope = self.recorded_scope.model_dump(mode="json") if self.recorded_scope else {"connector_selections": {}, "environment_ids": [], "instance_ids": []}
+        allowed = set(capability.requires.connectors) | {action.split(".", 1)[0] for action in capability.allowed_actions}
+        if set(scope["connector_selections"]) - allowed:
+            raise PermissionError("Recorded source identity is outside the evaluated capability")
+        return scope
+
+    async def _connectors_for_run(self, principal, connector_names, required_connectors=None, selections=None, *, identities_only=False):
+        if identities_only:
+            return self.recorded_scope.connector_selections if self.recorded_scope else {}, []
+        # Scope is frozen separately; these providers contain only dataset evidence.
+        return await super()._connectors_for_run(principal, connector_names, required_connectors, identities_only=False)
+
+
 class ReplayEvaluator:
     def __init__(
         self,
@@ -271,7 +301,7 @@ class ReplayEvaluator:
             model=stage_config.model, delegate=delegate, budget=self.budget
         )
 
-    async def run_case(self, case, bundle):
+    async def run_case(self, case, bundle, *, with_knowledge=True):
         with tempfile.TemporaryDirectory(prefix="rca-opt-") as directory:
             root = Path(directory)
             materialize(root / "platform", self.files, bundle)
@@ -280,6 +310,9 @@ class ReplayEvaluator:
                     "mode": "live",
                     "content_root": root / "platform",
                     "projects_root": root / "projects",
+                    "projects_blob_uri": None,
+                    "config_blob_uri": None,
+                    "optimization_blob_uri": None,
                     "config_dir": root / "platform/config",
                     "database_url": SecretStr(
                         f"sqlite+aiosqlite:///{root / 'runs.db'}"
@@ -297,14 +330,46 @@ class ReplayEvaluator:
             providers = {
                 name: ReplayConnector(name, case) for name in ("itsm", "log_search")
             }
-            runner = ExecutionRunner(
+            providers.update({name: RecordedSnapshotConnector(name, case) for name in case.recorded_sources if name in EVIDENCE_CONNECTORS})
+            runner = ReplayExecutionRunner(
                 settings,
                 registry,
                 store,
                 providers,
                 FrozenConfigurations(self.definitions),
                 self.factory,
+                recorded_scope=case.knowledge_scope,
             )
+            if with_knowledge and self.dataset.knowledge_corpus:
+                from sqlalchemy import MetaData, insert
+                from app.configuration.knowledge import KnowledgeService, _snapshot
+                from app.persistence.database import initialize_tables
+                from app.persistence.platform_admin import platform_knowledge
+                from app.configuration.okf import OKFPolicy
+
+                corpus_metadata = MetaData()
+                platform_knowledge.to_metadata(corpus_metadata)
+                await initialize_tables(store.engine, corpus_metadata)
+                frozen_policy = OKFPolicy.model_validate(self.dataset.knowledge_policy)
+
+                class FrozenKnowledge(KnowledgeService):
+                    async def policy(self, principal):
+                        return frozen_policy
+
+                    async def capture_admissions(self, principal, rows):
+                        # Registration, evaluation and promotion recheck the live corpus.
+                        # This isolated replay uses the exact hash-verified source envelopes
+                        # frozen with it, without contacting source systems during replay.
+                        return {row["doc_id"]: {"eligible": True, "reasons": []} for row in rows}
+
+                knowledge = FrozenKnowledge(store.engine, settings)
+                for document in self.dataset.knowledge_corpus:
+                    stored_hash = await knowledge.blobs.put(json.dumps(_snapshot(document), sort_keys=True, ensure_ascii=False).encode())
+                    if stored_hash != document["content_hash"]:
+                        raise ValueError("Frozen knowledge integrity check failed")
+                async with store.engine.begin() as connection:
+                    await connection.execute(insert(platform_knowledge), self.dataset.knowledge_corpus)
+                runner.knowledge = knowledge
             start, usage_before = time.perf_counter(), self.budget.snapshot()
             try:
                 ids = []
@@ -329,6 +394,7 @@ class ReplayEvaluator:
                         text=case.prompt,
                         incident_id=case.incident_id,
                         attachment_ids=tuple(ids),
+                        knowledge_document_ids=tuple(case.knowledge_document_ids) if with_knowledge and self.dataset.knowledge_corpus else (),
                     ),
                     self.dataset.capability,
                 )
@@ -380,6 +446,8 @@ class ReplayEvaluator:
                 "status": response.status,
                 "result": result,
                 "evidence_ids": [e.evidence_id for e in evidence],
+                "knowledge_evidence": [json.loads(e.content_json) for e in evidence if e.source.connector == "knowledge"],
+                "knowledge_corpus_hashes": [row["content_hash"] for row in self.dataset.knowledge_corpus] if with_knowledge else [],
                 "judgment": judgment.model_dump(),
                 "latency_ms": latency_ms,
                 "model_calls": usage_after["model_calls"] - usage_before["model_calls"],
@@ -406,7 +474,7 @@ class ReplayEvaluator:
             bundle = replace_target(
                 self.bundle, request, template, self.config.max_asset_chars
             )
-            output = asyncio.run(self.run_case(by_id[case_id], bundle))
+            output = asyncio.run(self.run_case(by_id[case_id], bundle, with_knowledge=label != "without_knowledge"))
             self.records.append(
                 {
                     "phase": label,
@@ -619,6 +687,7 @@ def optimize(
             for label, uri in [
                 ("baseline", baseline.uri),
                 ("candidate", candidate.uri),
+                *([("without_knowledge", baseline.uri)] if dataset.knowledge_corpus else []),
             ]:
                 with mlflow.start_run(run_name=f"holdout-{label}", nested=True):
                     evaluated = mlflow.genai.evaluate(
@@ -695,6 +764,9 @@ def optimize(
                 "config": config.model_dump(mode="json"),
                 "model_profiles": evaluator.profiles.model_dump(mode="json"),
                 "dataset_hash": digest(dataset.model_dump(mode="json")),
+                "knowledge_corpus": [{"doc_id": row["doc_id"], "revision": row["revision"], "content_hash": row["content_hash"], "reviewer_subject": row["reviewer_subject"]} for row in dataset.knowledge_corpus],
+                "knowledge_comparison": {"with_knowledge": evaluations["baseline"], "without_knowledge": evaluations["without_knowledge"]} if dataset.knowledge_corpus else None,
+                "knowledge_retrieval": [{"phase": record["phase"], "case_id": record["case_id"], "repetition": record["repetition"], "selected_references": record["output"]["knowledge_evidence"]} for record in evaluator.records if record["phase"] in {"baseline", "candidate", "without_knowledge"}],
             }
             mlflow.log_metrics(
                 {

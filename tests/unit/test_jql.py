@@ -5,7 +5,10 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.connectors.jql import JqlQuery, build_jql, field_contract
+from app.connectors.jql import (
+    JqlAssignees, JqlQuery, JqlTestRequest, build_jql, field_contract,
+    resolve_member_accounts, scope_jql_expression, validate_member_mapping,
+)
 
 
 FIELDS = [
@@ -63,3 +66,52 @@ def test_rejects_scope_injection_and_limits_query_size():
     with pytest.raises(ValueError, match="4096"):
         build_jql("PRIVATE", query, FIELDS)
     assert field_contract({**FIELDS[0], "searchable": False}) is None
+
+
+def test_nested_conditions_and_members_keep_independent_scope_guards():
+    fields = [*FIELDS, {"id": "assignee", "name": "Assignee", "searchable": True,
+                       "schema": {"type": "user"}, "operators": ["IN"]}]
+    query = JqlQuery.model_validate({"match": "any", "filters": [{"field": "status", "operator": "=", "value": "Open"}],
+        "groups": [{"match": "all", "filters": [{"field": "created", "operator": ">", "value": "-1d"},
+                                                   {"field": "customfield_123", "operator": ">", "value": 5}]}],
+        "assignees": {"role_ids": ["PROJECT_ANALYST"]}})
+    members = [{"subject": "a", "roles": ["PROJECT_ANALYST"], "status": "active"},
+               {"subject": "inactive", "roles": ["PROJECT_ANALYST"], "status": "inactive"}]
+    accounts = resolve_member_accounts(query.assignees, {"a": "jira:account-1"}, members)
+    assert accounts == ["jira:account-1"]
+    assert build_jql("PAY", query, fields, member_accounts=accounts) == (
+        'project = "PAY" AND ("status" = "Open" OR ("created" > "-1d" AND cf[123] > 5)) AND ("assignee" IN ("jira:account-1"))')
+    with pytest.raises(ValueError, match="nonempty"):
+        build_jql("PAY", query, fields)
+    with pytest.raises(ValueError, match="mapping"):
+        resolve_member_accounts(query.assignees, {}, members)
+    with pytest.raises(ValueError, match="active"):
+        resolve_member_accounts(JqlAssignees(member_ids=["foreign"]), {}, members)
+    with pytest.raises(ValueError, match="active"):
+        validate_member_mapping({"inactive": "some-account"}, members)
+    with pytest.raises(ValueError, match="no active"):
+        resolve_member_accounts(JqlAssignees(role_ids=["PROJECT_OWNER"]), {}, members)
+
+
+def test_group_and_search_admission_is_bounded():
+    for value in ({"groups": [{}]}, {"assignees": {}}, {"groups": [{"filters": [{"field": "status", "operator": "=", "value": "x"}] * 30}]}):
+        with pytest.raises(ValidationError):
+            JqlQuery.model_validate(value)
+    group = {"filters": [{"field": "status", "operator": "=", "value": "x"}]}
+    for _ in range(5):
+        group = {"groups": [group]}
+    with pytest.raises(ValidationError, match="nested"):
+        JqlQuery.model_validate(group)
+    for body in ({}, {"query": {}, "custom_jql": "status = Open"}, {"query": {}, "max_results": 51}):
+        with pytest.raises(ValidationError):
+            JqlTestRequest.model_validate(body)
+
+
+def test_custom_query_order_cannot_escape_project_guard():
+    assert scope_jql_expression('status = Open OR project = OTHER ORDER BY created DESC', 'PAY') == (
+        'project = "PAY" AND (status = Open OR project = OTHER) ORDER BY created DESC')
+    assert scope_jql_expression('summary ~ "ORDER BY foo"', 'PAY') == 'project = "PAY" AND (summary ~ "ORDER BY foo")'
+    for query in ('status = Open) OR project = OTHER', 'status = "Open', 'status = Open ORDER BY created) OR project=OTHER',
+                  'ORDER BY created', 'status=Open ORDER BY created DESC, key, priority, status'):
+        with pytest.raises(ValueError):
+            scope_jql_expression(query, 'PAY')

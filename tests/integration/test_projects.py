@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from app.api.application import create_app
 from app.configuration.database_bundle import active, bundles, update_bundle_file
 from app.configuration.projects import project_catalog
-from tests.support import FixtureModel, connectors, model_factory, settings_for
+from tests.support import FixtureModel, candidate_receipt, connectors, model_factory, settings_for
 
 
 def new_project(client, token, key):
@@ -62,8 +62,8 @@ def test_create_select_restart_and_immediate_membership_revocation(tmp_path):
 
 
 def test_setup_apply_publishes_project_details_with_configuration_and_rolls_back_stale_draft(tmp_path):
-    settings, token = settings_for(tmp_path)
-    app = create_app(settings)
+    settings, token = settings_for(tmp_path, mode="live")
+    app = create_app(settings, model_factory=model_factory)
     with TestClient(app) as client:
         new_project(client, token, "support")
         auth = headers(token, "support")
@@ -77,6 +77,7 @@ def test_setup_apply_publishes_project_details_with_configuration_and_rolls_back
         assert next(item for item in directory if item["project_id"] == "support")["name"] == "Support"
         candidate = {"yaml": yaml.safe_dump({"prompts": {"triage": "Inspect the customer's evidence."}}),
             "expected_project_revision": setup["project_revision"], "expected_editor_version": 2}
+        candidate["candidate_run_id"] = candidate_receipt(client, auth, candidate)
         applied = client.post("/api/v1/project/setup", headers=auth, json=candidate)
         assert applied.status_code == 200, applied.text
         directory = client.get("/api/v1/projects", headers=auth).json()["items"]

@@ -18,7 +18,7 @@ from app.api.routes import catalog, files, runs, agents, optimization, chats, pa
 from app.api.routes import platform_configuration
 from app.api.routes import project_templates, integrations, harness_workspace, ui_settings, project_editor, connectors_api
 from app.api.routes import project_redaction
-from app.api.routes import knowledge_uploads, playground
+from app.api.routes import knowledge_closures, knowledge_okf, knowledge_uploads, playground
 from app.api.routes import authentication
 from app.api.routes import telemetry
 from app.api.routes import metrics
@@ -26,6 +26,7 @@ from app.api.routes import feedback
 from app.api.routes import projects
 from app.api.routes import project_access
 from app.api.routes import triage
+from app.api.routes import documentation
 from app.runtime.projects import ProjectLeaseMiddleware
 
 
@@ -50,7 +51,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
                     status_code=exc.status_code,
                     headers=exc.headers,
                 )
-        is_upload = request.url.path in {"/api/v1/files", "/api/v1/knowledge/upload"} and request.method == "POST"
+        is_upload = request.url.path in {"/api/v1/files", "/api/v1/knowledge/upload", "/api/v1/knowledge/upload/batch", "/api/v1/knowledge/okf/preview", "/api/v1/knowledge/okf/import"} and request.method == "POST"
         if is_upload:
             project = request.app.state.registry.inheritance.project(
                 request.state.principal
@@ -138,7 +139,9 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
         api.include_router(module.router)
     api.include_router(platform_configuration.router)
     api.include_router(project_redaction.router)
+    api.include_router(knowledge_okf.router)
     api.include_router(knowledge_uploads.router)
+    api.include_router(knowledge_closures.router)
     api.include_router(playground.router)
     api.include_router(authentication.router)
     api.include_router(telemetry.router)
@@ -147,6 +150,7 @@ def create_app(settings=None, *, connectors=None, model_factory=None):
     api.include_router(projects.router)
     api.include_router(project_access.router)
     api.include_router(triage.router)
+    api.include_router(documentation.router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     web_dir = Path(__file__).resolve().parents[2] / "web"

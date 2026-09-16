@@ -22,6 +22,7 @@ from app.identity.auth import validate_public_key
 from app.observability.otel import setup_telemetry
 from app.runtime.runner import ExecutionRunner
 from app.optimization.service import OptimizationService
+from app.optimization.improvement import ImprovementService
 from app.settings import Settings
 
 from app.connectors.providers.registry import (
@@ -72,6 +73,7 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None, 
                 await api.state.projects.initialize()
             from app.configuration.knowledge import KnowledgeService
             api.state.knowledge = KnowledgeService(api.state.store.engine, configured)
+            await api.state.knowledge.initialize()
             api.state.integration_probe_limiter = asyncio.Semaphore(4)
             configured, parameters = await load_effective_settings(
                 api.state.store.engine,
@@ -191,6 +193,18 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None, 
             )
             api.state.runner.harness_workspace = api.state.harness_workspace
             api.state.runner.knowledge = api.state.knowledge
+            async def knowledge_scope_catalog(principal):
+                from app.capabilities.resolver import CapabilityResolver
+                registry = api.state.registry
+                project = registry.inheritance.project(principal)
+                instances = await api.state.platform_admin.list_project_connector_instances(principal.tenant_id, principal.project_id)
+                return {
+                    "environment_ids": [{"id": env.id, "name": env.name or env.id} for env in (project.environments if project else ()) if env.enabled],
+                    "capability_ids": [{"id": cap.id, "name": cap.name} for cap in registry.list_all()
+                                       if CapabilityResolver(registry).resolve(cap.id, principal, check_health=False).is_authorized],
+                    "connector_instance_ids": [{"id": item["instance_id"], "name": item.get("name") or item["instance_id"]} for item in instances],
+                }
+            api.state.knowledge.scope_catalog = knowledge_scope_catalog
             api.state.runner.run_events = api.state.run_events
             cleanup.push_async_callback(api.state.runner.aclose)
             from app.runtime.playground import Playground
@@ -201,6 +215,34 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None, 
                 from app.runtime.projects import ProjectRuntimeManager
                 api.state.project_runtimes = ProjectRuntimeManager(api, model_factory)
                 cleanup.push_async_callback(api.state.project_runtimes.aclose)
+
+            @asynccontextmanager
+            async def improvement_context(tenant_id, project_id, subject):
+                # Stored job authors never grant themselves enduring access. Resolve
+                # current membership and lease the same workspace used by requests.
+                if tenant_id != configured.tenant_id:
+                    raise PermissionError("Improvement job belongs to another tenant")
+                principal = await api.state.projects.principal(subject, project_id)
+                from starlette.requests import Request
+                request = Request({"type": "http", "app": api})
+                try:
+                    await api.state.project_runtimes.bind(request, principal)
+                    yield principal, request.app.state.optimizations, request.app.state.knowledge, request.app.state.runner, request.app.state.file_limits.max_text_chars
+                finally:
+                    lease = request.scope.pop("rca_project_lease", None)
+                    if lease:
+                        await lease[0].release(lease[1])
+
+            api.state.improvement = ImprovementService(
+                api.state.store.engine, api.state.optimizations,
+                api.state.knowledge, api.state.store,
+                resolve_context=improvement_context if managed_projects else None,
+                runner=api.state.runner, max_capture_text_chars=api.state.file_limits.max_text_chars,
+            )
+            await api.state.improvement.initialize()
+            cleanup.push_async_callback(api.state.improvement.aclose)
+            if managed_projects:
+                api.state.improvement.start()
             telemetry = setup_telemetry() if managed_projects and configured.mode == "live" else None
             try:
                 yield

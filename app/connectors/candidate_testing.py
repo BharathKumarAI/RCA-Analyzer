@@ -26,6 +26,7 @@ from app.connectors.providers.oracle import OracleConnector, validate_oracle_end
 from app.connectors.providers.secrets import environment_secret
 from app.connectors.providers.registry import connection_route, resolve_mcp_connection, McpConnectionConfiguration, _unix_host
 from app.connectors.health import CheckStatus
+from app.connectors.kafka_topics import KafkaTopicSelection, authorized_topics, select_topics
 
 # Concurrency semaphore for active test probes
 _CANDIDATE_TEST_SEMAPHORE = asyncio.Semaphore(4)
@@ -452,6 +453,8 @@ def validate_candidate_configuration(
     _validate_secret_fields(credentials, errors)
 
     if selected_route == "mcp":
+        if candidate.get("kafka_topic_selection") is not None:
+            errors.append("Kafka topic selection requires the native route")
         config = McpConnectionConfiguration.model_validate(candidate["mcp_configuration"])
         _validate_secret_fields(config.model_dump(), errors)
         return not errors, errors
@@ -522,6 +525,15 @@ def validate_candidate_configuration(
             if value in (None, ""):
                 errors.append(f"{field} is required for native {connector_type} authentication.")
 
+    if candidate.get("kafka_topic_selection") is not None:
+        try:
+            if connector_type != "kafka":
+                raise ValueError("Topic selection requires a Kafka connector")
+            if candidate.get("topic_filter"):
+                raise ValueError("Use topic selection instead of the legacy topic filter")
+            select_topics(authorized_topics(candidate), KafkaTopicSelection.model_validate(candidate["kafka_topic_selection"]))
+        except ValueError as exc:
+            errors.append(str(exc))
     return len(errors) == 0, errors
 
 
@@ -738,6 +750,7 @@ async def execute_candidate_test(
                     username=credentials.get("username", ""),
                     password=resolved_secrets.get("password_secret_ref", ""),
                     topic_filter=candidate.get("topic_filter"),
+                    allowed_topics=authorized_topics(candidate), topic_selection=candidate.get("kafka_topic_selection"),
                     timeout_s=timeout_s,
                     **limits,
                 )
@@ -780,6 +793,7 @@ async def execute_candidate_test(
             evidence_summary = ""
             read_status = "NOT_APPLICABLE"
             schema_status = "NOT_APPLICABLE"
+            partial = False
 
             if operation == "test_scoped_read":
                 # A scoped-read request must execute the provider operation;
@@ -806,8 +820,11 @@ async def execute_candidate_test(
                     schema_status = "PASSED"
                 else:
                     res = await asyncio.wait_for(client.read_evidence(), timeout=timeout_s)
+                    partial = isinstance(res, dict) and res.get("partial") is True
                     evidence_summary = "Retrieved evidence from the configured resource"
-                    read_status = "PASSED"
+                    if partial:
+                        evidence_summary = "Some selected resources were unavailable; inspect and retest the selection"
+                    read_status = "PARTIAL" if partial else "PASSED"
                     schema_status = "PASSED"
             else:
                 # Connection probe
@@ -819,7 +836,7 @@ async def execute_candidate_test(
             latency_ms = (time.perf_counter() - t_start) * 1000
             return {
                 "candidate_hash": candidate_hash,
-                "overall_result": "PASSED",
+                "overall_result": "PARTIAL" if partial else "PASSED",
                 "stage_results": {
                     "connection": {"status": "PASSED", "detail": "Provider health probe succeeded"},
                     "trust": {"status": "NOT_INDEPENDENTLY_VERIFIED", "detail": "Provider does not expose a separate trust result"},
@@ -832,7 +849,7 @@ async def execute_candidate_test(
                         "status": "PASSED" if operation == "test_scoped_read" else "NOT_INDEPENDENTLY_VERIFIED",
                         "detail": "Verified for selected resource" if operation == "test_scoped_read" else "Not independently verified without scoped resource read",
                     },
-                    "scoped_read": {"status": read_status, "detail": evidence_summary if read_status == "PASSED" else "Not requested"},
+                    "scoped_read": {"status": read_status, "detail": evidence_summary if read_status in {"PASSED", "PARTIAL"} else "Not requested"},
                     "schema": {"status": schema_status, "detail": "Output structure conforms to ADK schema"},
                 },
                 "latency_ms": round(latency_ms, 2),

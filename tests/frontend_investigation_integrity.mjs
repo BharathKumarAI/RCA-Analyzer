@@ -11,7 +11,7 @@ async function component(name) {
   const source = await fs.readFile(new URL(`../frontend/src/components/chat/${name}.tsx`, import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const module = { exports: {} };
-  vm.runInNewContext(compiled, { module, exports: module.exports, require: id => id === '../AnswerMarkdown' ? { AnswerMarkdown: ({ text }) => React.createElement('p', null, text) } : require(id) });
+  vm.runInNewContext(compiled, { module, exports: module.exports, require: id => id === './ChatAnswerVisuals' ? { ChatAnswerVisuals: () => null } : id === '../AnswerMarkdown' ? { AnswerMarkdown: ({ text }) => React.createElement('p', null, text) } : require(id) });
   return props => renderToStaticMarkup(React.createElement(module.exports[name], props));
 }
 const brief = await component('ChatExecutiveBrief');

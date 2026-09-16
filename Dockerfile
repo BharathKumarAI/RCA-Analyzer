@@ -28,6 +28,7 @@ RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data /app/blob_local/projects /app/blob_local/agent-configurations /app/blob_local/optimizations \
     && chown appuser:appuser /app/data /app/blob_local/projects /app/blob_local/agent-configurations /app/blob_local/optimizations
 COPY README.md ./
+COPY docs/*.md ./docs/
 COPY app ./app
 COPY --from=frontend-build /frontend/dist ./frontend/dist
 COPY blob_local/platform ./blob_local/platform

@@ -2,6 +2,7 @@
 
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.runtime.run_contract import ConnectorSelection
 
 
 class Strict(BaseModel):
@@ -40,6 +41,22 @@ class OptimizationRequest(Strict):
     target_name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
 
 
+class KnowledgeReplayScope(Strict):
+    connector_selections: dict[str, ConnectorSelection] = Field(default_factory=dict, max_length=10)
+    environment_ids: list[str] = Field(default_factory=list, max_length=10)
+    instance_ids: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def resolved_identity_consistency(self):
+        if set(self.instance_ids) != {item.instance_id for item in self.connector_selections.values()}:
+            raise ValueError("Recorded knowledge scope must match its connector instances")
+        if {item.environment_id for item in self.connector_selections.values() if item.environment_id} - set(self.environment_ids):
+            raise ValueError("Recorded knowledge scope must include resolved environments")
+        if any(not item or len(item) > 128 for item in self.environment_ids) or len(set(self.environment_ids)) != len(self.environment_ids) or len(set(self.instance_ids)) != len(self.instance_ids):
+            raise ValueError("Recorded knowledge scope must contain distinct bounded identifiers")
+        return self
+
+
 class Case(Strict):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     prompt: str = Field(min_length=1, max_length=16000)
@@ -51,6 +68,17 @@ class Case(Strict):
     expected_facts: list[str] = Field(min_length=1, max_length=20)
     recorded_sources: dict[str, dict] = Field(default_factory=dict)
     provenance: dict = Field(default_factory=dict)
+    knowledge_scope: KnowledgeReplayScope | None = None
+    knowledge_document_ids: list[str] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def known_recorded_sources(self):
+        from app.tools.catalog import EVIDENCE_CONNECTORS
+        if set(self.recorded_sources) - set(EVIDENCE_CONNECTORS):
+            raise ValueError("Recorded sources must use implemented read-only connector adapters")
+        if len(set(self.knowledge_document_ids)) != len(self.knowledge_document_ids) or any(not value or len(value) > 128 for value in self.knowledge_document_ids):
+            raise ValueError("Knowledge document identities must be distinct and bounded")
+        return self
 
 
 class Dataset(Strict):
@@ -62,6 +90,7 @@ class Dataset(Strict):
     train: list[Case] = Field(min_length=1, max_length=100)
     holdout: list[Case] = Field(min_length=1, max_length=100)
     knowledge_corpus: list[dict] = Field(default_factory=list, max_length=50)
+    knowledge_policy: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def distinct_cases(self):

@@ -9,10 +9,21 @@ from pathlib import PurePosixPath
 
 import asyncssh
 from aiokafka.admin import AIOKafkaAdminClient
-from aiokafka.errors import KafkaError
+from aiokafka.errors import KafkaError, IncompatibleBrokerVersion
+from aiokafka.protocol.metadata import MetadataRequest
 
 from app.connectors.base import BaseConnector, ConnectorError
 from app.connectors.health import ConnectorHealth, CheckStatus
+from app.connectors.kafka_topics import KafkaTopicSelection, select_topics
+
+
+class ReadOnlyMetadataRequest(MetadataRequest):
+    """Older metadata protocols cannot prohibit broker-side topic creation."""
+
+    def build(self, request_struct_class):
+        if request_struct_class.API_VERSION < 4:
+            raise IncompatibleBrokerVersion("Read-only metadata requires Kafka metadata protocol v4+")
+        return request_struct_class(self._topics, False)
 
 
 class InfrastructureConnector(BaseConnector):
@@ -23,8 +34,8 @@ class InfrastructureConnector(BaseConnector):
     async def probe_health(self):
         started = time.monotonic()
         try:
-            await self.read_evidence()
-            status = CheckStatus.HEALTHY
+            result = await self.read_evidence()
+            status = CheckStatus.DEGRADED if result.get("partial") else CheckStatus.HEALTHY
         except ConnectorError:
             status = CheckStatus.UNHEALTHY
         return ConnectorHealth(connector_id=self.connector_id, overall=status,
@@ -37,17 +48,23 @@ class InfrastructureConnector(BaseConnector):
 
 class KafkaConnector(InfrastructureConnector):
     def __init__(self, *, bootstrap_servers=None, topic=None, username=None,
-                 password=None, topic_filter=None, **kwargs):
+                 password=None, topic_filter=None, allowed_topics=None, topic_selection=None, **kwargs):
         super().__init__("kafka", **kwargs)
         self.bootstrap = bootstrap_servers or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
         self.topic = topic or os.getenv("KAFKA_SCOPE")
         self.username = username or os.getenv("KAFKA_USERNAME")
         self.password = password or os.getenv("KAFKA_PASSWORD")
         self.topic_filter = topic_filter or os.getenv("KAFKA_TOPIC_FILTER")
+        self.allowed_topics = allowed_topics if allowed_topics is not None else [self.topic]
+        self.topic_selection = KafkaTopicSelection.model_validate(topic_selection) if topic_selection is not None else None
         if not all((self.bootstrap, self.topic, self.username, self.password)):
             raise ValueError("Kafka brokers, topic and SASL credentials are required")
         if self.topic_filter and not isinstance(self.topic_filter, str):
             raise ValueError("Kafka topic filter must be a string")
+        if self.topic_selection is not None:
+            if self.topic_filter:
+                raise ValueError("Use one Kafka topic selection instead of combining it with a legacy topic filter")
+            select_topics(self.allowed_topics, self.topic_selection)
         self.ssl_context = ssl.create_default_context(cafile=os.getenv("KAFKA_CA_FILE") or None)
 
     async def read_evidence(self):
@@ -64,12 +81,27 @@ class KafkaConnector(InfrastructureConnector):
                 if self.topic_filter and not _topic_matches(topic, self.topic_filter):
                     return {"topic": topic, "items": [], "possibly_truncated": False,
                             "limitation": "Configured topic excluded by the project topic filter"}
-                topics = await consumer.describe_topics([topic])
-                if len(topics) != 1 or topics[0].get("topic") != topic or topics[0].get("error_code"):
-                    raise ConnectorError("Configured Kafka topic is unavailable")
-                partitions = topics[0].get("partitions", [])
-                result = {"topic": topic, "items": partitions[:self.max_results],
-                          "possibly_truncated": len(partitions) > self.max_results,
+                selected = select_topics(self.allowed_topics, self.topic_selection) if self.topic_selection is not None else [topic]
+                # aiokafka.describe_topics defaults allow_auto_topic_creation=True.
+                # Use the installed SDK's protocol sender so evidence reads never create a missing topic.
+                response = await consumer._send_request(ReadOnlyMetadataRequest(selected)) if selected else None
+                topics = response.to_object().get("topics", []) if response is not None else []
+                if not isinstance(topics, list) or len(topics) != len(selected) or {row.get("topic") for row in topics if isinstance(row, dict)} != set(selected):
+                    raise ConnectorError("Kafka returned topic identities outside the selected scope")
+                remaining, rows = self.max_results, []
+                for item in topics:
+                    partitions = item.get("partitions", [])
+                    if not isinstance(partitions, list):
+                        raise ConnectorError("Kafka returned invalid partition metadata")
+                    failed = bool(item.get("error_code"))
+                    kept = [] if failed else partitions[:remaining]
+                    remaining -= len(kept)
+                    rows.append({"topic": item["topic"], "status": "unavailable" if failed else "ok", "partitions": kept,
+                                 "possibly_truncated": not failed and len(kept) < len(partitions)})
+                result = {"topic": topic, "items": rows[0]["partitions"] if len(rows) == 1 else [],
+                          "selected_topics": selected, "topics": rows,
+                          "partial": any(row["status"] != "ok" for row in rows),
+                          "possibly_truncated": any(row["possibly_truncated"] for row in rows),
                           "limitation": "Partition metadata only; no messages consumed and no consumer-group lag measured"}
                 if len(json.dumps(result).encode()) > self.max_response_bytes:
                     raise ConnectorError("Kafka evidence exceeded size limit")

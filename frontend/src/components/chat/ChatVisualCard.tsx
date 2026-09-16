@@ -10,6 +10,7 @@ import {
   Sparkles,
   TrendingUp,
 } from 'lucide-react';
+import { ChatAnswerVisuals } from './ChatAnswerVisuals';
 import { AnswerMarkdown } from '../AnswerMarkdown';
 import type { Run } from '../../types/api';
 
@@ -25,6 +26,7 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
   const capability = run.capability;
 
   if (!result) return null;
+  if (result.visuals?.length) return <ChatAnswerVisuals visuals={result.visuals} onInspectSources={onInspectSources} />;
 
   return (
     <div className={`chat-visual-card presentation-${presentation} capability-${capability}`}>

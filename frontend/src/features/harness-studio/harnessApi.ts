@@ -150,7 +150,7 @@ export async function streamStudioRun(
   prompt: string,
   onEvent: (event: StudioRunEvent) => void,
   signal?: AbortSignal,
-  options?: { chatId?: string; attachmentIds?: string[]; incidentId?: string; idempotencyKey?: string; connectorSelections?: RunConnectorSelections },
+  options?: { chatId?: string; attachmentIds?: string[]; incidentId?: string; idempotencyKey?: string; connectorSelections?: RunConnectorSelections; knowledgeSelection?: { environmentId: string; documentIds: string[] } },
 ): Promise<Record<string, unknown>> {
   const headers = authHeaders({ Accept: 'text/event-stream, application/json' }, 'POST');
   headers.set('Content-Type', 'application/json');
@@ -160,7 +160,7 @@ export async function streamStudioRun(
     credentials: 'same-origin',
     headers,
     signal,
-    body: JSON.stringify({ capability, prompt, ...(options?.chatId ? { chat_id: options.chatId } : {}), ...(options?.attachmentIds ? { attachment_ids: options.attachmentIds } : {}), ...(options?.incidentId ? { incident_id: options.incidentId } : {}), ...(options?.connectorSelections ? { connector_selections: options.connectorSelections } : {}) }),
+    body: JSON.stringify({ capability, prompt, ...(options?.chatId ? { chat_id: options.chatId } : {}), ...(options?.attachmentIds ? { attachment_ids: options.attachmentIds } : {}), ...(options?.incidentId ? { incident_id: options.incidentId } : {}), ...(options?.connectorSelections ? { connector_selections: options.connectorSelections } : {}), ...(options?.knowledgeSelection ? { environment_id: options.knowledgeSelection.environmentId || null, knowledge_document_ids: options.knowledgeSelection.documentIds } : {}) }),
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);

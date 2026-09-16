@@ -6,7 +6,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.application import create_app
-from tests.support import connectors, model_factory, settings_for
+from tests.support import candidate_receipt, connectors, model_factory, settings_for
 
 
 def test_template_application_harness_execution_conflicts_and_restart(tmp_path):
@@ -60,8 +60,9 @@ def test_template_application_harness_execution_conflicts_and_restart(tmp_path):
     with TestClient(create_app(settings, connectors=connectors(), model_factory=model_factory)) as client:
         headers = token("admin")
         assert client.get("/api/v1/project-templates/binding", headers=headers).json()["status"] == "SYNCED"
-        edit = client.post("/api/v1/project/setup", headers=headers,
-                           json={"yaml": "workflow:\n  planning: true\n"})
+        candidate = {"yaml": "workflow:\n  planning: true\n"}
+        candidate["candidate_run_id"] = candidate_receipt(client, headers, candidate)
+        edit = client.post("/api/v1/project/setup", headers=headers, json=candidate)
         assert edit.status_code == 200, edit.text
         assert edit.json()["project_template"]["status"] == "DRIFTED"
         upgraded = client.put("/api/v1/project-templates/investigation/2.0.0", headers=headers,

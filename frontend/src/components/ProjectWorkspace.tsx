@@ -12,6 +12,7 @@ export function ProjectSwitcher({
   onSelect,
   onCreate,
   onAccess,
+  onManage,
   onOpenWorkspace,
   canAdmin,
   onOpenAdmin,
@@ -23,6 +24,7 @@ export function ProjectSwitcher({
   onSelect: (projectId: string) => void;
   onCreate: () => void;
   onAccess: () => void;
+  onManage?: () => void;
   onOpenWorkspace?: () => void;
   canAdmin?: boolean;
   onOpenAdmin?: () => void;
@@ -57,7 +59,7 @@ export function ProjectSwitcher({
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, []);
+  }, [isOpen]);
 
   const filteredProjects = projects.filter(p => {
     if (!searchQuery.trim()) return true;
@@ -134,6 +136,7 @@ export function ProjectSwitcher({
 
           {/* Quick Action Buttons */}
           <div className="project-actions-row">
+            {onManage && <button type="button" className="btn btn-secondary project-action-btn" onClick={() => { setIsOpen(false); onManage(); }}>Manage projects</button>}
             {canAdmin && onOpenAdmin && (
               <button
                 type="button"

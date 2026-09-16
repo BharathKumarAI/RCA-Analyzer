@@ -393,7 +393,7 @@ export const TriageBoard: React.FC<{ canEdit?: boolean }> = ({ canEdit = false }
                 <span className="pulse-dot" /> Live
               </span>
             </h1>
-            <p>SLA-driven queue management, autonomous triage, and analyst tool workbench</p>
+            <p>Recorded incident queue, guided triage, and analyst tool workbench</p>
           </div>
         </div>
 

@@ -45,6 +45,7 @@ function harness(overrides = {}) {
     AbortController, CHAT_PAGE_SIZE: 50, CHAT_MESSAGE_PAGE_SIZE: 100,
     mounted: { current: true }, operation: { current: 1 }, historyRequest: { current: null }, conversationRequest: { current: null },
     loading: false, busy: false, chatId: 'chat-1', historyHasMore: true, runsHasMore: true, messagesHasMore: true,
+    knowledgeSelection: { environmentId: '', documentIds: [] },
     conversations: [{ chat_id: 'new', created_at: 100.5, title: 'Current title' }],
     runs: [{ id: 'new-run', raw: { created_at: 100.123456, revision: 2 } }],
     messages: [{ id: 'new-message', sequence: 201 }],

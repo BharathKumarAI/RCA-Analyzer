@@ -48,6 +48,7 @@ class Profile(BaseModel):
     triage: str
     logs: str
     synthesis: str
+    evidence: str | None = None
     tool_call_limit: int = Field(default=12, ge=1, le=100)
 
 
@@ -62,6 +63,8 @@ class ModelProfiles(BaseModel):
             for stage in ("extraction", "triage", "logs", "synthesis"):
                 if getattr(profile, stage) not in self.stages:
                     raise ValueError(f"Unknown model stage: {getattr(profile, stage)}")
+            if profile.evidence is not None and profile.evidence not in self.stages:
+                raise ValueError(f"Unknown evidence model stage: {profile.evidence}")
             if not self.stages[profile.synthesis].enabled:
                 raise ValueError("Final synthesis must be enabled")
         return self
@@ -74,7 +77,19 @@ class ModelProfiles(BaseModel):
 
     def resolve(self, profile_name: str) -> dict[str, StageModel]:
         profile = self.profiles[profile_name]
-        return {
+        resolved = {
             stage: self.stages[getattr(profile, stage)]
             for stage in ("extraction", "triage", "logs", "synthesis")
         }
+        # Older saved profiles explicitly mapped additional sources to logs.
+        # A supplied evidence mapping separates those sources without enabling them.
+        resolved["evidence"] = self.stages[profile.evidence or profile.logs]
+        return resolved
+
+    def resolve_stage(self, profile_name: str, stage_name: str) -> StageModel:
+        aliases = self.resolve(profile_name)
+        if stage_name in aliases:
+            return aliases[stage_name]
+        if stage_name in self.stages:
+            return self.stages[stage_name]
+        raise ValueError(f"Unknown model stage: {stage_name}")

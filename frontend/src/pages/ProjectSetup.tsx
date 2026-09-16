@@ -51,6 +51,8 @@ import type {
   ProjectRedactionPolicy,
   RedactionPreviewResponse,
 } from '../types/api';
+import { ProjectCandidateTest } from '../components/ProjectCandidateTest';
+import type { ProjectCandidateTest as CandidateResponse } from '../services/projectCandidate';
 import { ConnectorInstanceEditor } from '../components/ConnectorInstanceEditor';
 
 import {
@@ -142,9 +144,11 @@ const YamlCodeViewer: React.FC<{ code: string; maxHeight?: number | string }> = 
   );
 };
 
-export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOverview: () => void; onApplied?: () => void }> = ({ onNewInvestigation, onOverview, onApplied }) => {
+export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOverview: () => void; onApplied?: () => void; onOpenRun?: (id: string) => void | Promise<void>; onOpenKnowledge?: () => void }> = ({ onNewInvestigation, onOverview, onApplied, onOpenRun, onOpenKnowledge }) => {
   const [applied, setApplied] = useState(false);
   const [validatedSnapshot, setValidatedSnapshot] = useState('');
+  const [candidateResult, setCandidateResult] = useState<{ snapshot: string; response: CandidateResponse } | null>(null);
+  const [testingCandidate, setTestingCandidate] = useState(false);
   const [conflictDraft, setConflictDraft] = useState<Record<string, unknown> | null>(null);
   const [hasConflict, setHasConflict] = useState(false);
   const [savedDraft, setSavedDraft] = useState('');
@@ -536,6 +540,9 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
     }
   }, [loading, draftText, savedDraft]);
   const validationCurrent = Boolean(validationResult?.valid && validatedSnapshot === backendSaveYaml + draftText);
+  const candidateSnapshot = JSON.stringify([backendSaveYaml, draftText, editorVersion, payload?.project_revision]);
+  const candidatePassed = Boolean(candidateResult?.response.receipt.passed && candidateResult.snapshot === candidateSnapshot);
+  const candidateRunId = candidatePassed ? candidateResult?.response.receipt.run_id : undefined;
   const setupIssues = [
     ...(!projectName.trim() ? [{ step: 1, field: 'project-name', message: 'Enter a project name' }] : []),
     ...(!responsibility ? [{ step: 1, field: 'project-responsibility', message: 'Choose a responsibility' }] : []),
@@ -586,15 +593,12 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
   };
 
   const handleSave = async () => {
-    if (!validationCurrent || !canEdit) return;
+    if (!validationCurrent || !canEdit || !candidatePassed || testingCandidate) return;
     setSaving(true);
     setStatusNotice(null);
     try {
-      // Check draft concurrency before changing the runtime configuration.
-      const editor = await saveProjectEditor(draftDocument as unknown as Record<string, unknown>, editorVersion);
-      setEditorVersion(editor.version);
-      setSavedDraft(JSON.stringify(editor.document));
-      const result = await saveProjectSetup(backendSaveYaml, payload?.project_revision, editor.version);
+      // The tested draft revision is immutable for this apply; the server checks it again.
+      const result = await saveProjectSetup(backendSaveYaml, payload?.project_revision, editorVersion, candidateRunId);
       setPayload(result);
       setApplied(true);
       onApplied?.();
@@ -758,7 +762,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
           <p>These checks validate the runtime settings below. They do not run a live investigation.</p>
         </div>
       </div>}
-      {applied && <section className="ps-card" role="status"><h2>Ready for an investigation</h2>
+      {applied && <section className="ps-card" role="status"><h2>Tested project settings applied</h2>
         <p>Your saved project settings will be used for new runs. Choose real incident details to check the result.</p>
         <button className="btn btn-primary" onClick={onNewInvestigation}>Start investigation <ChevronRight size={16} /></button>
       </section>}
@@ -771,7 +775,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
       {canEdit && principal && <details className="ps-card project-knowledge-panel">
         <summary>Add project knowledge</summary>
         <p>Upload runbooks and reference documents for <strong>{principal.project_id}</strong> during setup or at any time afterward. Documents save separately from the setup draft and require approval before investigations use them.</p>
-        <KnowledgeDocumentForm onSaved={item => setStatusNotice({ type: 'success', text: `${item.title} saved as a knowledge draft. Open Project knowledge to review it and request approval.` })} />
+        <KnowledgeDocumentForm onSaved={item => setStatusNotice({ type: 'success', text: item.upload_match ? `${item.title} already contains this file in revision ${item.upload_match.revision}. Current revision ${item.upload_match.current_revision} and its approval are unchanged.` : `${item.title} saved as a knowledge draft. Open Project knowledge to review it and request approval.` })} />
         <p><a href="#knowledge">Open project knowledge to review documents and approvals</a></p>
       </details>}
       {/* Main Responsive Layout: 2-Column Default, 3-Column / Drawer when Blueprint is toggled */}
@@ -1324,9 +1328,10 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
 
           {currentStep === 5 && <section className="ps-card">
             <h2 className="ps-card-title">Monitoring setup</h2>
-            <p>Investigations run on demand with real inputs. Automatic schedules, data refresh jobs, notifications and custom scripts are unavailable in this release.</p>
-            <p>Check your configured sources in the connection editor before starting an investigation. Previously saved monitoring plans are preserved in your draft.</p>
+            <p>Investigations run on demand. Configure daily knowledge capture and source refresh in Project knowledge, where schedules and their actual job results are recorded.</p>
+            <p>Check your configured sources before enabling a schedule. Previously saved monitoring notes stay in this draft; they do not start jobs.</p>
             <button className="btn btn-secondary" onClick={() => setCurrentStep(3)}>Review connections</button>
+            {onOpenKnowledge && <button type="button" className="btn btn-secondary" onClick={onOpenKnowledge}>Open knowledge monitoring</button>}
           </section>}
 
           {/* STEP 5: CONNECTORS & TOOLS (EXPANDED WITH 3 TABS) */}
@@ -1643,7 +1648,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
                   <div>
                     <h2 className="ps-card-title">Review configuration</h2>
                     <p className="ps-card-subtitle">
-                      Check the saved configuration for structure, policy, and operational readiness before saving.
+                      Validate configuration structure and policy, then test an actual investigation before applying settings.
                     </p>
                   </div>
                   <button
@@ -1669,6 +1674,10 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
                 <p>Save a draft at any time. Applying updates the supported runtime settings shown below. Contacts, policies and monitoring plans remain setup notes unless their dedicated editor provides an active setting.</p>
                 <div className="ps-review-sections">{STEPS.slice(0, -1).map(step => <button key={step.id} className="btn btn-secondary" onClick={() => setCurrentStep(step.number)}>Review {step.title}<ChevronRight size={14} /></button>)}</div>
               </div>
+
+              <ProjectCandidateTest yaml={backendSaveYaml} projectRevision={payload?.project_revision} editorVersion={editorVersion} snapshot={candidateSnapshot}
+                validated={validationCurrent} canEdit={canEdit && !saving && !validating} mode={payload?.scope.mode} capabilities={payload?.available_capabilities || []}
+                onReceipt={(response, snapshot) => setCandidateResult(response ? { snapshot, response } : null)} onBusy={setTestingCandidate} onOpenRun={onOpenRun} />
 
               {/* Complete Full YAML Preview Card */}
               <details className="ps-card"><summary>Advanced: runtime settings and YAML export</summary>
@@ -1701,7 +1710,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
                       type="button"
                       className="btn btn-secondary"
                       onClick={() => void handleSave()}
-                      disabled={saving || !canEdit || !validationCurrent}
+                      disabled={saving || !canEdit || !validationCurrent || !candidatePassed || testingCandidate}
                       style={{ fontSize: 12 }}
                     >
                       <Save size={13} /> {saving ? 'Saving…' : 'Apply project settings'}
@@ -1720,7 +1729,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
       <footer className="ps-wizard-footer">
         <span role="status">{dirty ? 'Unsaved draft changes' : editorVersion ? `Draft saved · revision ${editorVersion}` : 'Draft not saved yet'}</span>
         <div className="ps-review-sections"><button className="btn btn-secondary" disabled={currentStep === 1} onClick={() => setCurrentStep(step => step - 1)}><ChevronLeft size={16} />Back</button>
-        {currentStep < 7 ? <button className="btn btn-primary" onClick={() => setCurrentStep(step => step + 1)}>Continue to {STEPS[currentStep].title}<ChevronRight size={16} /></button> : <><button className="btn btn-secondary" disabled={!canEdit || saving || validating} onClick={() => void handleValidate()}>{validating ? 'Checking…' : 'Save draft and validate'}</button><button className="btn btn-primary" disabled={!validationCurrent || saving || !canEdit} onClick={() => void handleSave()}>Apply project settings</button></>}</div>
+        {currentStep < 7 ? <button className="btn btn-primary" onClick={() => setCurrentStep(step => step + 1)}>Continue to {STEPS[currentStep].title}<ChevronRight size={16} /></button> : <><button className="btn btn-secondary" disabled={!canEdit || saving || validating || testingCandidate} onClick={() => void handleValidate()}>{validating ? 'Checking…' : 'Save draft and validate'}</button><button className="btn btn-primary" disabled={!validationCurrent || !candidatePassed || testingCandidate || saving || !canEdit} onClick={() => void handleSave()}>Apply project settings</button></>}</div>
       </footer>
       {/* Bottom About Banner */}
       <footer className="ps-bottom-banner">

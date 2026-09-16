@@ -23,7 +23,7 @@ export interface ChatResolution {
   reason_code: string; catalog_hash: string; choices: IntentChoice[]; exchange_id: string | null; message_id: string | null;
 }
 export const fetchConversationMessages = (chatId: string, { before, signal }: HistoryPage = {}) => request<ChatMessage[]>(`/api/v1/chats/${encodeURIComponent(chatId)}/messages?${pageQuery(CHAT_MESSAGE_PAGE_SIZE, before)}`, { signal });
-export const resolveChatQuestion = (input: { chat_id: string; prompt: string; attachment_ids?: string[]; incident_id?: string }, signal?: AbortSignal) => request<ChatResolution>('/api/v1/chat/resolve', { method: 'POST', body: input, signal });
+export const resolveChatQuestion = (input: { chat_id: string; prompt: string; attachment_ids?: string[]; incident_id?: string; knowledge_document_ids?: string[]; environment_id?: string }, signal?: AbortSignal) => request<ChatResolution>('/api/v1/chat/resolve', { method: 'POST', body: input, signal });
 export async function fetchConversationRuns(chatId: string, { before, signal }: HistoryPage = {}): Promise<Run[]> {
   const values = await request<Record<string, unknown>[]>(`/api/v1/chats/${encodeURIComponent(chatId)}/runs?${pageQuery(CHAT_PAGE_SIZE, before)}`, { signal });
   return values.map(mapRun).reverse();

@@ -60,7 +60,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               onChange={e => onUpdateComponent({ ...component, modelProfile: e.target.value, model: undefined })}
             />
             <div className="hs-form-hint">Resolved from the authorized backend model profile.</div>
-            {component.stageModel && <div className="hs-form-hint">Effective stage: <code>{component.stageModel}</code></div>}
+          </div>
+          <div className="hs-form-group">
+            <label className="hs-form-label">Model Stage</label>
+            <input aria-label="Model stage" type="text" className="hs-input" value={component.stageModel || ''} disabled={!editable}
+              onChange={e => onUpdateComponent({ ...component, stageModel: e.target.value, model: undefined })} />
+            <div className="hs-form-hint">Use a stage alias from the selected profile or an existing configured stage ID. The server validates availability on save.</div>
           </div>
 
           <div className="hs-form-group">

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.application import create_app
 from app.configuration.service import audit as audit_table
-from tests.support import connectors, settings_for
+from tests.support import candidate_receipt, connectors, model_factory, settings_for
 
 
 def test_scoped_catalog_endpoints_use_runtime_data_and_redact_tracking_uri():
@@ -102,8 +102,8 @@ def test_demo_health_ignores_synthetic_templates_but_reports_degraded_provider()
 
 def test_project_setup_and_validation_enforces_platform_rules():
     with tempfile.TemporaryDirectory() as tmpdir:
-        settings, token = settings_for(tmpdir)
-        app = create_app(settings, connectors=connectors())
+        settings, token = settings_for(tmpdir, mode="live")
+        app = create_app(settings, connectors=connectors(), model_factory=model_factory)
         with TestClient(app) as client:
             headers = token("admin")
 
@@ -116,7 +116,9 @@ def test_project_setup_and_validation_enforces_platform_rules():
             assert "available_skills" in data
             assert "stage_definitions" in data
             assert "template_yaml" in data
-            assert len(data["stage_definitions"]) == 6
+            assert {stage["id"] for stage in data["stage_definitions"]} == {
+                "orchestrator", "triage", "logs", "evidence", "extraction", "router", "synthesis"
+            }
             for stage in data["stage_definitions"]:
                 assert stage["agent_ids"]
                 assert stage["bindings"]
@@ -179,10 +181,12 @@ def test_project_setup_and_validation_enforces_platform_rules():
             )
 
             # 5. POST /api/v1/project/setup saves valid configuration
+            candidate = {"yaml": valid_yaml}
+            candidate["candidate_run_id"] = candidate_receipt(client, headers, candidate)
             save_res = client.post(
                 "/api/v1/project/setup",
                 headers=headers,
-                json={"yaml": valid_yaml},
+                json=candidate,
             )
             assert save_res.status_code == 200
             saved_data = save_res.json()
@@ -316,4 +320,3 @@ def test_skills_endpoint_and_project_override_validation():
             )
             assert reenable_res.status_code == 200
             assert reenable_res.json()["project_enabled"] is True
-

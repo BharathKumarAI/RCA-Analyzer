@@ -48,8 +48,13 @@ import {
   testEnvironmentConnection,
   enableEnvironmentConnection,
   saveConnectorFieldGovernance,
+  fetchConnectorTemplate,
 } from '../services/api';
 import '../styles/connector-editor.css';
+import { KafkaTopicSelector } from './connectors/KafkaTopicSelector';
+import type { KafkaTopicSelection } from '../services/kafkaTopics';
+import { JiraQueryBuilder } from './connectors/JiraQueryBuilder';
+import { emptyJiraQuery, type JiraQuery } from '../services/jiraQueries';
 import { ConnectorProjectPolicy } from './connectors/ConnectorProjectPolicy';
 import {
   ConnectorAuthProfilesCard,
@@ -132,7 +137,28 @@ function configurationSnapshot(candidate: Record<string, unknown>): string {
   return JSON.stringify({ ...candidate, environment_connections: connections?.map(environmentConnectionDraft) });
 }
 
-export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = ({
+export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = props => {
+  const { instance, template, projectId } = props;
+  const key = `${projectId}:${instance?.template_id ?? ''}:${instance?.template_version ?? ''}`;
+  const matches = !instance || (template?.template_id === instance.template_id && template?.version === instance.template_version);
+  const [loaded, setLoaded] = useState<{ key: string; template: ConnectorTemplateItem } | null>(null);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (matches || !instance) return;
+    let cancelled = false;
+    setError('');
+    void fetchConnectorTemplate(instance.template_id, instance.template_version)
+      .then(value => { if (!cancelled) setLoaded({ key, template: value }); })
+      .catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : 'The saved connector template could not load.'); });
+    return () => { cancelled = true; };
+  }, [key, matches, instance?.template_id, instance?.template_version, retry]);
+  const resolved = matches ? template : loaded?.key === key ? loaded.template : null;
+  if (!resolved) return <section aria-label="Connector template"><p role={error ? 'alert' : 'status'}>{error || (instance ? 'Loading the saved template version…' : 'Select a published connector template before editing.')}</p>{error && <button type="button" className="btn btn-secondary" onClick={() => setRetry(value => value + 1)}>Retry template</button>}{props.onCancel && <button type="button" className="btn btn-secondary" onClick={props.onCancel}>Back to connectors</button>}</section>;
+  return <><p className="rca_assist-field-hint">Template version {resolved.version}{instance && ' · pinned to this saved connection'}</p><ConnectorInstanceEditorForm {...props} template={resolved} templateDefaults={matches ? props.templateDefaults : undefined} /></>;
+};
+
+const ConnectorInstanceEditorForm: React.FC<ConnectorInstanceEditorProps> = ({
   projectId,
   template,
   instance,
@@ -410,6 +436,9 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     return Array.isArray(saved) ? saved : [];
   });
 
+  const [jqlBuilder, setJqlBuilder] = useState<JiraQuery>(instance?.definition_json?.jql_builder || emptyJiraQuery());
+  const [jiraMemberMapping, setJiraMemberMapping] = useState<Record<string, string>>(instance?.definition_json?.jira_member_mapping || {});
+
   // Splunk-specific scope
   const [splunkIndex, setSplunkIndex] = useState<string>(
     instance?.definition_json?.index || instance?.definition_json?.external_resource || (template?.default_config?.index as string) || ''
@@ -429,6 +458,8 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
   const [kafkaTopics, setKafkaTopics] = useState<string[]>(
     instance?.definition_json?.topics || (instance?.definition_json?.topic ? [instance.definition_json.topic] : [])
   );
+
+  const [kafkaTopicSelection, setKafkaTopicSelection] = useState<KafkaTopicSelection | null>(instance?.definition_json?.kafka_topic_selection || null);
 
   // Unix scope
   const [unixLogPath, setUnixLogPath] = useState<string>(
@@ -707,8 +738,8 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     return {
       ...savedInstance?.definition_json,
       instance_id: instanceId,
-      template_id: template?.template_id || template?.system_name || savedInstance?.template_id || '',
-      template_version: template?.version || savedInstance?.template_version || '1.0.0',
+      template_id: savedInstance?.template_id || template?.template_id || template?.system_name || '',
+      template_version: savedInstance?.template_version || template?.version || '',
       system_name: systemName.trim(),
       environment_dependency: environmentDependency,
       tool_environment: toolEnvironment.trim(),
@@ -720,6 +751,7 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
       max_results: Number(maxResults),
       external_resource: connectorType === 'itsm' ? jiraProjectKey : connectorType === 'log_search' ? splunkIndex : connectorType === 'confluence' ? confluenceSpaceKey : connectorType === 'kafka' ? (kafkaTopics[0] || '') : connectorType === 'unix' ? unixLogPath : connectorType === 'kubernetes' ? k8sNamespace : resourceScope,
       custom_jql: customJql,
+      ...(connectorType === 'itsm' ? { jql_builder: jqlBuilder, jira_member_mapping: jiraMemberMapping } : {}),
       max_window_seconds: searchWindowSeconds,
       path: unixLogPath,
       topic: kafkaTopics[0] || '',
@@ -732,6 +764,7 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
       search_window_seconds: searchWindowSeconds,
       space_key: confluenceSpaceKey,
       topics: kafkaTopics,
+      ...(connectorType === 'kafka' ? { kafka_topic_selection: kafkaTopicSelection, ...(kafkaTopicSelection ? { topic_filter: null } : {}) } : {}),
       log_path: unixLogPath,
       max_tail_bytes: unixTailBytes,
       namespace: k8sNamespace,
@@ -761,6 +794,8 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     connectorType,
     resourceScope,
     customJql,
+    jqlBuilder,
+    jiraMemberMapping,
     jiraIssueTypes,
     attachmentProcessing,
     customFieldMappings,
@@ -768,6 +803,7 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     searchWindowSeconds,
     confluenceSpaceKey,
     kafkaTopics,
+    kafkaTopicSelection,
     unixLogPath,
     unixTailBytes,
     k8sNamespace,
@@ -852,8 +888,8 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     try {
       const saved = await saveProjectConnector(projectId, {
         instance_id: instanceId,
-        template_id: template?.template_id || template?.system_name || savedInstance?.template_id || '',
-        template_version: template?.version || savedInstance?.template_version || '1.0.0',
+        template_id: currentCandidate.template_id,
+        template_version: currentCandidate.template_version,
         system_name: isFieldLocked('system_name') ? undefined : systemName.trim(),
         environment_dependency: isFieldLocked('environment_dependency') ? undefined : environmentDependency === '' ? 'independent' : environmentDependency,
         tool_environment: isFieldLocked('tool_environment') ? undefined : toolEnvironment.trim(),
@@ -918,6 +954,9 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
     setResourceScope(savedInstance?.definition_json?.external_resource || savedInstance?.definition_json?.scope || '');
     setCustomJql(savedInstance?.definition_json?.custom_jql || template?.default_config?.custom_jql || '');
     const saved = savedInstance?.definition_json;
+    setKafkaTopicSelection(saved?.kafka_topic_selection || null);
+    setJqlBuilder(saved?.jql_builder || emptyJiraQuery());
+    setJiraMemberMapping(saved?.jira_member_mapping || {});
     setSystemName(savedInstance?.system_name || template?.system_name || template?.name || '');
     setEnvironmentDependency(savedInstance?.environment_dependency || 'independent');
     setToolEnvironment(savedInstance?.tool_environment || 'Shared');
@@ -1842,6 +1881,10 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                   <textarea id="connector-custom-jql" className="rca_assist-input mono" rows={4} maxLength={4096} disabled={readOnly || isFieldLocked('custom_jql')} value={customJql} onChange={event => setCustomJql(event.target.value)}  />
                   <span className="rca_assist-field-hint">Saved filter configuration. Scheduled polling and dynamic queue execution are unavailable.</span>
                 </div>}
+                {connectorType === 'itsm' && <JiraQueryBuilder projectId={projectId} instanceId={savedInstance?.instance_id} revision={savedInstance?.revision}
+                  environments={(savedInstance?.bindings || []).filter(binding => binding.status === 'active').map(binding => ({ id: binding.project_env_id, name: availableEnvironments.find(env => env.id === binding.project_env_id)?.name || binding.project_env_id }))}
+                  query={jqlBuilder} onQueryChange={setJqlBuilder} mapping={jiraMemberMapping} savedMapping={savedInstance?.definition_json?.jira_member_mapping || {}} onMappingChange={setJiraMemberMapping}
+                  customJql={customJql} readOnly={readOnly || isFieldLocked('jql_builder') || isFieldLocked('jira_member_mapping')} />}
                 {/* Domain Specific: Splunk */}
                 {connectorType === 'log_search' && (
                   <div className="rca_assist-domain-scope-box">
@@ -1906,12 +1949,12 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                 {connectorType === 'kafka' && (isPlatformAdmin || getFieldTier('external_resource') !== 'platform_only') && (
                   <div className="rca_assist-form-grid">
                     <div className="rca_assist-field-group full-width">
-                      <label className="rca_assist-field-label">Authorized Topics</label>
-                      <div className="rca_assist-chip-wrap">
-                        {kafkaTopics.map(t => (
-                          <span key={t} className="rca_assist-chip">{t}</span>
-                        ))}
-                      </div>
+                      <label className="rca_assist-field-label" htmlFor="kafka-default-topic">Default authorized topic</label>
+                      <input id="kafka-default-topic" className="rca_assist-input" value={kafkaTopics[0] || ''} maxLength={249} disabled={readOnly || isFieldLocked('external_resource')} onChange={event => setKafkaTopics(event.target.value ? [event.target.value] : [])} />
+                      <p className="rca_assist-field-hint">Additional topics require an approved saved environment connection resource allowlist.</p>
+                      <KafkaTopicSelector projectId={projectId} instanceId={savedInstance?.instance_id} revision={savedInstance?.revision}
+                        environments={(savedInstance?.bindings || []).filter(binding => binding.status === 'active').map(binding => ({ id: binding.project_env_id, name: availableEnvironments.find(env => env.id === binding.project_env_id)?.name || binding.project_env_id }))}
+                        selection={kafkaTopicSelection} onChange={setKafkaTopicSelection} readOnly={readOnly || isFieldLocked('kafka_topic_selection')} />
                     </div>
                   </div>
                 )}

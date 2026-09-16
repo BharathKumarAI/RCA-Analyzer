@@ -9,11 +9,11 @@ from app.configuration.database_bundle import metadata
 from app.persistence.database import initialize_tables
 from app.persistence.store import InvestigationStore
 from scripts.seed_database import seed
-from tests.support import connectors, settings_for
+from tests.support import candidate_receipt, connectors, model_factory, settings_for
 
 
 def test_project_setup_and_skill_edits_survive_restart(tmp_path):
-    settings, token = settings_for(tmp_path)
+    settings, token = settings_for(tmp_path, mode="live")
     async def initialize_bundle_tables():
         store = InvestigationStore(settings.database_url.get_secret_value())
         await initialize_tables(store.engine, metadata)
@@ -27,9 +27,11 @@ def test_project_setup_and_skill_edits_survive_restart(tmp_path):
         "preferences:\n  presentation: table\n"
     )
 
-    with TestClient(create_app(db_settings, connectors=connectors())) as client:
+    with TestClient(create_app(db_settings, connectors=connectors(), model_factory=model_factory)) as client:
         headers = token("owner")
-        saved = client.post("/api/v1/project/setup", headers=headers, json={"yaml": valid_yaml})
+        candidate = {"yaml": valid_yaml}
+        candidate["candidate_run_id"] = candidate_receipt(client, headers, candidate)
+        saved = client.post("/api/v1/project/setup", headers=headers, json=candidate)
         assert saved.status_code == 200, saved.text
 
     with TestClient(create_app(db_settings, connectors=connectors())) as client:

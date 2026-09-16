@@ -15,7 +15,7 @@ assert.match(topbarSource, /Mode: Demo/, 'Demo execution mode must be clearly id
 assert.match(topbarSource, /API response time refreshed/, 'API response time freshness must be explicitly labeled');
 
 const appSource = await readFile(new URL('../frontend/src/App.tsx', import.meta.url), 'utf8');
-assert.match(appSource, /projectSelector=\{routeProjectKey \? \(/, 'Project switcher is only mounted when within a project route scope');
+assert.match(appSource, /projectSelector=\{navigationProjectKey \? \(/, 'Project switcher follows the project navigation context, including the reader-accessible handbook');
 
 // 2. Security and session checks
 assert.doesNotMatch(topbarSource, /jwt|raw_token|token_value/i, 'Session menu must never expose raw JWT or token strings');

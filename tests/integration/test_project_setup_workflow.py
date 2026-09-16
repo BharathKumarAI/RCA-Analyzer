@@ -5,13 +5,13 @@ import yaml
 from starlette.testclient import TestClient
 
 from app.api.application import create_app
-from tests.support import settings_for
+from tests.support import candidate_receipt, model_factory, settings_for
 
 
 def test_setup_draft_validation_and_stale_application():
     with tempfile.TemporaryDirectory() as directory:
-        settings, token = settings_for(directory)
-        with TestClient(create_app(settings)) as client:
+        settings, token = settings_for(directory, mode="live")
+        with TestClient(create_app(settings, model_factory=model_factory)) as client:
             headers = token("admin")
             setup = client.get("/api/v1/project/setup", headers=headers).json()
             initial_revision = setup["project_revision"]
@@ -39,6 +39,7 @@ def test_setup_draft_validation_and_stale_application():
             validation = client.post("/api/v1/project/validate", headers=headers, json=candidate)
             assert validation.status_code == 200, validation.text
             assert validation.json()["valid"], validation.text
+            candidate["candidate_run_id"] = candidate_receipt(client, headers, candidate)
             applied = client.post("/api/v1/project/setup", headers=headers, json=candidate)
             assert applied.status_code == 200, applied.text
             assert applied.json()["project_revision"] != initial_revision

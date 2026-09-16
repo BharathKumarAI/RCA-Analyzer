@@ -28,8 +28,9 @@ assert.match(app, /const Orchestration = lazy\(/, 'App.tsx lazy loads Orchestrat
 
 assert.match(app, /activePage === 'tickets' && \(\s*<ProjectTickets canEdit=\{canEditTriage\} \/>\s*\)/, 'App.tsx renders ProjectTickets for tickets');
 assert.match(app, /activePage === 'rca-workbench' && \(\s*<RCAWorkbench canEdit=\{canEditTriage\}[\s\S]*?\/>\s*\)/, 'App.tsx renders RCAWorkbench for rca-workbench');
-assert.match(app, /activePage === 'feedback' && \(\s*<ProjectFeedback \/>\s*\)/, 'App.tsx renders ProjectFeedback for feedback');
-assert.match(app, /activePage === 'docs' && \(\s*<Docs \/>\s*\)/, 'App.tsx renders Docs for docs');
+assert.match(app, /activePage === 'feedback' && \(\s*<ProjectFeedback canEdit=\{canEditTriage\} \/>\s*\)/, 'App.tsx renders ProjectFeedback with server-derived role access');
+assert.match(app, /activePage === 'docs' && \(\s*<ProjectDocs /, 'Project docs render the approved project library');
+assert.match(app, /activePage === 'platform-docs' && \(\s*<Docs /, 'Platform docs render the maintained deployment handbook');
 assert.match(app, /activePage === 'artifacts' && \(\s*<Artifacts \/>\s*\)/, 'App.tsx renders Artifacts for artifacts');
 assert.match(app, /activePage === 'orchestration' && \(\s*<Orchestration \/>\s*\)/, 'App.tsx renders Orchestration for orchestration');
 

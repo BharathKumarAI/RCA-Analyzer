@@ -35,6 +35,7 @@ from app.policy.redaction import redact
 from app.runtime.governance import RunGovernance
 from app.runtime.context import ContextLimitExceeded
 from app.runtime.run_contract import (
+    ConnectorSelection,
     InvestigationResult,
     RunContract,
     RunRequest,
@@ -147,7 +148,7 @@ class ExecutionRunner:
             )
         )
 
-    async def _connectors_for_run(self, principal, connector_names, required_connectors=None, selections=None):
+    async def _connectors_for_run(self, principal, connector_names, required_connectors=None, selections=None, *, identities_only=False):
         """Overlay enabled, project-scoped instances onto deployment clients."""
         selections = selections or {}
         if set(selections) - set(connector_names):
@@ -155,7 +156,7 @@ class ExecutionRunner:
         if self.connector_instance_store is None:
             if selections:
                 raise PermissionError("Saved connector selections require the scoped connector store")
-            return self.connectors, []
+            return ({} if identities_only else self.connectors), []
         instances = await self.connector_instance_store.list_project_connector_instances(
             principal.tenant_id, principal.project_id
         )
@@ -217,7 +218,7 @@ class ExecutionRunner:
         enabled_adapters = {getattr(item, "provider_adapter_id", None) or item.system_name for item in templates
                             if item.availability == "published" and item.platform_enabled and item.is_enabled_by_policy}
         unavailable = declared_adapters - enabled_adapters
-        resolved = {name: provider for name, provider in self.connectors.items() if name not in unavailable}
+        resolved = {} if identities_only else {name: provider for name, provider in self.connectors.items() if name not in unavailable}
         runtime_values = {name: values for name, values in runtime_values.items() if name not in unavailable}
         created = []
 
@@ -225,7 +226,7 @@ class ExecutionRunner:
         # short-lived generation for a run when an authenticated parameter edit
         # changes provider controls, so active clients are never mutated and a
         # stale client cannot silently consume an old endpoint or limit.
-        if runtime_values and self.settings.mode == "live" and self.refresh_deployment_connectors:
+        if not identities_only and runtime_values and self.settings.mode == "live" and self.refresh_deployment_connectors:
             refreshed = build_connectors(
                 self.platform.connector_options,
                 self.settings.mode,
@@ -426,6 +427,9 @@ class ExecutionRunner:
                         f"Connector '{adapter}' failed its published runtime contract: "
                         + "; ".join(errors)
                     )
+                if identities_only:
+                    resolved[adapter] = ConnectorSelection(instance_id=instance["instance_id"], environment_id=environment_id)
+                    continue
                 adapter_id = getattr(current_template, "provider_adapter_id", None)
                 if adapter_id:
                     # Provider selection belongs to the published template;
@@ -457,6 +461,33 @@ class ExecutionRunner:
             resolved[adapter] = provider
             created.append(provider)
         return resolved, created
+
+    async def _knowledge_scope(self, principal, capability, request, runtime):
+        connector_names = set(capability.requires.connectors) | {
+            action.split(".", 1)[0] for action in capability.allowed_actions
+        }
+        try:
+            identities, _ = await self._connectors_for_run(
+                principal, connector_names, capability.requires.connectors,
+                request.connector_selections, identities_only=True,
+            )
+        except PermissionError:
+            # Preserve the persisted BLOCKED investigation contract. A failed
+            # source selection must never proceed with unscoped knowledge.
+            return {"resolution_blocked": True, "connector_selections": {}, "environment_ids": [], "instance_ids": []}
+        environment_ids = {selection.environment_id for selection in identities.values() if selection.environment_id}
+        if request.environment_id:
+            if environment_ids and environment_ids != {request.environment_id}:
+                raise ValueError("Knowledge environment must match the resolved connectors")
+            environment_ids.add(request.environment_id)
+        active_environments = {env.id for env in runtime.get("environments", ()) if env.enabled}
+        if environment_ids - active_environments:
+            raise PermissionError("Selected knowledge environment is unavailable")
+        return {
+            "connector_selections": {name: selection.model_dump(mode="json") for name, selection in identities.items()},
+            "environment_ids": sorted(environment_ids),
+            "instance_ids": sorted({selection.instance_id for selection in identities.values()}),
+        }
 
     async def _close_run_connectors(self, run_id: str):
         providers = self._run_connectors.pop(run_id, [])
@@ -496,6 +527,7 @@ class ExecutionRunner:
             "request": request.model_dump(mode="json"),
             "capability": capability_id,
             "mode": self.settings.mode,
+            **({"project_candidate": self.project_candidate} if getattr(self, "project_candidate", None) else {}),
         })
         existing = await self.store.find_idempotent_run(principal, idempotency_key, request_hash)
         if existing is not None:
@@ -580,14 +612,22 @@ class ExecutionRunner:
                         break
 
             knowledge = []
-            if self.knowledge is not None:
+            knowledge_scope = await self._knowledge_scope(principal, capability, request, runtime)
+            if request.knowledge_document_ids and self.knowledge is None:
+                raise ValueError("Knowledge retrieval is unavailable")
+            if self.knowledge is not None and not knowledge_scope.get("resolution_blocked"):
                 knowledge = await self.knowledge.relevant(
                     principal, request.text,
+                    capability=capability_id, environment_ids=knowledge_scope["environment_ids"],
+                    instance_ids=knowledge_scope["instance_ids"],
+                    document_ids=request.knowledge_document_ids,
                     max_items=max(0, effective_settings.max_evidence_items - len(files) - len(capability.allowed_actions)),
                     max_chars=min(effective_settings.max_context_chars // 4, effective_settings.max_evidence_chars),
                 )
             snapshot = {
+                **({"project_candidate": self.project_candidate} if getattr(self, "project_candidate", None) else {}),
                 "knowledge_references": knowledge,
+                "knowledge_scope": knowledge_scope,
                 "model_telemetry_version": 1,
                 "model_pricing": await pricing_snapshot(self.store.engine, principal),
                 "harness_revision": harness.revision,
@@ -623,10 +663,7 @@ class ExecutionRunner:
                 "specialists": [a.model_dump(mode="json") for a in approved],
                 "specialist_models": {
                     a.definition.id: (
-                        self.profiles.resolve(a.definition.model_profile).get(
-                            a.definition.stage_model
-                        )
-                        or self.profiles.stages[a.definition.stage_model]
+                        self.profiles.resolve_stage(a.definition.model_profile, a.definition.stage_model)
                     ).model_dump(mode="json")
                     for a in approved
                 },
@@ -641,14 +678,12 @@ class ExecutionRunner:
             if snapshot.get("harness_bundle"):
                 from app.configuration.harness_bundles import Compilation, enriched_graph
                 planned = Compilation.model_validate(snapshot["harness_bundle"]["compilation"])
+                snapshot["harness_models"] = {
+                    key: self.profiles.resolve_stage(definition.model_profile, definition.stage_model).model_dump(mode="json")
+                    for key, definition in {**planned.agents, **planned.overrides}.items()
+                }
                 snapshot["resolved_graph"] = enriched_graph(planned, capability, self.profiles).model_dump(mode="json")
-            clean_request = RunRequest(
-                text=redact(request.text),
-                chat_id=chat_id,
-                incident_id=request.incident_id,
-                attachment_ids=request.attachment_ids,
-                connector_selections=request.connector_selections,
-            )
+            clean_request = request.model_copy(update={"text": redact(request.text), "chat_id": chat_id})
             contract = RunContract(
                 tenant_id=principal.tenant_id,
                 project_id=principal.project_id,
@@ -817,8 +852,13 @@ class ExecutionRunner:
         connector_names = set(capability.requires.connectors) | {
             action.split(".", 1)[0] for action in capability.allowed_actions
         }
+        snapshot = json.loads(contract.model_config_json)
+        scope = snapshot.get("knowledge_scope", {})
+        if scope.get("resolution_blocked"):
+            raise PermissionError("Saved connector identity resolution was blocked")
+        selections = {name: ConnectorSelection.model_validate(value) for name, value in scope["connector_selections"].items()} if "connector_selections" in scope else contract.request.connector_selections
         runtime_connectors, created_connectors = await self._connectors_for_run(
-            principal, connector_names, capability.requires.connectors, contract.request.connector_selections
+            principal, connector_names, capability.requires.connectors, selections
         )
         self._run_connectors[contract.run_id] = created_connectors
         health = await self.health(connector_names, runtime_connectors)
@@ -920,6 +960,7 @@ class ExecutionRunner:
             state={
                 "triage_result": "Unavailable",
                 "logs_result": "Unavailable",
+                "connector_evidence_result": "Unavailable",
                 "file_result": "Unavailable",
                 "specialist_result": "Unavailable",
                 "contract_hash": contract.snapshot_hash,

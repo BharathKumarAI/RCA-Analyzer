@@ -22,7 +22,7 @@ MAX_FILES = 100
 MAX_BUNDLE_BYTES = 512 * 1024
 MAX_FILE_BYTES = 65536
 BUILTINS = {"request_orchestrator": "orchestrator", "triage_agent": "triage", "logs_investigator": "logs",
-            "file_investigator": "extraction", "connector_evidence_investigator": "logs",
+            "file_investigator": "extraction", "connector_evidence_investigator": "evidence",
             "specialist_router": "router", "rca_synthesizer": "synthesis"}
 
 
@@ -234,8 +234,8 @@ def compile_bundle(bundle, registry, profiles):
             profile = meta.get("model_profile", cap.model_profile)
             if profile not in profiles.profiles:
                 raise ValueError("Unknown model profile in " + path)
-            config = profiles.resolve(profile).get(stage)
-            if config is None or not config.enabled:
+            config = profiles.resolve_stage(profile, stage)
+            if not config.enabled:
                 raise ValueError("Model stage is missing or disabled in " + path)
             if data.get("model") and data["model"] != config.model:
                 raise ValueError("Imported model must match an authorized model profile in " + path)
@@ -250,7 +250,7 @@ def compile_bundle(bundle, registry, profiles):
                 capability=cap.id, model_profile=profile, stage_model=stage, tools=actions)
             output_key = data.get("output_key")
             if output_key:
-                if builtin or not isinstance(output_key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", output_key) or output_key in {"request_plan", "triage_result", "logs_result", "file_result", "specialist_result", "contract_hash"}:
+                if builtin or not isinstance(output_key, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", output_key) or output_key in {"request_plan", "triage_result", "logs_result", "connector_evidence_result", "file_result", "specialist_result", "contract_hash"}:
                     raise ValueError("Unsupported or reserved output_key in " + path)
                 result.output_keys[path] = output_key
             if builtin:

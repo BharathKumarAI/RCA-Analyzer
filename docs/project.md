@@ -85,8 +85,8 @@ A deployment has one tenant and multiple database-managed projects. Users see ac
 | Connector activation | Oracle supports fixed diagnostics through saved project credentials and resource bindings. Additional deployment adapters remain explicit opt-ins; templates alone do not activate connections. See [configuration](configuration.md#all-connectors-enabled-per-project). |
 | Database and external writes | Oracle scope is fixed read-only diagnostics; arbitrary/model-supplied SQL, Jira mutations and other source-system writes remain unsupported |
 | Files | Local uploads and bounded extraction; image OCR only, no remote URLs, macros, or arbitrary execution |
-| Knowledge | Reviewed reference documents; keyword retrieval is not general semantic memory or fresh incident observation |
-| Execution | API-process execution with persisted records; no durable queue, automatic resumption, or recovery worker |
+| Knowledge | Reviewed reference documents and local OKF import/export; bounded keyword retrieval remains reference guidance, not fresh incident observation |
+| Execution | Investigations execute in the API process. Improvement jobs use a persisted leased queue with bounded restart retries; investigation runs themselves do not automatically resume. |
 | Measurements | Recorded timings and provider usage; missing values remain unknown; feedback is not an accuracy score |
 | Triage workspace | Imports recorded live investigations, preserves evidence provenance and executes saved follow-up questions through the governed runner; local workflow actions never write to source systems. See [implementation boundary](#triage-workspace-implementation-boundary). |
 | Demo and tests | Explicit simulations and isolated checks; neither proves live diagnosis quality or production readiness |
@@ -106,6 +106,12 @@ For implementation flow, continue to [architecture](architecture.md). Detailed r
 5. The owner configures project sources and permitted capabilities using the [configuration workflow](configuration.md#workflow-connect-a-project-source). A project existing in the database does not mean its connectors are ready.
 
 Project selection changes the scope for subsequent work. It does not transfer another project's conversations, files, credentials or approval authority. Sources: [project service](../app/configuration/projects.py), [access review](../app/configuration/project_access.py), [project runtime](../app/runtime/projects.py).
+
+### Retain, deactivate and restore a project
+
+Open **Manage projects** in the project switcher. An active owner or administrator membership in the target project is required for every change, including when the user owns a different project. Deactivate blocks new project requests while retaining records; an investigation already running may finish against its saved configuration. Archive requires an inactive project. Restore returns it to inactive, and Activate permits access again. Every transition checks the current content hash and records the actor and reason. There is no destructive project-delete operation.
+
+When the last active workspace is deactivated, an authenticated owner can still list and restore managed projects through an identity-only recovery view. This grants no inactive-workspace data or execution access. Lifecycle activation restores access so owners can repair configuration; configuration application uses the separate candidate-investigation gate below. Sources: [project store](../app/configuration/projects.py), [lifecycle endpoints](../app/api/routes/projects.py), [recovery authorization](../app/identity/auth.py), [management interface](../frontend/src/components/ProjectLifecycle.tsx), [restart and role tests](../tests/integration/test_project_lifecycle.py).
 
 ## Workflow B: investigate and inspect an answer
 
@@ -139,6 +145,8 @@ Sources: [run routes](../app/api/routes/runs.py), [artifact service](../app/pers
 
 An owner or administrator saves text or uploads a local document as a draft. The author submits its exact revision; a different authorized reviewer in the same project approves or rejects it. Only eligible approved revisions can be selected for later investigations. Editing or replacing content requires a new review, and revocation removes eligibility for new runs.
 
+An article can organize a topic into blocks such as system context, responsibilities, diagnostic checks and resolution. Owners can queue or schedule capture from approved playbooks, past closed tickets, Confluence and independently verified investigation feedback. The initial historical window is three configurable calendar months. Capture preserves source identity, deduplicates unchanged source versions and creates reviewable drafts; a newer source does not silently overwrite a reviewed article. Read [structured capture and source updates](knowledge.md#structured-topics-and-source-capture) before configuring a recurring job. Sources: [structured model](../app/configuration/knowledge_structure.py), [capture workflow](../app/optimization/knowledge_capture.py).
+
 Knowledge is bounded keyword-selected reference material. It can explain a system or runbook, but does not establish the current incident's cause or grant access to a connector. An unrelated question can select no document. Historical runs keep their selected revision provenance. See the [complete linked knowledge flow](knowledge.md#knowledge-from-authoring-to-an-answer), including [retrieval rules](knowledge.md#exact-knowledge-retrieval-rules) and [storage](knowledge.md#knowledge-storage-and-ownership). Sources: [knowledge lifecycle](../app/configuration/knowledge.py), [knowledge upload](../app/api/routes/knowledge_uploads.py).
 
 ## Workflow D: evaluate usefulness and recorded usage
@@ -151,6 +159,8 @@ When reviewing performance, first check selected dates, project and mode; then i
 
 The public landing page is `/`. The authenticated application recognizes `/workspace`, project paths such as `/p/{project_key}/{page}`, and administration paths. Page availability is filtered by saved UI navigation and user context; the API remains the authorization boundary. A direct URL is not a permission grant. Source: [application routing](../frontend/src/App.tsx), [sidebar filtering](../frontend/src/components/Sidebar.tsx).
 
+Documentation has two separate reading spaces. **Project docs & playbooks** at `/p/{project_key}/docs` reads the selected project's approved, eligible Knowledge documents, with title/content search and category/tag filters. Drafting, uploads and independent review remain in Knowledge. **Platform handbook** at `/admins/platform-docs` serves the maintained guides bundled with the deployment; `/admins/docs` remains a compatibility link to that handbook. Every authenticated project reader can open the handbook without receiving administrator permissions. Both entries are discoverable from project navigation and page search. Existing saved UI labels, visibility and order are preserved; a newly supported handbook entry is appended by the settings read path and persisted on the next version-checked settings save. Sources: [project reader](../frontend/src/pages/ProjectDocs.tsx), [platform reader](../frontend/src/pages/Docs.tsx), [navigation defaults and compatibility](../app/persistence/platform_admin.py), [UI settings contract](../app/api/routes/ui_settings.py).
+
 ```mermaid
 flowchart TD
   L[Public landing] --> A[Sign in and resolve membership]
@@ -159,7 +169,7 @@ flowchart TD
   P --> ADMIN[Administration console]
   W --> SETUP[Seven-step project setup]
   W --> CHAT[Chat and governed investigation]
-  W --> TRIAGE[Triage workspace: implementation gaps]
+  W --> TRIAGE[Triage workspace and governed follow-ups]
   ADMIN --> TOOL[Templates and connection forms]
   ADMIN --> HARNESS[Agents, skills and Harness Studio]
   ADMIN --> POLICY[Users, policy and configuration]
@@ -197,7 +207,7 @@ Each row links the page's user responsibility to its actual API/service. Display
 | Persistence | Inspect file limits/retention and explicit maintenance controls | [Persistence](../frontend/src/pages/Persistence.tsx), [operations runbook](operations.md#runbook-retention-and-restoration) |
 | Billing | Inspect recorded usage/configuration and governed price inputs where available | [Billing](../frontend/src/pages/Billing.tsx), [telemetry](../app/api/routes/telemetry.py); estimates are not invoices |
 | Health checks / Alerts | Inspect probes, persisted alerts and supported status changes | [Health checks](../frontend/src/pages/HealthChecks.tsx), [Alerts](../frontend/src/pages/Alerts.tsx), [catalog endpoints](../app/api/routes/catalog.py) |
-| Optimization | Manage existing evaluation/optimization and reviewed promotion flow | [Optimization](../frontend/src/pages/Optimization.tsx), [optimization service](../app/optimization/service.py) |
+| Optimization | Curate verified feedback, publish frozen benchmarks, queue or schedule evaluations, approve changes, restore or revoke active changes | [Optimization](../frontend/src/pages/Optimization.tsx), [Continuous improvement](../frontend/src/pages/Improvement.tsx), [job service](../app/optimization/improvement.py), [optimization service](../app/optimization/service.py) |
 
 Most project administrative editing uses owner/platform authority, while protected connection identity and platform settings require platform authority. Refer to the endpoint for exact roles and revision fields; UI visibility is not the authoritative permission matrix.
 
@@ -207,14 +217,15 @@ Most project administrative editing uses owner/platform authority, while protect
 | --- | --- | --- |
 | Chat | Question → clarification or investigation → answer and cited sources | [Chat](../frontend/src/pages/Chat.tsx), [intent service](../app/runtime/intent.py), [run API](../app/api/routes/runs.py) |
 | Runs | Saved execution status, result and trace | [Runs](../frontend/src/pages/Runs.tsx); persisted execution is not crash recovery |
-| Knowledge | Draft/upload → independent review → eligible reference | [Knowledge](../frontend/src/pages/Knowledge.tsx), [knowledge lifecycle](configuration.md#workflow-review-reusable-knowledge) |
+| Knowledge | Draft/upload or preview/import an OKF bundle → independent review → eligible reference; export exact selected revisions | [Knowledge](../frontend/src/pages/Knowledge.tsx), [OKF exchange](../frontend/src/components/KnowledgeOkfExchange.tsx), [knowledge lifecycle](configuration.md#workflow-review-reusable-knowledge) |
 | Insights | Recorded usage, timing, coverage and feedback | [Insights](../frontend/src/pages/Insights.tsx); missing metrics remain unknown |
 | Artifacts | Owned uploaded originals and generated run outputs | [Artifacts](../frontend/src/pages/Artifacts.tsx), [chat artifact API](../app/api/routes/chats.py) |
 | Orchestration | Inspect the selected run graph/activity | [Orchestration](../frontend/src/pages/Orchestration.tsx), [run trace API](../app/api/routes/runs.py) |
-| Triage board / Tickets | Queue state, ticket workspace and operational actions | [Board](../frontend/src/pages/TriageBoard.tsx), [Tickets](../frontend/src/pages/ProjectTickets.tsx); see gaps below |
-| RCA workbench | Investigation/proposal/evidence workflow around triage records | [Workbench](../frontend/src/pages/RCAWorkbench.tsx); distinct from the governed run path |
-| Feedback | Project feedback views | [Project feedback](../frontend/src/pages/ProjectFeedback.tsx); inspect which feedback service supplies the record |
-| Docs | In-application reference surface | [Docs page](../frontend/src/pages/Docs.tsx); repository technical handbook starts at [docs index](README.md) |
+| Triage board / Tickets | Queue state, ticket workspace and operational actions | [Board](../frontend/src/pages/TriageBoard.tsx), [Tickets](../frontend/src/pages/ProjectTickets.tsx); recorded-run intake and source boundaries below |
+| RCA workbench | Run supported RCA methodologies against the imported capability and selected sources | [Workbench](../frontend/src/pages/RCAWorkbench.tsx), [governed methodology API](../app/api/routes/triage.py) |
+| Feedback | Review an actual ticket investigation without preselected opinions; retain source-run provenance | [Project feedback](../frontend/src/pages/ProjectFeedback.tsx), [calibration persistence](../app/persistence/triage.py); independent verification is required before benchmark use |
+| Project docs & playbooks | Search and read approved, eligible documents belonging to the selected project | [Project Docs](../frontend/src/pages/ProjectDocs.tsx), [scoped Knowledge service](../app/configuration/knowledge.py); drafts and revoked documents stay out of the reader |
+| Platform handbook | Read maintained platform guides shipped with the deployment; available to authenticated readers from either navigation context | [Platform Docs](../frontend/src/pages/Docs.tsx), [authenticated allowlisted guide API](../app/api/routes/documentation.py); content hashes identify the served revision |
 | Project setup | Edit delegated workspace configuration | [Project setup](../frontend/src/pages/ProjectSetup.tsx), seven-step flow below |
 
 ## Seven-step project setup
@@ -229,17 +240,17 @@ Project creation and project setup are separate. Creation establishes the author
 | 4. Parameter setup | Review inherited values and permitted overrides | Resolves the five-level scope hierarchy |
 | 5. Monitoring setup | Review query/availability configuration | Saved declaration alone does not establish a background monitoring worker |
 | 6. Agent setup | Select eligible harness/agent resources | Must remain inside delegated capability/tool restrictions |
-| 7. Review & apply | Save draft, validate schema/policy, inspect current revision, apply | Only a validation matching the current editor snapshot is actionable |
+| 7. Review & apply | Save draft, validate schema/policy, run a live candidate investigation, review its evidence, apply | Requires a passing run for the exact configuration, draft revision and current dependencies |
 
-The editor saves `/api/v1/project/editor` with `expected_version`. Server validation checks required metadata, matching project identity, valid timezone, bounded document size, unique member references and active owners. Runtime setup uses `/api/v1/project/validate` and `/api/v1/project/setup`. The draft is not a credential or authorization scope source. Sources: [editor service](../app/api/routes/project_editor.py), [setup endpoints](../app/api/routes/catalog.py), [frontend steps and submit logic](../frontend/src/pages/ProjectSetup.tsx).
+The editor saves `/api/v1/project/editor` with `expected_version`. Server validation checks required metadata, matching project identity, valid timezone, bounded document size, unique member references and active owners. Runtime setup uses `/api/v1/project/validate`, `/api/v1/project/test` and `/api/v1/project/setup`. Schema validation alone does not establish operational success. The candidate test uses a real capability, prompt, incident identifier where required, saved connector selections and optional scoped knowledge or local evidence files. A failed, partial, blocked or simulated result cannot authorize application. Network retries retain the same idempotency key; any configuration or dependency change requires a new passing receipt. Existing runtime configuration remains active until application. The draft is not a credential or authorization scope source. Sources: [editor service](../app/api/routes/project_editor.py), [setup endpoints](../app/api/routes/catalog.py), [frontend steps and submit logic](../frontend/src/pages/ProjectSetup.tsx).
 
 ```mermaid
 flowchart LR
   E[Edit seven-step draft] --> S[Save expected draft version]
   S --> V[Validate current saved draft and runtime YAML]
-  V --> R[Review differences and prerequisites]
-  R --> A[Apply delegated configuration]
-  A --> N[Start a new verification run]
+  V --> R[Run live candidate investigation]
+  R --> N[Review saved outcome and evidence]
+  N --> A[Apply exact tested configuration]
   S --> C[Conflict: retain edits and compare]
   C --> E
   click E "project.md#seven-step-project-setup" "Setup fields"
@@ -280,3 +291,9 @@ Follow-up proposals retain the original capability and saved connector selectors
 Five Whys, fishbone, FMEA, Kepner–Tregoe, fault-tree and ensemble actions execute through `POST /api/v1/triage/tickets/{ticket_id}/rca`. Each reuses the imported live run's capability and connector selectors under the current caller's authorization, without copying its private conversation or original prompt. The selected method guides a new native investigation; its saved findings, citations, recommendations and uncertainty appear in the workbench. `GET` refreshes saved results without starting work. Failed or blocked attempts retain an inspectable run ID, and retries use the same idempotency key. Sources: [methodology API](../app/api/routes/triage.py), [saved-result projection](../app/persistence/triage.py), [workbench](../frontend/src/pages/RCAWorkbench.tsx), [contract tests](../tests/integration/test_triage_methodology_api.py).
 
 Method-specific numeric diagrams and scores remain unavailable unless actually recorded; generic native results do not manufacture FMEA rankings, probabilities or causal chains. The method controls request an evidence-backed analysis, not a guarantee that evidence establishes a cause. Source: [analysis panel](../frontend/src/components/RcaAnalysisPanel.tsx).
+
+### Test bounded source selections
+
+The saved Jira instance editor loads searchable fields and active project members from the backend. Its builder supports up to four nested AND/OR group levels, 30 combined conditions/groups and three sort fields. Assignees expand from saved member-to-account mappings and current project roles; the server resolves membership and always adds the saved Jira project restriction. Builder validation checks Jira syntax only. **Test builder matches** or **Test custom JQL matches** performs a real bounded issue read and discloses truncation and saved connection revision. Account mappings must be saved before testing; builder and custom JQL are stored separately. This does not start scheduled polling. Sources: [query schema/compiler](../app/connectors/jql.py), [authenticated endpoints](../app/api/routes/connectors_api.py), [Jira interface](../frontend/src/components/connectors/JiraQueryBuilder.tsx).
+
+The Kafka editor loads explicit authorized names from the saved connection resource allowlist. This is configuration retrieval, not cluster discovery. Select explicit names or include/exclude predicates; exclusions win, glob permits only `*` and `?`, and selection cannot expand scope. **Preview live topic metadata** issues bounded native metadata reads and displays actual partitions, unavailable topics and truncation. It does not auto-create topics or enable the connection. Sources: [topic selection](../app/connectors/kafka_topics.py), [Kafka interface](../frontend/src/components/connectors/KafkaTopicSelector.tsx), [scope and metadata tests](../tests/integration/test_kafka_topics_api.py).

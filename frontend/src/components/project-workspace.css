@@ -437,3 +437,11 @@
 .new-project-dialog .project-error { color: var(--acc-rose); }
 .project-switcher :focus-visible, .new-project-dialog :focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
 @media(max-width: 640px) { .project-switcher > svg { display: none; } .project-switcher select { max-width: 125px; } .new-project-dialog { padding: 20px; } .new-project-dialog input, .new-project-dialog textarea { font-size: 16px; } }
+.project-lifecycle { max-width: 900px; }
+.project-lifecycle table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+.project-lifecycle th, .project-lifecycle td { padding: 10px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.project-lifecycle td .btn { margin: 3px; }
+.project-lifecycle fieldset { border: 1px solid var(--line); padding: 16px; }
+.project-lifecycle label { display: flex; flex-direction: column; gap: 8px; }
+.project-lifecycle textarea { width: 100%; color: var(--tx); background: var(--bg); border: 1px solid var(--line-strong); padding: 10px; font: inherit; resize: vertical; }
+.project-lifecycle footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }

@@ -490,3 +490,12 @@ def test_runtime_applies_instance_environment_parameter_overrides(monkeypatch):
     assert captured["instance"]["definition_json"]["custom_field_mapping"] == {
         "customfield_1": "Queue"
     }
+    from app.runtime.run_contract import RunRequest
+    captured.clear()
+    runtime = {"environments": (SimpleNamespace(id="production", enabled=True), SimpleNamespace(id="staging", enabled=True))}
+    capability = SimpleNamespace(requires=SimpleNamespace(connectors=("itsm",)), allowed_actions=("itsm.get_ticket",))
+    scope = asyncio.run(runner._knowledge_scope(principal, capability, RunRequest(text="Investigate"), runtime))
+    assert scope == {"connector_selections": {"itsm": {"instance_id": "jira-main", "environment_id": "production"}}, "environment_ids": ["production"], "instance_ids": ["jira-main"]}
+    assert not captured, "Resolving identity must not construct an additional live client"
+    with pytest.raises(ValueError, match="match the resolved connectors"):
+        asyncio.run(runner._knowledge_scope(principal, capability, RunRequest(text="Investigate", environment_id="staging"), runtime))

@@ -24,6 +24,8 @@ class IntentRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=16000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=100)
     incident_id: str | None = Field(default=None, max_length=64)
+    knowledge_document_ids: list[str] = Field(default_factory=list, max_length=3)
+    environment_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("prompt")
     @classmethod
@@ -168,10 +170,22 @@ async def resolve_intent(state, principal, request: IntentRequest):
     if not sources:
         local = [cap for cap in candidates if not cap.allowed_actions]
         knowledge = getattr(state, "knowledge", None)
-        references = await knowledge.relevant(principal, request.prompt, max_items=1, max_chars=1024) if knowledge else []
-        if local and references:
-            return answer("ready", "I’ll use the approved project guidance and cite the source.",
-                          "approved_project_knowledge", min(local, key=lambda cap: cap.id))
+        selection_error = None
+        for candidate in sorted(local, key=lambda cap: cap.id):
+            try:
+                references = await knowledge.relevant(principal, request.prompt, max_items=3, max_chars=3072,
+                    capability=candidate.id, environment_ids=[request.environment_id] if request.environment_id else [],
+                    document_ids=request.knowledge_document_ids) if knowledge else []
+            except PermissionError as error:
+                # An explicit reference can belong to a later authorized local
+                # workflow. Try its scope before rejecting the selection.
+                selection_error = error
+                continue
+            if references:
+                return answer("ready", "I’ll use the approved project guidance and cite the source.",
+                              "approved_project_knowledge", candidate)
+        if selection_error and request.knowledge_document_ids:
+            raise selection_error
 
     available = [cap for cap in candidates if not sources or sources <= declared_sources(cap)]
     if sources and not available:

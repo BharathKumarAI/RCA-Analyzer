@@ -16,6 +16,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     and_,
+    delete,
     insert,
     select,
     update,
@@ -79,6 +80,19 @@ active = Table(
     Column("report_hash", String(128), nullable=False),
     Column("optimization_id", String(128), nullable=False),
 )
+changes = Table(
+    "optimization_changes", metadata,
+    Column("change_id", String(128), primary_key=True),
+    Column("tenant_id", String(256), nullable=False),
+    Column("project_id", String(256), nullable=False),
+    Column("optimization_id", String(128), nullable=False),
+    Column("actor_subject", String(256), nullable=False),
+    Column("action", String(32), nullable=False),
+    Column("previous_hash", String(128), nullable=False),
+    Column("restored_hash", String(128)),
+    Column("reason", String, nullable=False),
+    Column("created_at", Float, nullable=False),
+)
 
 
 class OptimizationService:
@@ -104,6 +118,7 @@ class OptimizationService:
         )
         self.stop_events = set()
         self.workers = set()
+        self.knowledge = None
 
     async def initialize(self):
         await initialize_tables(self.engine, metadata)
@@ -194,12 +209,15 @@ class OptimizationService:
             )
         if self.registry.get(dataset.capability) is None:
             raise ValueError("Unknown dataset capability")
+        await self.validate_corpus(dataset, principal)
+        await self.validate_provenance(dataset, principal)
         blob_hash = await self.blobs.put(canonical(value))
         info = {
             "description": dataset.description,
             "capability": dataset.capability,
             "train_cases": len(dataset.train),
             "holdout_cases": len(dataset.holdout),
+            "knowledge_documents": len(dataset.knowledge_corpus),
         }
         try:
             async with self.engine.begin() as connection:
@@ -269,12 +287,71 @@ class OptimizationService:
             await self._artifact(row.blob_hash)
         ), row.blob_hash
 
+    async def validate_corpus(self, dataset, principal):
+        if self.knowledge is not None:
+            from app.configuration.knowledge import matches_associations
+            from app.persistence.platform_admin import platform_knowledge
+            async with self.engine.connect() as connection:
+                required = (await connection.execute(select(platform_knowledge.c.doc_id, platform_knowledge.c.required_associations).where(
+                    self.scope(platform_knowledge, principal), platform_knowledge.c.required_associations["required"].as_boolean().is_(True),
+                ).limit(501))).mappings().all()
+            if len(required) > 500:
+                raise ValueError("Required knowledge catalog exceeds its review limit")
+            required_ids = set()
+            for case in [*dataset.train, *dataset.holdout]:
+                for row in required:
+                    association = row["required_associations"]
+                    if dataset.capability not in association.get("capability_ids", []):
+                        continue
+                    if case.knowledge_scope is None and (association.get("environment_ids") or association.get("connector_instance_ids")):
+                        raise ValueError("Required knowledge needs recorded environment and connector scope for every case")
+                    if matches_associations({"associations": association}, dataset.capability,
+                                            case.knowledge_scope.environment_ids if case.knowledge_scope else (),
+                                            case.knowledge_scope.instance_ids if case.knowledge_scope else ()):
+                        required_ids.add(row["doc_id"])
+            if required_ids - {row["doc_id"] for row in dataset.knowledge_corpus}:
+                raise ValueError("The frozen corpus must include approved required knowledge for every recorded case")
+        if not dataset.knowledge_corpus:
+            return
+        if self.knowledge is None:
+            raise ValueError("Knowledge service is unavailable")
+        rows = await self.knowledge.frozen_corpus(principal, document_ids=[row["doc_id"] for row in dataset.knowledge_corpus])
+        if dataset.knowledge_policy != (await self.knowledge.policy(principal)).model_dump(mode="json"):
+            raise ValueError("Knowledge retrieval policy changed; curate a new dataset version")
+        if canonical(sorted(rows, key=lambda row: row["doc_id"])) != canonical(sorted(dataset.knowledge_corpus, key=lambda row: row["doc_id"])):
+            raise ValueError("Knowledge corpus changed or is no longer approved; curate a new dataset version")
+        cases = [*dataset.train, *dataset.holdout]
+        if any((row.get("associations") or {}).get(key) for row in rows for key in ("environment_ids", "connector_instance_ids")) and any(case.knowledge_scope is None for case in cases):
+            raise ValueError("Associated knowledge requires recorded environment and connector scope for every case")
+        if any(set(case.knowledge_document_ids) - {row["doc_id"] for row in rows} for case in cases):
+            raise ValueError("The frozen corpus must include each case's explicitly selected knowledge")
+
+    async def validate_provenance(self, dataset, principal):
+        from app.optimization.improvement import ImprovementService, candidates
+        recorded_families = set()
+        for case in [*dataset.train, *dataset.holdout]:
+            if not case.provenance:
+                continue  # Explicit manually supplied datasets make no server-verification claim.
+            async with self.engine.connect() as connection:
+                row = (await connection.execute(select(candidates).where(self.scope(candidates, principal), candidates.c.candidate_id == case.provenance.get("candidate_id")))).mappings().first()
+            if row is None or row["capability"] != dataset.capability:
+                raise ValueError("Verified candidate provenance is unavailable in this scope")
+            authoritative = ImprovementService.case(ImprovementService.view(row))
+            if authoritative != case:
+                raise ValueError("Verified candidate changed; curate a new dataset version")
+            family = authoritative.incident_id or authoritative.provenance["source_run_id"]
+            if family in recorded_families:
+                raise ValueError("Each recorded incident may appear only once to prevent train/holdout leakage")
+            recorded_families.add(family)
+
     async def execute(self, request, principal):
         if not self.config.enabled:
             raise ValueError("Optimization is disabled")
         if not set(principal.roles) & AUTHOR_ROLES:
             raise PermissionError("Optimization author role required")
         dataset, dataset_hash = await self._dataset(request, principal)
+        await self.validate_corpus(dataset, principal)
+        await self.validate_provenance(dataset, principal)
         resolved = CapabilityResolver(self.registry).resolve(
             dataset.capability, principal, check_health=False
         )
@@ -446,6 +523,9 @@ class OptimizationService:
             )
         }
         result["request"] = json.loads(row.request_json)
+        async with self.engine.connect() as connection:
+            result["is_active"] = bool(await connection.scalar(select(active.c.optimization_id).where(self.scope(active, principal), active.c.optimization_id == optimization_id)))
+            result["changes"] = [dict(item) for item in (await connection.execute(select(changes).where(self.scope(changes, principal), changes.c.optimization_id == optimization_id).order_by(changes.c.created_at.desc()).limit(100))).mappings().all()]
         if include_report and row.report_hash:
             report = await self._artifact(row.report_hash)
             result["report"] = {
@@ -500,6 +580,8 @@ class OptimizationService:
 
         request = OptimizationRequest.model_validate_json(row.request_json)
         dataset, _ = await self._dataset(request, principal)
+        await self.validate_corpus(dataset, principal)
+        await self.validate_provenance(dataset, principal)
         _, parent, current_context, _ = await self._context(
             principal, dataset.capability
         )
@@ -556,6 +638,38 @@ class OptimizationService:
                     if updated.rowcount != 1:
                         raise ValueError("Active content changed during approval")
         # The database is the authority for review and activation, not mutable MLflow tags.
+        return await self.get(optimization_id, principal)
+
+    async def rollback(self, optimization_id, principal, expected_hash, reason, *, revoke=False):
+        """Independently reviewed, compare-and-swap restoration of recorded content."""
+        if not set(principal.roles) & ADMIN_ROLES:
+            raise PermissionError("Administrator review required")
+        if not reason.strip() or len(reason) > 2000:
+            raise ValueError("A bounded review reason is required")
+        if not revoke:
+            self.check_platform()
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(revisions).where(self.scope(revisions, principal), revisions.c.optimization_id == optimization_id))).first()
+            if row is None:
+                raise LookupError("Optimization not found")
+            if row.author_subject == principal.subject:
+                raise PermissionError("A different administrator must review restoration")
+            if row.status != "APPROVED" or row.report_hash != expected_hash:
+                raise ValueError("Only the exact active approved revision can be restored")
+            parent = None
+            if row.parent_hash and not revoke:
+                parent = (await connection.execute(select(revisions).where(self.scope(revisions, principal), revisions.c.report_hash == row.parent_hash, revisions.c.status == "APPROVED"))).first()
+                if parent is None:
+                    raise ValueError("The previous revision is no longer approved; revoke instead")
+                report = await self._artifact(parent.report_hash)
+                if report["platform_hash"] != self.platform_hash:
+                    raise ValueError("Previous content is incompatible; revoke instead")
+            statement = update(active).values(report_hash=parent.report_hash, optimization_id=parent.optimization_id) if parent else delete(active)
+            changed = await connection.execute(statement.where(self.scope(active, principal), active.c.report_hash == expected_hash, active.c.optimization_id == optimization_id))
+            if changed.rowcount != 1:
+                raise ValueError("Active content changed; reload before restoration")
+            await connection.execute(update(revisions).where(revisions.c.optimization_id == optimization_id).values(status="REVOKED"))
+            await connection.execute(insert(changes).values(change_id="change_" + uuid.uuid4().hex, tenant_id=principal.tenant_id, project_id=principal.project_id, optimization_id=optimization_id, actor_subject=principal.subject, action="revoke" if revoke else "rollback", previous_hash=expected_hash, restored_hash=parent.report_hash if parent else None, reason=redact(reason.strip(), max_text=2000), created_at=time.time()))
         return await self.get(optimization_id, principal)
 
     async def aclose(self):

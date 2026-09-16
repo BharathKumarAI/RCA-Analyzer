@@ -233,8 +233,8 @@ export async function saveProjectEditor(document: Record<string, unknown>, expec
 export async function validateProjectSetup(yaml: string, expectedEditorVersion?: number): Promise<ProjectValidationResult> {
   return request<ProjectValidationResult>('/api/v1/project/validate', { method: 'POST', body: { yaml, expected_editor_version: expectedEditorVersion } });
 }
-export async function saveProjectSetup(yaml: string, expectedProjectRevision?: string, expectedEditorVersion?: number): Promise<ProjectSetupResponse> {
-  return request<ProjectSetupResponse>('/api/v1/project/setup', { method: 'POST', body: { yaml, expected_project_revision: expectedProjectRevision, expected_editor_version: expectedEditorVersion } });
+export async function saveProjectSetup(yaml: string, expectedProjectRevision?: string, expectedEditorVersion?: number, candidateRunId?: string): Promise<ProjectSetupResponse> {
+  return request<ProjectSetupResponse>('/api/v1/project/setup', { method: 'POST', body: { yaml, expected_project_revision: expectedProjectRevision, expected_editor_version: expectedEditorVersion, candidate_run_id: candidateRunId } });
 }
 export async function fetchAuditLogs(): Promise<AuditLog[]> { return request<AuditLog[]>('/api/v1/audit'); }
 export async function fetchSystemDiagnostics(): Promise<SystemDiagnostics> { return request<SystemDiagnostics>('/api/v1/system/diagnostics'); }
@@ -268,15 +268,22 @@ export async function updatePlatformFileProcessing(values: Record<string, unknow
 }
 export async function triggerRetentionCleanup(): Promise<CleanupResult> { return request<CleanupResult>('/api/v1/persistence/cleanup', { method: 'POST' }); }
 
-export async function fetchKnowledge(): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge'); }
+export async function fetchKnowledge(signal?: AbortSignal): Promise<KnowledgeItem[]> { return request<KnowledgeItem[]>('/api/v1/knowledge', { signal }); }
+export async function uploadKnowledgeBatch(entries: { file: File; metadata: import('../types/api').KnowledgeUploadMetadata }[]): Promise<{ outcomes: import('../types/api').KnowledgeUploadOutcome[] }> {
+  const body = new FormData();
+  for (const entry of entries) body.append('files', entry.file);
+  body.append('metadata', JSON.stringify(entries.map(entry => entry.metadata)));
+  return request('/api/v1/knowledge/upload/batch', { method: 'POST', body });
+}
 export async function createKnowledgeDoc(payload: KnowledgePayload): Promise<KnowledgeItem> { return request('/api/v1/knowledge', { method: 'POST', body: payload }); }
-export async function uploadKnowledgeDoc(file: File, title: string, category?: string, replacement?: { doc_id: string; expected_hash: string }, tags: string[] = []): Promise<KnowledgeItem> {
+export async function uploadKnowledgeDoc(file: File, title: string, category?: string, replacement?: { doc_id: string; expected_hash: string }, tags: string[] = [], associations?: import('../types/api').KnowledgeAssociations): Promise<KnowledgeItem> {
   const body = new FormData();
   body.append('file', file);
   body.append('title', title);
   if (category?.trim()) body.append('category', category.trim());
   if (replacement) { body.append('doc_id', replacement.doc_id); body.append('expected_hash', replacement.expected_hash); }
   body.append('tags', JSON.stringify(tags));
+  if (associations) body.append('associations', JSON.stringify(associations));
   return request<KnowledgeItem>('/api/v1/knowledge/upload', { method: 'POST', body });
 }
 export async function updateKnowledgeDoc(id: string, payload: KnowledgePayload): Promise<KnowledgeItem> { return request(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: 'PUT', body: payload }); }

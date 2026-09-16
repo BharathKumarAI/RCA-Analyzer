@@ -14,6 +14,7 @@ interface CommandItem {
   id: string;
   title: string;
   category: string;
+  description: string;
   page: ActivePage;
   icon: React.ReactNode;
 }
@@ -43,12 +44,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const items: CommandItem[] = settings.navigation.flatMap(item => {
     if (!item.visible || !isActivePage(item.page)) return [];
     const Icon = PAGE_ICONS[item.page];
-    return [{ id: item.page, title: item.label, category: item.group, page: item.page, icon: <Icon size={15} /> }];
+    return [{ id: item.page, title: item.label, category: item.group, description: item.description, page: item.page, icon: <Icon size={15} /> }];
   });
 
   const filtered = items.filter(i =>
     i.title.toLowerCase().includes(query.toLowerCase()) ||
-    i.category.toLowerCase().includes(query.toLowerCase())
+    i.category.toLowerCase().includes(query.toLowerCase()) ||
+    i.description.toLowerCase().includes(query.toLowerCase()) ||
+    i.page.includes(query.toLowerCase())
   );
 
   return (
@@ -102,7 +105,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 <div style={{ color: 'var(--acc)' }}>{item.icon}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>{item.title}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{item.category}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{item.description || item.category}</div>
                 </div>
                 <span style={{ fontSize: '10px', color: 'var(--muted)', background: 'var(--bg)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--line)' }}>
                   Jump

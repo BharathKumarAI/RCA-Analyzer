@@ -1,6 +1,7 @@
 """Tenant-owned projects, independently verified memberships, and project selection."""
 
 import time
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -15,6 +16,7 @@ from app.identity.principals import Role, UserPrincipal
 from app.persistence.database import initialize_tables
 from app.persistence.platform_admin import platform_users, project_editor_drafts
 from app.runtime.run_contract import content_hash
+from app.policy.redaction import redact
 
 metadata = MetaData(schema="platform")
 project_catalog = Table("project_catalog", metadata,
@@ -59,6 +61,31 @@ class ProjectDetails(BaseModel):
 
 class ProjectCreate(ProjectDetails):
     project_id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+class ProjectLifecycleChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["deactivate", "activate", "archive", "restore"]
+    expected_hash: str = Field(min_length=1, max_length=80)
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def explanation(cls, value):
+        if not value.strip():
+            raise ValueError("Explain this project lifecycle change")
+        return value.strip()
+
+
+LIFECYCLE_TRANSITIONS = {"deactivate": ("active", "inactive"), "activate": ("inactive", "active"),
+                         "archive": ("inactive", "archived"), "restore": ("archived", "inactive")}
+LIFECYCLE_ROLES = {Role.PLATFORM_ADMIN.value, Role.PROJECT_OWNER.value}
+
+
+def lifecycle_view(row):
+    fields = {key: row[key] for key in ("project_id", "name", "description", "timezone", "status", "updated_at")}
+    return fields | {"content_hash": content_hash(fields), "actions": [
+        action for action, (before, _after) in LIFECYCLE_TRANSITIONS.items() if row["status"] == before]}
 
 
 async def apply_project_details(connection, settings, expected_editor_version):
@@ -135,10 +162,18 @@ class ProjectStore:
                 project_preferences.c.subject == subject))).mappings().first()
         return [dict(row) for row in rows], dict(preference) if preference else None
 
-    async def principal(self, subject, selected=None):
+    async def principal(self, subject, selected=None, *, allow_management=False):
         rows, preference = await self.memberships(subject)
         available = {row["project_id"]: row for row in rows
                      if row["status"] == "active" and row["membership_status"] == "active"}
+        managed = [row for row in rows if row["membership_status"] == "active"
+                   and row["status"] in {"inactive", "archived"} and LIFECYCLE_ROLES.intersection(row["roles"])]
+        if allow_management and ((selected is not None and any(row["project_id"] == selected for row in managed))
+                                 or (selected is None and not available and managed)):
+            # Identity-only recovery grants no project access or administrator role.
+            # Lifecycle handlers independently recheck membership in their target.
+            return UserPrincipal(subject=subject, username=subject, tenant_id=self.settings.tenant_id,
+                                 project_id="", roles=(Role.GENERIC_USER,))
         if selected is not None and selected not in available:
             raise PermissionError("You do not have active access to this project")
         target = selected or next((key for key in (
@@ -170,6 +205,39 @@ class ProjectStore:
                 for row in rows if row["status"] == "active" and row["membership_status"] == "active"
                 and set(row["roles"]) - {Role.GENERIC_USER.value}],
             "current_project_id": principal.project_id, "can_create": Role.PLATFORM_ADMIN in principal.roles}
+
+    async def management(self, principal):
+        rows, _ = await self.memberships(principal.subject)
+        return {"items": [lifecycle_view(row) for row in rows if row["membership_status"] == "active"
+                          and LIFECYCLE_ROLES.intersection(row["roles"])]}
+
+    async def change_lifecycle(self, principal, project_id, payload):
+        if principal.tenant_id != self.settings.tenant_id:
+            raise PermissionError("Project is outside this tenant")
+        async with self.engine.begin() as connection:
+            row = (await connection.execute(select(project_catalog).where(
+                *self._scope(project_catalog, project_id)).with_for_update())).mappings().first()
+            member = (await connection.execute(select(platform_users).where(
+                *self._scope(platform_users, project_id), platform_users.c.subject == principal.subject
+            ).with_for_update())).mappings().first()
+            if row is None or member is None or member["status"] != "active" or not LIFECYCLE_ROLES.intersection(member["roles"]):
+                raise PermissionError("An active owner or administrator membership in this project is required")
+            if lifecycle_view(row)["content_hash"] != payload.expected_hash:
+                raise ValueError("Project changed; refresh and review its current state")
+            before, after = LIFECYCLE_TRANSITIONS[payload.action]
+            if row["status"] != before:
+                raise ValueError(f"{payload.action.title()} requires an {before} project")
+            now = time.time()
+            changed = await connection.execute(update(project_catalog).where(
+                *self._scope(project_catalog, project_id), project_catalog.c.updated_at == row["updated_at"],
+                project_catalog.c.status == before).values(status=after, updated_at=now))
+            if changed.rowcount != 1:
+                raise ValueError("Project changed; refresh and review its current state")
+            await connection.execute(insert(audit).values(tenant_id=principal.tenant_id, project_id=project_id,
+                actor_subject=principal.subject, tool="projects", variable_name=project_id,
+                action=payload.action, revision=1, created_at=now,
+                details={"from": before, "to": after, "expected_hash": payload.expected_hash, "reason": redact(payload.reason)}))
+        return lifecycle_view(dict(row) | {"status": after, "updated_at": now})
 
     async def select(self, subject, project_id):
         principal = await self.principal(subject, project_id)

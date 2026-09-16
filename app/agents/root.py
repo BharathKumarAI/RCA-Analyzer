@@ -16,6 +16,7 @@ from app.agents.workflows.evidence_acquisition import (
 )
 from app.agents.rca_synthesizer import build_synthesizer
 from app.models.bounded import BoundedModel
+from app.models.profiles import StageModel
 from app.tools.catalog import TOOL_ACTIONS, build_tools
 from app.configuration.models import AgentDefinition, WorkflowOptions
 
@@ -40,9 +41,28 @@ def build_root_agent(
     approved_agents=(),
     model_factory=None,
 ):
-    stages = profiles.resolve(contract.model_profile)
-    bundle = json.loads(contract.model_config_json).get("harness_bundle")
+    snapshot = json.loads(contract.model_config_json)
+    stages = {name: StageModel.model_validate(value) for name, value in snapshot["stages"].items()} if snapshot.get("stages") else profiles.resolve(contract.model_profile)
+    stages.setdefault("evidence", stages["logs"])
+    prompts = snapshot.get("prompts", prompts)
+    bundle = snapshot.get("harness_bundle")
     compiled = Compilation.model_validate(bundle["compilation"]) if bundle else None
+
+    def definition_model(definition, key, collection="harness_models"):
+        frozen = snapshot.get(collection, {}).get(key)
+        return StageModel.model_validate(frozen) if frozen is not None else profiles.resolve_stage(definition.model_profile, definition.stage_model)
+
+    def configured_stage(name, default):
+        override = compiled.overrides.get(name) if compiled else None
+        return definition_model(override, name) if override else stages[default]
+
+    triage_stage = configured_stage("triage_agent", "triage")
+    logs_stage = configured_stage("logs_investigator", "logs")
+    evidence_stage = configured_stage("connector_evidence_investigator", "evidence")
+    file_stage = configured_stage("file_investigator", "extraction")
+    planning_stage = configured_stage("request_orchestrator", "triage")
+    router_stage = configured_stage("specialist_router", "triage")
+    synthesis_stage = configured_stage("rca_synthesizer", "synthesis")
     budget = {"calls": 0, "limit": governance.settings.max_llm_calls}
 
     def model(stage, config=None):
@@ -121,7 +141,7 @@ def build_root_agent(
     if (
         "triage" in enabled_agent_stages
         and "get_ticket" in available_tools
-        and stages["triage"].enabled
+        and triage_stage.enabled
     ):
 
         def triage_instruction(ctx):
@@ -151,8 +171,8 @@ def build_root_agent(
 
         incident_steps.append(
             build_triage(
-                model("triage"),
-                stages["triage"],
+                model("triage", triage_stage),
+                triage_stage,
                 [available_tools["get_ticket"]],
                 governance,
                 triage_instruction,
@@ -161,7 +181,7 @@ def build_root_agent(
     if (
         "logs" in enabled_agent_stages
         and "query_range" in available_tools
-        and stages["logs"].enabled
+        and logs_stage.enabled
     ):
 
         def logs_instruction(ctx):
@@ -185,26 +205,26 @@ def build_root_agent(
 
         incident_steps.append(
             build_log_investigator(
-                model("logs"),
-                stages["logs"],
+                model("logs", logs_stage),
+                logs_stage,
                 [available_tools["query_range"]],
                 governance,
                 logs_instruction,
             )
         )
     evidence_tools = [tool for name, tool in available_tools.items() if name.startswith("read_")]
-    if "evidence" in enabled_agent_stages and evidence_tools and stages["logs"].enabled:
+    if "evidence" in enabled_agent_stages and evidence_tools and evidence_stage.enabled:
         branches.append(LlmAgent(
             name="connector_evidence_investigator",
-            model=model("logs"),
+            model=model("evidence", evidence_stage),
             description="Read bounded evidence from capability-scoped systems.",
-            instruction=UNTRUSTED_DATA_RULE + "Retrieve only evidence relevant to the request. "
-            "Each tool reads a fixed deployment-scoped resource. Cite evidence IDs, report truncation, "
-            "and distinguish configuration snapshots from historic observations.\nSkills:\n"
-            + instruction_skills + "\nRequest:\n" + request_text,
+            instruction=UNTRUSTED_DATA_RULE + prompts["evidence"]
+            + "\nCapability: " + capability.name + " — " + capability.description
+            + "\nPermitted evidence actions: " + ", ".join(capability.allowed_actions)
+            + "\nSkills:\n" + instruction_skills + "\nRequest:\n" + request_text,
             tools=evidence_tools,
             output_key="connector_evidence_result",
-            generate_content_config=stages["logs"].generation_config(),
+            generate_content_config=evidence_stage.generation_config(),
             before_tool_callback=governance.before_tool,
             after_tool_callback=governance.after_tool,
             on_tool_error_callback=governance.on_tool_error,
@@ -216,7 +236,7 @@ def build_root_agent(
         "file" in enabled_agent_stages
         and workflow.attachments
         and contract.request.attachment_ids
-        and stages["extraction"].enabled
+        and file_stage.enabled
     ):
 
         def file_instruction(ctx):
@@ -235,7 +255,7 @@ def build_root_agent(
 
         branches.append(
             build_file_investigator(
-                model("extraction"), stages["extraction"], governance, file_instruction
+                model("extraction", file_stage), file_stage, governance, file_instruction
             )
         )
 
@@ -267,11 +287,11 @@ def build_root_agent(
             + request_text
         )
 
-    if workflow.planning and stages["triage"].enabled:
+    if workflow.planning and planning_stage.enabled:
         steps.append(
             build_orchestrator(
-                model("orchestrator", stages["triage"]),
-                stages["triage"],
+                model("orchestrator", planning_stage),
+                planning_stage,
                 governance,
                 orchestration_instruction,
             )
@@ -282,13 +302,10 @@ def build_root_agent(
     # ADK's arbitrary Python-reference YAML loader on team-authored input.
     specialist_tools = []
     for draft in (
-        approved_agents if workflow.specialists and stages["triage"].enabled else ()
+        approved_agents if workflow.specialists and router_stage.enabled else ()
     ):
         definition = draft.definition
-        stage_config = (
-            profiles.resolve(definition.model_profile).get(definition.stage_model)
-            or profiles.stages[definition.stage_model]
-        )
+        stage_config = definition_model(definition, definition.id, "specialist_models")
         if not stage_config.enabled:
             governance.failures.append(
                 f"Approved specialist {definition.id} has a disabled model stage"
@@ -354,12 +371,12 @@ def build_root_agent(
             LlmAgent(
                 name="specialist_router",
                 description="Delegate only to relevant approved project specialists.",
-                model=model("router", stages["triage"]),
+                model=model("router", router_stage),
                 tools=specialist_tools,
                 instruction=router_instruction,
                 output_key="specialist_result",
                 include_contents="none",
-                generate_content_config=stages["triage"].generation_config(),
+                generate_content_config=router_stage.generation_config(),
                 before_tool_callback=before_delegate,
                 after_model_callback=governance.after_model,
             )
@@ -371,6 +388,7 @@ def build_root_agent(
             for key in (
                 "triage_result",
                 "logs_result",
+                "connector_evidence_result",
                 "file_result",
                 "specialist_result",
                 "request_plan",
@@ -403,7 +421,7 @@ def build_root_agent(
 
     steps.append(
         build_synthesizer(
-            model("synthesis"), stages["synthesis"], governance, synthesis_instruction
+            model("synthesis", synthesis_stage), synthesis_stage, governance, synthesis_instruction
         )
     )
     agents = {agent.name: agent for agent in steps}
@@ -419,7 +437,7 @@ def build_root_agent(
                 original = prompts[stage]
                 return text.replace(original, override.instruction) if original in text else text + "\nApproved instructions:\n" + override.instruction
             native.instruction = overridden_instruction
-            config = profiles.resolve(override.model_profile)[override.stage_model]
+            config = definition_model(override, name)
             native.model = model(stage, config)
             native.generate_content_config = config.generation_config()
             if name != "specialist_router":
@@ -428,7 +446,7 @@ def build_root_agent(
                     raise PermissionError("An approved builtin tool is unavailable")
                 native.tools = tools
         for path, definition in compiled.agents.items():
-            config = profiles.resolve(definition.model_profile)[definition.stage_model]
+            config = definition_model(definition, path)
             tools = [action_tools[action] for action in definition.tools if action_tools.get(action)]
             if len(tools) != len(definition.tools):
                 raise PermissionError("An approved workflow tool is unavailable")

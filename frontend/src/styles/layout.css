@@ -1351,7 +1351,6 @@
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
-  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
 }
 
@@ -1878,7 +1877,8 @@
   .sidebar, .sidebar.collapsed { width: 56px; padding: 12px 6px; }
   .sidebar-header, .sidebar-heading { display: none; }
   .sidebar .nav-item { justify-content: center; min-height: 40px; padding: 8px; }
-  .sidebar .nav-item span, .sidebar-action-btn span { display: none; }
+  .sidebar .nav-item > span:not(.nav-item-icon), .sidebar-action-btn span { display: none; }
+  .sidebar .sidebar-brand-text, .sidebar .sidebar-footer-text, .sidebar .sidebar-collapse-label { display: none; }
   .sidebar-action-btn { padding: 10px; }
   .topbar-scope-btn, .topbar-scope-tag, .topbar-workspace-tag, .topbar-user-name, .topbar-role-badge, .topbar-user-chevron { display: none; }
   .topbar-left { min-width: 0; }
@@ -3421,6 +3421,9 @@
 .team-topbar .topbar-breadcrumbs { display: none; }
 .topbar-search-btn { min-height: 34px; }
 .topbar-search-btn > svg, .topbar-search-kbd { flex-shrink: 0; }
+@media (max-width: 1500px) {
+  .topbar-nav-pills { display: none; }
+}
 @media (max-width: 1180px) {
   .topbar-workspace-tag, .topbar-breadcrumbs { display: none; }
   .topbar-user-info { display: none; }
@@ -3433,12 +3436,15 @@
   .topbar-search-btn { justify-content: center; padding: 8px; }
   .topbar-action-btn span { display: none; }
 }
-@media (max-width: 640px) {
+@media (max-width: 1050px) {
   .topbar { min-height: 94px; height: auto; flex-wrap: wrap; gap: 4px 8px; padding: 7px 10px; }
-  .topbar-left { width: 100%; gap: 6px; justify-content: space-between; }
+  .topbar-left { width: 100%; height: 34px; gap: 6px; justify-content: space-between; }
   .topbar-brand-title { white-space: nowrap; font-size: 13px; }
   .topbar-brand-icon { display: none; }
   .topbar-right { margin-left: auto; }
+  .topbar-live-chip, .topbar-time-dropdown-btn { display: none; }
+  .topbar-right, .topbar-utility-dock { min-width: 0; }
+  .topbar-scope-popover, .topbar-module-popover, .topbar-popover { position: fixed; top: 94px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 110px); overflow-y: auto; }
   .topbar-project-selector-wrapper { min-width: 0; }
   .project-switcher { gap: 3px; }
   .project-switcher select { max-width: 106px; }

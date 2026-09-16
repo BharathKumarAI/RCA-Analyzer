@@ -15,6 +15,7 @@ from app.connectors.providers.evidence import (
 from app.connectors.providers.oracle import OracleConnector
 from app.connectors.providers.infrastructure import KafkaConnector, UnixConnector
 from app.connectors.providers.mcp_evidence import McpEvidenceConnector
+from app.connectors.kafka_topics import authorized_topics
 
 NATIVE_FACTORIES = {
     "itsm": JiraConnector, "log_search": SplunkConnector,
@@ -383,6 +384,7 @@ def resolve_connector_provider(
                 username=credentials.get("username", ""),
                 password=resolved_secrets.get("password_secret_ref", ""),
                 topic_filter=resolved.get("topic_filter"), timeout_s=timeout_s,
+                allowed_topics=authorized_topics(resolved), topic_selection=resolved.get("kafka_topic_selection"),
                 **limits,
             )
         elif template_id == "unix":

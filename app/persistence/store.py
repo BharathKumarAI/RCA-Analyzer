@@ -779,6 +779,10 @@ class InvestigationStore:
                 continue
             if previous.request.connector_selections != contract.request.connector_selections:
                 continue
+            if (previous.request.environment_id != contract.request.environment_id
+                    or previous.request.knowledge_document_ids != contract.request.knowledge_document_ids
+                    or previous_snapshot.get("knowledge_references") != snapshot.get("knowledge_references")):
+                continue
             if any(previous_snapshot.get(key) != snapshot.get(key)
                    for key in ("allowed_actions", "disabled_connectors", "environments", "workflow")):
                 continue

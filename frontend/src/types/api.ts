@@ -1,3 +1,4 @@
+import type { AnswerVisual } from './visuals';
 export type SystemRole = 'PLATFORM_ADMIN' | 'PROJECT_OWNER' | 'PROJECT_MANAGER' | 'PROJECT_ANALYST' | 'PROJECT_VIEWER' | 'GENERIC_USER';
 
 export type RunConnectorSelections = Record<string, { instance_id: string; environment_id?: string }>;
@@ -433,6 +434,7 @@ export interface Run {
     recommended_actions: string[];
     follow_up_questions?: string[];
     presentation?: string;
+    visuals?: AnswerVisual[];
   };
   capability: string;
   prompt: string;
@@ -790,6 +792,7 @@ export interface StageDefinitionItem {
 }
 
 export interface ProjectValidationResult {
+  candidate_test_required?: boolean;
   valid: boolean;
   errors: string[];
   warnings: string[];
@@ -1111,7 +1114,27 @@ export interface CleanupResult {
   message: string;
 }
 
+export interface KnowledgeAssociations {
+  environment_ids: string[];
+  capability_ids: string[];
+  connector_instance_ids: string[];
+  required: boolean;
+}
+export type KnowledgeScopes = Record<'environment_ids' | 'capability_ids' | 'connector_instance_ids', { id: string; name: string }[]>;
+
+export interface KnowledgeStructure {
+  topic: string;
+  summary: string;
+  blocks: { kind: string; title: string; content: string }[];
+}
+
 export interface KnowledgeItem {
+  structure?: KnowledgeStructure | null;
+  capture?: { source: { kind: 'document' | 'jira_ticket' | 'confluence' | 'feedback'; id: string; content_hash: string; metadata: Record<string, unknown> }; captured_at: number } | null;
+  capture_eligibility?: { eligible: boolean; reasons: string[] };
+  associations?: KnowledgeAssociations | null;
+  required_associations?: KnowledgeAssociations | null;
+  upload_match?: { revision: number; content_hash: string; current_revision: number };
   id: string;
   doc_id?: string;
   title: string;
@@ -1132,6 +1155,18 @@ export interface KnowledgeItem {
   needs_revision?: boolean;
   created_at?: number;
   updated_at?: number;
+  okf_bundle_id?: string | null;
+  okf_concept_path?: string | null;
+  okf?: {
+    version: number;
+    metadata: Record<string, unknown>;
+    envelope_hash: string;
+    source_hash: string;
+    source_artifact_hash: string;
+    bundle_manifest_hash: string;
+    links: { target: string; path: string; resolved: boolean }[];
+  } | null;
+  okf_eligibility?: { eligible: boolean; reason: string; freshness: string; source_status: string | null; stale_after: string | null; policy: string };
   upload?: {
     filename: string;
     sha256: string;
@@ -1142,7 +1177,28 @@ export interface KnowledgeItem {
   };
 }
 
+export interface KnowledgeUploadMetadata {
+  title: string;
+  category?: string;
+  tags?: string[];
+  associations?: KnowledgeAssociations;
+  doc_id?: string;
+  expected_hash?: string;
+}
+export interface KnowledgeUploadOutcome {
+  index: number;
+  filename: string;
+  status: 'created' | 'duplicate' | 'failed';
+  document?: KnowledgeItem;
+  matched_revision?: number;
+  matched_content_hash?: string;
+  duplicate_historical?: boolean;
+  error?: { code: string; message: string };
+}
+
 export interface KnowledgePayload {
+  structure?: KnowledgeStructure | null;
+  associations?: KnowledgeAssociations;
   title: string;
   category: string;
   tags: string[];
@@ -1150,6 +1206,7 @@ export interface KnowledgePayload {
   media_type?: string;
   status?: string;
   expected_hash?: string;
+  okf_metadata?: Record<string, unknown>;
 }
 
 export interface RuntimeStageItem {

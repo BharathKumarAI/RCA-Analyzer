@@ -319,7 +319,7 @@ class JiraConnector(BaseConnector):
         try:
             async with self._client.stream("GET", endpoint) as response:
                 if not 200 <= response.status_code < 300:
-                    raise ConnectorError(f"Jira issue request failed with HTTP {response.status_code}")
+                    raise ConnectorError(f"Jira issue request failed with HTTP {response.status_code}", status_code=response.status_code)
                 payload = json.loads(await self.read_limited(response))
         except (httpx2.TimeoutException, httpx2.RequestError) as exc:
             raise ConnectorError(f"Jira issue request failed: {type(exc).__name__}") from None
@@ -369,9 +369,10 @@ class JiraConnector(BaseConnector):
         # Parse ADF comments in v3
         comment_container = fields.get("comment") or {}
         raw_comments = comment_container.get("comments", []) if isinstance(comment_container, dict) else []
-        comments_count = len(raw_comments)
+        comments_total = comment_container.get("total") if isinstance(comment_container, dict) else None
+        comments_count = comments_total if isinstance(comments_total, int) and not isinstance(comments_total, bool) and comments_total >= len(raw_comments) else len(raw_comments)
         parsed_comments = []
-        for c in raw_comments:
+        for c in raw_comments[:50]:
             if isinstance(c, dict):
                 parsed_comments.append({
                     "id": c.get("id"),
@@ -395,6 +396,7 @@ class JiraConnector(BaseConnector):
             "key": payload.get("key", ticket_id),
             "summary": fields.get("summary", ""),
             "status": (fields.get("status") or {}).get("name", ""),
+            "status_category": ((fields.get("status") or {}).get("statusCategory") or {}).get("key"),
             "created": fields.get("created"),
             "updated": fields.get("updated"),
             "resolved": fields.get("resolutiondate"),
@@ -423,6 +425,8 @@ class JiraConnector(BaseConnector):
             ],
             "comments": parsed_comments,
             "comments_count": comments_count,
+            "comments_returned": len(parsed_comments),
+            "comments_truncated": comments_count > len(parsed_comments) or bool(comment_container.get("startAt", 0)),
             "attachments_count": attachments_count,
         }
 
@@ -433,6 +437,7 @@ class JiraConnector(BaseConnector):
         max_results: int = 50,
         fields: Optional[list[str]] = None,
         timeout_s: Optional[float] = None,
+        next_page_token: str | None = None,
     ) -> Dict[str, Any]:
         """Search issues via Jira Cloud REST API Version 3 with cursor-based pagination and scoped JQL."""
         scoped_jql = scope_jql_expression(jql, self.project_key)
@@ -441,9 +446,13 @@ class JiraConnector(BaseConnector):
         max_pages = 5
 
         deadline = time.perf_counter() + (timeout_s or 15.0)
-        seen_tokens: set[str] = set()
-        next_token: Optional[str] = None
+        if next_page_token is not None and (not isinstance(next_page_token, str) or not next_page_token or len(next_page_token) > 4096):
+            raise ValueError("Invalid Jira search pagination token")
+        seen_tokens: set[str] = {next_page_token} if next_page_token else set()
+        next_token: Optional[str] = next_page_token
         all_issues: list[dict[str, Any]] = []
+        response_bytes = 0
+        possibly_truncated = False
 
         for page_idx in range(max_pages):
             if time.perf_counter() > deadline:
@@ -473,28 +482,38 @@ class JiraConnector(BaseConnector):
                 async with self._client.stream("POST", endpoint, json=body_payload) as response:
                     if not 200 <= response.status_code < 300:
                         raise ConnectorError(f"Jira search request failed with HTTP {response.status_code}")
-                    payload = json.loads(await self.read_limited(response))
+                    raw = await self.read_limited(response)
+                    response_bytes += len(raw)
+                    if response_bytes > self.max_response_bytes:
+                        raise ConnectorError("Jira search exceeded the total response-byte limit")
+                    payload = json.loads(raw)
             except (httpx2.TimeoutException, httpx2.RequestError) as exc:
                 raise ConnectorError(f"Jira search request failed: {type(exc).__name__}") from None
+            except json.JSONDecodeError:
+                raise ConnectorError("Jira search returned invalid JSON") from None
 
             if not isinstance(payload, dict):
                 raise ConnectorError("Invalid Jira search response schema")
 
             raw_issues = payload.get("issues", [])
-            if not isinstance(raw_issues, list):
+            if not isinstance(raw_issues, list) or len(raw_issues) > page_size:
                 raise ConnectorError("Invalid Jira search issues list")
 
             for issue in raw_issues:
-                if isinstance(issue, dict):
-                    issue_fields = issue.get("fields", {})
-                    desc = issue_fields.get("description")
-                    if isinstance(desc, (dict, list)):
-                        issue_fields["description"] = adf_to_text(desc)
-                    all_issues.append(issue)
-                    if len(all_issues) >= target_max:
-                        break
+                if not isinstance(issue, dict) or not re.fullmatch(re.escape(self.project_key) + r"-[0-9]+", str(issue.get("key", "")), re.I):
+                    raise ConnectorError("Jira search returned an issue outside the authorized project")
+                issue_fields = issue.get("fields", {})
+                if not isinstance(issue_fields, dict):
+                    raise ConnectorError("Invalid Jira search issue fields")
+                desc = issue_fields.get("description")
+                if isinstance(desc, (dict, list)):
+                    issue_fields["description"] = adf_to_text(desc)
+                all_issues.append(issue)
 
             next_token = payload.get("nextPageToken")
+            if next_token is not None and (not isinstance(next_token, str) or len(next_token) > 4096):
+                raise ConnectorError("Invalid Jira search pagination token")
+            possibly_truncated = bool(next_token) or payload.get("isLast") is False
             if not next_token:
                 break
             if next_token in seen_tokens:
@@ -504,7 +523,8 @@ class JiraConnector(BaseConnector):
         return {
             "issues": all_issues,
             "total": len(all_issues),
-            "nextPageToken": next_token if len(all_issues) < target_max else None,
+            "nextPageToken": next_token,
+            "possibly_truncated": possibly_truncated,
         }
 
     async def discover_fields(self, *, include_schema: bool = False) -> list[dict[str, str]]:

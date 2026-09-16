@@ -601,6 +601,20 @@ class ParameterStore:
 
     @staticmethod
     def runtime_value(tool, name, value):
+        if tool == "knowledge" and name == "capture_lookback_months":
+            if type(value) is not int or not 1 <= value <= 24:
+                raise ValueError("Knowledge capture lookback must be 1 to 24 calendar months")
+        if tool == "knowledge" and name in {"closure_deviation_threshold", "closure_min_confidence"}:
+            if type(value) not in {int, float} or not math.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError("Closure thresholds must be finite numbers between 0 and 1")
+        if tool == "knowledge" and name in {"closure_judge_stage", "closure_judge_instruction"}:
+            limit = 128 if name == "closure_judge_stage" else 16000
+            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                raise ValueError(f"Closure judge configuration must be nonblank text of at most {limit} characters")
+        if tool == "knowledge" and name.startswith("okf_"):
+            from app.configuration.okf import OKFPolicy
+
+            OKFPolicy.model_validate({name.removeprefix("okf_"): value})
         if tool == "itsm" and name == "custom_field_mapping":
             from app.connectors.providers.jira import validate_custom_field_mapping
 

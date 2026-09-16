@@ -1,0 +1,17 @@
+.markdown-code-block { min-width: 0; margin-block: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.markdown-code-block > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; color: var(--muted); background: var(--card-subtle); font-size: 12px; }
+.markdown-code-block button { font: inherit; color: var(--tx); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-sm); min-height: 32px; padding: 4px 8px; cursor: pointer; }
+.markdown-code-block button:focus-visible, .markdown-code-block summary:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 2px; }
+.markdown-code-block pre { margin: 0 !important; padding: 16px; overflow: auto; white-space: pre !important; font-family: var(--font-mono); font-size: 13px; line-height: 1.6; max-height: 600px; }
+.markdown-code-block > p { margin: 8px 12px; font-size: 13px; }
+.mermaid-block { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; }
+.mermaid-block > button { align-self: flex-start; }
+.mermaid-frame { display: block; width: 100%; min-height: 160px; max-height: 640px; border: 0; background: white; }
+.mermaid-frame.is-full-size { height: min(70vh, 720px); aspect-ratio: auto !important; }
+.mermaid-block > p { padding: 16px 0; }
+.mermaid-block summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.mermaid-block details[open] summary { margin-bottom: 12px; }
+@media (pointer: coarse) {
+  .markdown-code-block button, .mermaid-block summary { min-height: 44px; }
+  .mermaid-block summary { align-content: center; }
+}

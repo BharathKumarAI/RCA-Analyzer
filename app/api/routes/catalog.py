@@ -10,12 +10,13 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 import yaml
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from app.api.schemas import RunExecutionRequest
 
 from app.capabilities.resolver import CapabilityResolver
 from app.tools.catalog import TOOL_ACTIONS
@@ -30,7 +31,7 @@ from app.connectors.health import CheckStatus, ConnectorHealth
 from app.connectors.providers.project_storage import project_prefix
 from app.configuration.database_bundle import update_bundle_file
 from app.models.profiles import ModelProfiles, StageModel
-from app.runtime.run_contract import content_hash
+from app.runtime.run_contract import RunResponse, content_hash
 from app.identity.principals import Role, UserPrincipal
 from app.observability.otel import telemetry_status
 from app.persistence.platform_admin import DEFAULT_PERMISSIONS, DEFAULT_SYSTEM_ROLES
@@ -38,6 +39,7 @@ from app.api.dependencies import Principal, require_roles
 from app.api.schemas import ReviewRequest
 from app.configuration.knowledge import KnowledgeInput as KnowledgeCreatePayload
 from app.configuration.knowledge import KnowledgeUpdate as KnowledgeUpdatePayload
+from app.configuration.knowledge import KnowledgeSettingsInput
 from app.api.routes.knowledge_uploads import knowledge_result
 from app.configuration.model_pricing import ModelRate, read_pricing
 from app.persistence.telemetry import telemetry
@@ -51,9 +53,29 @@ MANAGEMENT_ROLES = {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER}
 
 
 class ProjectConfigPayload(BaseModel):
-    yaml: str
+    model_config = ConfigDict(extra="forbid")
+    yaml: str = Field(max_length=65536)
     expected_project_revision: str | None = None
     expected_editor_version: int | None = Field(default=None, ge=0)
+    candidate_run_id: str | None = Field(default=None, pattern=r"^run_[0-9a-f]{32}$")
+
+
+class ProjectCandidatePayload(ProjectConfigPayload):
+    run: RunExecutionRequest
+
+
+class ProjectCandidateReceipt(BaseModel):
+    run_id: str
+    candidate_hash: str
+    dependency_hash: str
+    project_revision: str
+    editor_version: int | None
+    passed: bool
+
+
+class ProjectCandidateResult(BaseModel):
+    run: RunResponse
+    receipt: ProjectCandidateReceipt
 
 
 class SystemConnectionTestPayload(BaseModel):
@@ -1736,6 +1758,16 @@ async def create_knowledge(payload: KnowledgeCreatePayload, request: Request, pr
         principal, payload, max_text_chars=request.app.state.file_limits.max_text_chars))
 
 
+@router.get("/api/v1/knowledge/settings")
+async def knowledge_settings(request: Request, principal: Principal):
+    return await knowledge_result(request.app.state.knowledge.capture_settings(principal))
+
+
+@router.put("/api/v1/knowledge/settings")
+async def save_knowledge_settings(payload: KnowledgeSettingsInput, request: Request, principal: Principal):
+    return await knowledge_result(request.app.state.knowledge.save_capture_settings(principal, payload))
+
+
 @router.put("/api/v1/knowledge/{doc_id}")
 async def update_knowledge(doc_id: str, payload: KnowledgeUpdatePayload, request: Request, principal: Principal):
     """Create a new draft revision without carrying approval across a content change."""
@@ -2706,6 +2738,7 @@ async def validate_project_setup(
     valid = valid and not errors
     return {
         "valid": valid,
+        "candidate_test_required": True,
         "errors": errors,
         "warnings": warnings,
         "effective_configuration": validated,
@@ -2716,6 +2749,25 @@ async def validate_project_setup(
 async def save_project_setup(
     payload: ProjectConfigPayload, request: Request, principal: Principal
 ):
+    return await _apply_project_setup(payload, request, principal)
+
+
+@router.post("/api/v1/project/test", response_model=ProjectCandidateResult)
+async def test_project_candidate(payload: ProjectCandidatePayload, request: Request, principal: Principal,
+                                 idempotency_key: Annotated[str | None, Header(max_length=128)] = None):
+    require_roles(principal, {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER})
+    from app.runtime.project_candidate import trial
+    try:
+        return await trial(payload, request, principal, idempotency_key)
+    except PermissionError:
+        raise HTTPException(403, "Candidate investigation access denied") from None
+    except OverflowError:
+        raise HTTPException(429, "Investigation capacity reached", headers={"Retry-After": "5"}) from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+async def _apply_project_setup(payload, request, principal, *, require_test=True, activation=None):
     if not {Role.PLATFORM_ADMIN, Role.PROJECT_OWNER}.intersection(
         principal.roles
     ):
@@ -2723,30 +2775,14 @@ async def save_project_setup(
             403,
             "Only PLATFORM_ADMIN or PROJECT_OWNER can modify project configuration",
         )
-    from app.api.routes.harness import _lock, _project_revision
+    from app.api.routes.harness import _lock
+    from app.runtime.project_candidate import candidate_configuration, require_receipt, validate_activation
     async with _lock(request):
-        project = request.app.state.registry.inheritance.project(principal)
-        if (payload.expected_project_revision is not None
-                and payload.expected_project_revision != _project_revision(project)):
-            raise HTTPException(409, "Project settings changed; reload and review before applying")
-        if payload.expected_editor_version is not None:
-            from app.api.routes.project_editor import validate_setup_draft
-            await validate_setup_draft(request, principal, payload.expected_editor_version)
-        valid, errors, warnings, validated = _validate_project_yaml(
-            payload.yaml, request, principal
-        )
-        errors.extend(await _project_environment_dependency_errors(request, principal, validated))
-        valid = valid and not errors
-        if not valid:
-            raise HTTPException(
-                422,
-                detail=f"Project configuration failed platform policy validation: {'; '.join(errors)}",
-            )
-        persisted = load_yaml_data(payload.yaml) | {
-            "tenant_id": principal.tenant_id, "project_id": principal.project_id,
-        }
-        if validated.get("project_template"):
-            persisted["project_template"] = validated["project_template"]
+        persisted, registry = await candidate_configuration(payload, request, principal, check_readiness=require_test or activation is not None)
+        if require_test:
+            await require_receipt(payload, request, principal, persisted)
+        if activation is not None:
+            await validate_activation(request, principal, registry, *activation)
         try:
             await _save_project_file(request, principal, yaml.safe_dump(persisted, sort_keys=False),
                 expected_editor_version=payload.expected_editor_version)
@@ -2810,5 +2846,7 @@ async def set_project_availability(
             override["enabled"] = payload.enabled
         if current != payload.expected_enabled:
             raise HTTPException(409, "Availability changed. Refresh before trying again.")
-        await save_project_setup(ProjectConfigPayload(yaml=yaml.safe_dump(content)), request, principal)
+        from app.api.routes.harness import _project_revision
+        await _apply_project_setup(ProjectConfigPayload(yaml=yaml.safe_dump(content), expected_project_revision=_project_revision(project)), request, principal,
+                                   require_test=False, activation=(kind, resource_id) if payload.enabled else None)
         return {"id": resource_id, "project_enabled": payload.enabled}

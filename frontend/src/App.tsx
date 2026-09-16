@@ -5,9 +5,10 @@ import { Sidebar, ActivePage, isActivePage } from './components/Sidebar';
 import { CommandPalette } from './components/CommandPalette';
 import { SessionModal } from './components/SessionModal';
 import { ProjectAccessDialog } from './components/ProjectAccessDialog';
+import { ProjectLifecycle } from './components/ProjectLifecycle';
 import { NewProjectDialog, ProjectSwitcher } from './components/ProjectWorkspace';
 import { createProject, fetchProjects, selectProject } from './services/projects';
-import type { CreateProjectInput, ProjectDirectory } from './services/projects';
+import type { CreateProjectInput, ProjectDirectory, ManagedProject } from './services/projects';
 
 
 const Insights = lazy(() => import('./pages/Insights').then(module => ({ default: module.Insights })));
@@ -40,6 +41,7 @@ const ProjectTickets = lazy(() => import('./pages/ProjectTickets').then(module =
 const RCAWorkbench = lazy(() => import('./pages/RCAWorkbench').then(module => ({ default: module.RCAWorkbench })));
 const ProjectFeedback = lazy(() => import('./pages/ProjectFeedback').then(module => ({ default: module.ProjectFeedback })));
 const Docs = lazy(() => import('./pages/Docs').then(module => ({ default: module.Docs })));
+const ProjectDocs = lazy(() => import('./pages/ProjectDocs').then(module => ({ default: module.ProjectDocs })));
 const Artifacts = lazy(() => import('./pages/Artifacts').then(module => ({ default: module.Artifacts })));
 const Orchestration = lazy(() => import('./pages/Orchestration').then(module => ({ default: module.Orchestration })));
 const Landing = lazy(() => import('./pages/Landing').then(module => ({ default: module.Landing })));
@@ -106,7 +108,7 @@ const readLocationRoute = (): LocationRoute => {
   if (['admin', 'admins'].includes(normalizedPathParts[0]) && pathParts[1]) {
     return {
       projectKey: null,
-      page: pageFromSegment(pathParts[1]),
+      page: normalizedPathParts[1] === 'docs' ? 'platform-docs' : pageFromSegment(pathParts[1]),
       invalidProjectKey: false,
     };
   }
@@ -168,6 +170,7 @@ const WorkspaceApp: React.FC = () => {
   const [projectError, setProjectError] = useState<string | null>(null);
   const [switchingProject, setSwitchingProject] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [projectManagementOpen, setProjectManagementOpen] = useState(false);
   const [projectAccessOpen, setProjectAccessOpen] = useState(false);
   const [projectCreationStatus, setProjectCreationStatus] = useState<string | null>(null);
   const [projectNotice, setProjectNotice] = useState<string | null>(null);
@@ -304,7 +307,7 @@ const WorkspaceApp: React.FC = () => {
   }, []);
 
   const loadData = async () => {
-    if (!principal) return;
+    if (!principal?.project_id) return;
     const generation = getSessionGeneration();
     setLoadingData(true);
     setLoadError(null);
@@ -353,7 +356,7 @@ const WorkspaceApp: React.FC = () => {
 
   const clearScopedData = (message?: string) => {
     setSessionError(message || null); setSessionToken(null); setProjects(null); setProjectNotice(null);
-    setProjectAccessOpen(false); setNewProjectOpen(false); setProjectCreationStatus(null);
+    setProjectAccessOpen(false); setNewProjectOpen(false); setProjectManagementOpen(false); setProjectCreationStatus(null);
     setLoadingData(false); setIsSearchOpen(false); setPrincipal(null); setUiSettings(null); setUiError(null);
     document.title = 'RCA assist'; setAgents([]); setRuns([]); setTools([]); setAuditLogs([]);
     setUnreadNotificationsCount(0); setNotificationsUnavailable(false); setHealthUpdatedAt(null);
@@ -376,12 +379,12 @@ const WorkspaceApp: React.FC = () => {
   };
   const handleAuthenticated = (next: Principal) => {
     // Tear down scope-bound editors and polling before changing request headers.
-    flushSync(() => { setUiSettings(null); setIsSearchOpen(false); setProjectAccessOpen(false); setNewProjectOpen(false); });
+    flushSync(() => { setUiSettings(null); setIsSearchOpen(false); setProjectAccessOpen(false); setNewProjectOpen(false); setProjectManagementOpen(false); });
     setProjectContext(next.project_id);
     setHealthUpdatedAt(null); setHealthError(false); setTelemetryRefreshing(false); setLoadError(null); setProjectNotice(null); setProjects(null);
     setUiSettings(null); setUiError(null); setSessionError(null); setAgents([]); setRuns([]); setTools([]); setAuditLogs([]); setLoadingData(true); setPrincipal(next); setSessionVersion(v => v + 1); setIsSessionOpen(false);
     if (/^\/workspace\/?$/.test(window.location.pathname) || /^\/admins?\/(chat|knowledge|insights)\/?$/.test(window.location.pathname)) {
-      window.history.replaceState({}, '', projectPath(next.project_id, 'chat', ''));
+      window.history.replaceState({}, '', next.project_id ? projectPath(next.project_id, 'chat', '') : '/workspace');
       window.dispatchEvent(new PopStateEvent('popstate'));
     }
   };
@@ -394,7 +397,7 @@ const WorkspaceApp: React.FC = () => {
     return () => { cancelled = true; };
   }, [principal]);
   useEffect(() => {
-    if (principal && routeProjectKey && !invalidProjectRoute && routeProjectKey !== principal.project_id && !switchingProject) void activateProject(routeProjectKey, readLocationRoute().page || 'chat', true);
+    if (principal?.project_id && routeProjectKey && !invalidProjectRoute && routeProjectKey !== principal.project_id && !switchingProject) void activateProject(routeProjectKey, readLocationRoute().page || 'chat', true);
   // Browser history can select a project, but the server must approve its membership first.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeProjectKey]);
@@ -410,7 +413,7 @@ const WorkspaceApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!principal) return;
+    if (!principal?.project_id) return;
     let cancelled = false;
     const generation = getSessionGeneration();
     setUiError(null);
@@ -492,6 +495,16 @@ const WorkspaceApp: React.FC = () => {
     }
   };
 
+  const handleLifecycleChanged = async (updated: ManagedProject) => {
+    if ((updated.project_id === principal?.project_id && updated.status !== 'active') || !principal?.project_id) {
+      setProjectContext(null);
+      const next = await fetchPrincipal();
+      handleAuthenticated(next);
+      window.history.replaceState({}, '', next.project_id ? projectPath(next.project_id, 'chat') : '/workspace');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } else await refreshProjectDirectory();
+  };
+
   const handleNavigateFromAlert = (page: ActivePage, options?: { runId?: string; filter?: string; targetId?: string }) => {
     if (options?.runId) {
       setInitialRunId(options.runId);
@@ -508,6 +521,12 @@ const WorkspaceApp: React.FC = () => {
 
   if (!principal) return <div className="app-layout"><div style={{ padding: 24, fontWeight: 650 }}>RCA assist · Investigation workspace</div><SessionModal isOpen sessionError={sessionError} principal={{ subject: '', roles: [], tenant_id: '', project_id: '' }} onClose={() => undefined} onAuthenticated={handleAuthenticated} onSignedOut={clearScopedData} /></div>;
 
+  if (!principal.project_id) return <div className="app-layout"><main style={{ padding: 24 }}>
+    <ProjectLifecycle standalone onClose={() => undefined} onChanged={handleLifecycleChanged} onOpenProject={id => void activateProject(id)} />
+    {projectError && <p role="alert">{projectError}</p>}
+    <button className="btn btn-secondary" onClick={() => { void logoutSession().then(() => clearScopedData()).catch(error => setProjectError(error instanceof Error ? error.message : 'Sign-out failed.')); }}>Sign out</button>
+  </main></div>;
+
   if (projectCreationStatus) return <div className="app-layout"><main style={{ padding: 24 }} role="status"><h1>Your project is ready</h1><p>{projectCreationStatus}</p></main></div>;
 
   if (!uiSettings) return <div className="app-layout"><main style={{ padding: 24 }}>
@@ -521,6 +540,8 @@ const WorkspaceApp: React.FC = () => {
   const isAuthorizedAdmin = Boolean(
     principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role))
   );
+  // The handbook is available to project readers without entering administration.
+  const navigationProjectKey = routeProjectKey || (activePage === 'platform-docs' && !isAuthorizedAdmin ? principal.project_id : null);
 
   return (
     <div className="app-layout">
@@ -535,7 +556,7 @@ const WorkspaceApp: React.FC = () => {
         principal={principal}
         theme={theme}
         activePage={activePage}
-        projectKey={routeProjectKey}
+        projectKey={navigationProjectKey}
         unreadNotificationsCount={unreadNotificationsCount}
         notificationsUnavailable={notificationsUnavailable}
         onToggleTheme={toggleTheme}
@@ -551,7 +572,7 @@ const WorkspaceApp: React.FC = () => {
           const target = id || principal.project_id || projects?.items[0]?.project_id;
           if (target) void activateProject(target, 'chat');
         }}
-        projectSelector={routeProjectKey ? (
+        projectSelector={navigationProjectKey ? (
           <ProjectSwitcher
             directory={projects}
             currentProject={principal.project_id}
@@ -559,6 +580,7 @@ const WorkspaceApp: React.FC = () => {
             onSelect={id => void activateProject(id)}
             onCreate={openProjectCreation}
             onAccess={() => setProjectAccessOpen(true)}
+            onManage={() => { if (window.dispatchEvent(new Event('rca:before-navigation', { cancelable: true }))) setProjectManagementOpen(true); }}
             onOpenWorkspace={() => handleSelectPage('chat')}
             canAdmin={isAuthorizedAdmin}
             onOpenAdmin={() => {
@@ -576,7 +598,7 @@ const WorkspaceApp: React.FC = () => {
       <div className="app-body">
         <Sidebar
           settings={uiSettings}
-          projectWorkspace={Boolean(routeProjectKey)}
+          projectWorkspace={Boolean(navigationProjectKey)}
           onOpenAdministration={() => { if (!window.dispatchEvent(new Event('rca:before-navigation', { cancelable: true }))) return; window.history.pushState({}, '', '/admins/overview'); window.dispatchEvent(new PopStateEvent('popstate')); }}
           onOpenWorkspace={() => handleSelectPage('chat')}
           canAdminister={principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role))}
@@ -603,7 +625,7 @@ const WorkspaceApp: React.FC = () => {
               This URL is outside the authenticated project scope. Sign in with a session for <code>{routeProjectKey}</code> or open <button type="button" className="btn btn-secondary" onClick={() => { window.history.replaceState({}, '', projectPath(principal.project_id, activePage)); window.dispatchEvent(new PopStateEvent('popstate')); }}>{principal.project_id}</button>.
             </div>
           )}
-          {!routeProjectKey && !isAuthorizedAdmin && (
+          {!routeProjectKey && !isAuthorizedAdmin && activePage !== 'platform-docs' && (
             <div className="notice-banner" role="alert" style={{ margin: 24 }}>
               Administration console access requires an administrator role. Open <button type="button" className="btn btn-secondary" onClick={() => { window.history.replaceState({}, '', projectPath(principal.project_id, 'chat')); window.dispatchEvent(new PopStateEvent('popstate')); }}>your workspace</button>.
             </div>
@@ -683,7 +705,7 @@ const WorkspaceApp: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'project-setup' && (
-            <ProjectSetup onApplied={() => void refreshProjectDirectory()} onOverview={() => handleSelectPage('overview')} onNewInvestigation={() => openInvestigation()} />
+            <ProjectSetup onOpenKnowledge={() => handleSelectPage('knowledge')} onOpenRun={async id => { const generation = getSessionGeneration(); const run = await fetchRun(id); if (generation !== getSessionGeneration()) return; setRuns(previous => [run, ...previous.filter(item => item.id !== id)]); setInitialRunId(id); handleSelectPage('runs'); }} onApplied={() => void refreshProjectDirectory()} onOverview={() => handleSelectPage('overview')} onNewInvestigation={() => openInvestigation()} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'persistence' && (
@@ -703,7 +725,7 @@ const WorkspaceApp: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'knowledge' && (
-            <Knowledge />
+            <Knowledge onOpenImprovement={() => handleSelectPage('optimization', '?tab=improvement')} onOpenAlerts={() => handleSelectPage('alerts')} onOpenRun={async id => { const generation = getSessionGeneration(); const run = await fetchRun(id); if (generation !== getSessionGeneration()) return; setRuns(previous => [run, ...previous.filter(item => item.id !== id)]); setInitialRunId(id); handleSelectPage('runs'); }} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'users' && (
@@ -727,15 +749,19 @@ const WorkspaceApp: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'rca-workbench' && (
-            <RCAWorkbench canEdit={canEditTriage} onOpenRun={async id => { const run = await fetchRun(id); setRuns(previous => [run, ...previous.filter(item => item.id !== id)]); setInitialRunId(id); handleSelectPage('runs'); }} />
+            <RCAWorkbench canEdit={canEditTriage} onOpenRun={async id => { const generation = getSessionGeneration(); const run = await fetchRun(id); if (generation !== getSessionGeneration()) return; setRuns(previous => [run, ...previous.filter(item => item.id !== id)]); setInitialRunId(id); handleSelectPage('runs'); }} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'feedback' && (
-            <ProjectFeedback />
+            <ProjectFeedback canEdit={canEditTriage} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'docs' && (
-            <Docs />
+            <ProjectDocs key={principal.project_id} projectId={principal.project_id} onOpenHandbook={() => handleSelectPage('platform-docs')} onManage={principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER'].includes(role)) ? () => handleSelectPage('knowledge') : undefined} />
+          )}
+
+          {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'platform-docs' && (
+            <Docs onOpenProjectDocs={() => handleSelectPage('docs')} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'artifacts' && (
@@ -766,6 +792,7 @@ const WorkspaceApp: React.FC = () => {
         onSignedOut={clearScopedData}
       />
       {projectAccessOpen && <ProjectAccessDialog principal={principal} onClose={() => setProjectAccessOpen(false)} onAccessChanged={() => void refreshProjectDirectory()} />}
+      {projectManagementOpen && <ProjectLifecycle onClose={() => setProjectManagementOpen(false)} onChanged={handleLifecycleChanged} onOpenProject={id => { setProjectManagementOpen(false); void activateProject(id); }} />}
       {newProjectOpen && <NewProjectDialog onClose={() => setNewProjectOpen(false)} onCreate={handleCreateProject} />}
 
 

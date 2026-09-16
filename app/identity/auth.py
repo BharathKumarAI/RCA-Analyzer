@@ -1,6 +1,7 @@
 """Offline RS256 verification with trusted issuer/key and server-owned membership."""
 
 import jwt
+import re
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 from fastapi import HTTPException, Request
@@ -69,7 +70,11 @@ async def principal_for_subject(request: Request, subject: str) -> UserPrincipal
         if selected is not None and (not selected or len(selected) > 256 or any(ord(char) < 32 for char in selected)):
             raise HTTPException(400, "Invalid project selector")
         try:
-            return await projects.principal(subject, selected)
+            path = request.url.path.rstrip("/")
+            allow_management = path in {"/api/v1/me", "/api/v1/auth/session", "/api/v1/auth/logout", "/api/v1/auth/callback",
+                                        "/api/v1/projects", "/api/v1/projects/management"} or bool(
+                re.fullmatch(r"/api/v1/projects/[^/]+/(?:lifecycle|select)", path))
+            return await projects.principal(subject, selected, allow_management=allow_management)
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from None
     principal = None

@@ -1,6 +1,6 @@
 # Operations
 
-This release runs a FastAPI process, PostgreSQL, and a React frontend. Local development can use Vite; the API can serve the built frontend. Configuration and investigation records persist, but there is no durable worker or automatic run recovery. Sources: [application](../app/api/application.py), [runner](../app/runtime/runner.py), [Compose](../docker-compose.yml).
+This release runs a FastAPI process, PostgreSQL, and a React frontend. Local development can use Vite; the API can serve the built frontend. Configuration and investigation records persist. A [leased database queue](../app/optimization/improvement.py) recovers improvement jobs; interactive investigations still do not automatically resume after process failure. Sources: [application](../app/api/application.py), [runner](../app/runtime/runner.py), [Compose](../docker-compose.yml).
 
 ## Contents
 
@@ -25,7 +25,7 @@ This release runs a FastAPI process, PostgreSQL, and a React frontend. Local dev
 1. Record revision, dependency versions and transport choice. Trial CopilotKit against the governed ADK runner; retain the existing UI/API as rollback without moving history into a second store.
 2. Verify authentication, active membership, private conversation ownership and project switching. Test cross-project denial for streams, evidence and downloads as well as normal requests.
 3. Run an authorized live investigation against a configured model/source. Inspect saved message/run IDs, tool events, citations, artifacts and usage. Demo/readiness success is insufficient.
-4. Exercise duplicate submission, cancellation, network disconnect and process interruption. Assess saved state and retry explicitly when needed. Do not promise background work, scheduling or automatic recovery under the in-process execution contract.
+4. Exercise duplicate submission, cancellation, network disconnect and process interruption. Assess saved state and retry explicitly when needed. Do not promise automatic recovery for interactive runs. Scheduled knowledge and improvement jobs have a separate leased queue and must be verified through their persisted job state.
 5. Compare the same run population in chat, project metrics and authorized platform metrics. Check prices, missing data, sample counts, truncation, date ranges and export metadata. Verify project-owner/member denial for platform totals.
 6. Measure query/refresh latency under expected load. Prevent overlapping refresh and pause it on hidden views; investigate slow aggregation before adding caches or workers.
 7. Record actual checks and unresolved gaps. Roll back adapter/UI deployment while preserving SQLAlchemy/native session/blob records. Do not rewrite historical results or prices to force agreement.
@@ -71,7 +71,7 @@ The [Docker image](../Dockerfile) builds the real frontend, runs as a non-root a
 
 The distinction between liveness and readiness follows the [Kubernetes probe guidance](https://kubernetes.io/docs/concepts/workloads/pods/probes/). For an actual deployment, verify database migrations/grants, persistent blob storage, approved OIDC/JWT settings, model access, and at least one scoped read from every enabled provider. Exercise duplicate requests, cancellation and reconnect against the chosen ingress timeout. An image build or passing offline fixtures cannot establish any of these live behaviors.
 
-Application execution remains request-owned. Use one application process per instance and account for process interruption during rollout; there is no durable worker or automatic run recovery. A cloud/cluster release needs its own approved target, secrets, ingress/TLS, storage, backup and restore validation. No cloud deployment is implied by local changes.
+Interactive investigation execution remains request-owned. Use one application process per instance and account for process interruption during rollout. Improvement workers claim persisted jobs through leases; an interrupted evaluation can repeat within the retry ceiling, but cannot activate its own result. A cloud/cluster release needs its own approved target, secrets, ingress/TLS, storage, backup and restore validation. No cloud deployment is implied by local changes.
 
 ## Database and configuration rollout
 
@@ -186,3 +186,11 @@ The exporter reads schema definitions only. Never use an operator database as th
 Set `RCA_POSTGRES_TEST_URL` to an isolated database-creator account and run the [DDL integration test](../tests/integration/test_database_ddl.py). It creates disposable databases, applies the migrations twice, compares the export to the checked-in reference, restores it and compares again. Run the normal [verification commands](development.md#verification) before handoff. A schema-only restore intentionally has no migration ledger or native version rows and must not be started as a deployed API database.
 
 [Required configuration import](../scripts/seed_database.py) remains part of deployment: project identity, parameter definitions and the deployment template baseline are necessary for database-first runtime configuration. Demo triage ticket creation has been removed from reads. No cleanup command in this change deletes existing operator data; review historical sample rows separately before any destructive cleanup.
+
+## Operate governed improvement jobs
+
+Open **Optimization → Continuous improvement** in the selected project. Prepare feedback candidates manually or create a recurring preparation schedule. A different administrator verifies the source outcomes; select distinct incidents for training and holdout and optionally freeze approved knowledge. Publish a new immutable benchmark, then queue an evaluation of a configured prompt or skill. Review its report through the existing independent activation workflow. The UI also exposes cancellation, retry, schedule editing/pause/resume, knowledge drafts and reviewed restore/revoke actions. Sources: [page](../frontend/src/pages/Improvement.tsx), [API](../app/api/routes/optimization.py).
+
+The worker starts with the API process, claims jobs only for the deployment tenant, and re-resolves the author's current project membership and runtime. SQL leases and conditional updates fence stale attempts. An interrupted evaluation may repeat model calls; operators should allow for that cost. Bounded attempts end in a visible failure; an explicit retry starts a new bounded attempt budget. Pausing a schedule stops future dispatch; cancel an already queued/running job separately. A scheduling failure or revoked membership never grants new authority or auto-approves a result. Sources: [worker](../app/optimization/improvement.py), [bootstrap and project leases](../app/runtime/bootstrap.py).
+
+Apply migrations 029–034 before starting this version against an existing database. Back up the new OKF metadata, reviewed knowledge associations, upload-to-revision identities, structured capture receipts, source-state fences, closure comparisons, improvement records and immutable knowledge/evaluation blobs with the existing application state. Interactive `/runs` requests retain their separate request-owned lifecycle; job recovery does not imply interactive-run recovery. The packaged Docs page serves the maintained guides from this exact deployment, including their content hashes.

@@ -32,6 +32,7 @@ import {
   fetchRunEvidence,
   fetchRunRaw,
   fetchRunTrace,
+  getSessionGeneration,
   type RunEvidence,
   type RunTraceEvent,
   type RunTraceResponse,
@@ -885,17 +886,31 @@ export function Runs({ canEdit = false, runs, onNewInvestigation, onRunUpdated, 
   const [error, setError] = useState<string | null>(null);
   const [copiedRunId, setCopiedRunId] = useState(false);
   const [importedTicket, setImportedTicket] = useState<{ runId: string; ticketId: string } | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<Run | null>(runs.find(run => run.id === selectedId) ?? null);
+  const [selectionLoading, setSelectionLoading] = useState(false);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [selectionRetry, setSelectionRetry] = useState(0);
 
   // Sync selectedId when initialRunId changes
   useEffect(() => {
     if (initialRunId) setSelectedId(initialRunId);
   }, [initialRunId]);
 
-  // Sync selectedId when runs change
+  // A linked historical run can fall outside the latest batch. Keep its identity
+  // and resolve it directly instead of silently displaying an unrelated record.
   useEffect(() => {
-    if (selectedId && runs.some(run => run.id === selectedId)) return;
-    setSelectedId(runs[0]?.id ?? null);
-  }, [runs, selectedId]);
+    if (!selectedId) { setSelectedId(runs[0]?.id ?? null); return; }
+    const loaded = runs.find(run => run.id === selectedId);
+    if (loaded) { setSelectedSnapshot(loaded); setSelectionLoading(false); setSelectionError(null); return; }
+    let cancelled = false;
+    const generation = getSessionGeneration();
+    setSelectionLoading(true); setSelectionError(null);
+    fetchRun(selectedId)
+      .then(run => { if (!cancelled && generation === getSessionGeneration()) setSelectedSnapshot(run); })
+      .catch(cause => { if (!cancelled && generation === getSessionGeneration()) { setSelectedSnapshot(null); setSelectionError(cause instanceof Error ? cause.message : 'The selected investigation could not load. Retry or choose another record.'); } })
+      .finally(() => { if (!cancelled && generation === getSessionGeneration()) setSelectionLoading(false); });
+    return () => { cancelled = true; };
+  }, [runs, selectedId, selectionRetry]);
 
   // Distinct capabilities list
   const capabilities = Array.from(new Set(runs.map(r => r.capability).filter(Boolean)));
@@ -953,7 +968,7 @@ export function Runs({ canEdit = false, runs, onNewInvestigation, onRunUpdated, 
     return 0;
   });
 
-  const selected = filtered.find(run => run.id === selectedId) ?? filtered[0] ?? null;
+  const selected = runs.find(run => run.id === selectedId) ?? (selectedSnapshot?.id === selectedId ? selectedSnapshot : null);
 
   // Actions
   async function update(run: Run, shouldCancel = false) {
@@ -962,6 +977,7 @@ export function Runs({ canEdit = false, runs, onNewInvestigation, onRunUpdated, 
     setError(null);
     try {
       const updated = shouldCancel ? await cancelRun(run.id) : await fetchRun(run.id);
+      setSelectedSnapshot(updated);
       onRunUpdated?.(updated);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to update investigation.');
@@ -1368,11 +1384,14 @@ export function Runs({ canEdit = false, runs, onNewInvestigation, onRunUpdated, 
 
         {/* Right Pane: Investigation Detail Workbench */}
         <section className="investigation-detail" aria-live="polite">
+          {selectionLoading && <p role="status">Loading the selected investigation…</p>}
+          {selectionError && <p className="notice-banner" role="alert">{selectionError} <button type="button" className="btn btn-secondary" onClick={() => setSelectionRetry(value => value + 1)}>Retry selected investigation</button></p>}
+          {selected && !runs.some(run => run.id === selected.id) && <p className="investigation-muted">This selected investigation is outside the recent batch shown in the queue.</p>}
           {!selected ? (
             <div className="detail-empty">
               <FileText size={36} className="text-muted" />
-              <h2>Select an investigation</h2>
-              <p>Choose a record from the queue to inspect its findings, trace events, and evidence.</p>
+              <h2>{selectedId ? 'Selected investigation' : 'Select an investigation'}</h2>
+              <p>{selectedId ? 'The requested record will appear here when it is available.' : 'Choose a record from the queue to inspect its findings, trace events, and evidence.'}</p>
             </div>
           ) : (
             <div className="detail-workspace-container">

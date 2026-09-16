@@ -19,7 +19,7 @@ supported_operations:
 known_limitations:
 - Read-only ticket lookup; comment writes and issue mutations are governance-restricted.
 - Uses Jira Cloud REST API Version 3 with Atlassian Document Format (ADF) rich-text support.
-- JQL preview validates scoped queries; saved custom JQL does not enable queue execution.
+- Scoped JQL preview and bounded match tests are available; saved filters do not enable queue polling.
 auth_profiles:
 - id: basic_auth
   name: Account email + API token

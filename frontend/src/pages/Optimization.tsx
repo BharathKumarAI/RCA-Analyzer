@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlaskConical,
   Play,
@@ -15,19 +15,13 @@ import {
   Search,
   Plus,
   X,
-  ExternalLink,
-  ChevronRight,
-  Sparkles,
   Info,
-  Check,
   Sliders,
   Award,
-  Layers,
   Terminal,
 } from 'lucide-react';
 import { NotificationBanner } from '../components/NotificationBanner';
 import {
-  createOptimization,
   fetchConfig,
   fetchOptimization,
   fetchOptimizationDatasets,
@@ -40,6 +34,8 @@ import {
 import { Principal, RuntimeConfig, SkillItem } from '../types/api';
 import { ActivePage } from '../components/Sidebar';
 import '../styles/optimization-studio.css';
+import { Improvement } from './Improvement';
+import { enqueueImprovement, undoOptimization } from '../services/improvement';
 
 interface OptimizationPageProps {
   onNavigate?: (page: ActivePage) => void;
@@ -60,6 +56,7 @@ export interface DatasetItem {
 }
 
 export interface OptimizationRecord {
+  is_active?: boolean;
   optimization_id: string;
   status: 'RUNNING' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'NO_IMPROVEMENT' | 'FAILED' | string;
   author_subject: string;
@@ -99,10 +96,9 @@ export interface OptimizationRecord {
   };
 }
 
-type TabType = 'evaluations' | 'runner' | 'datasets' | 'policy';
+type TabType = 'evaluations' | 'runner' | 'datasets' | 'policy' | 'improvement';
 
-export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSelectPage }) => {
-  const navigate = onNavigate || onSelectPage;
+export const Optimization: React.FC<OptimizationPageProps> = () => {
 
   // Data states
   const [items, setItems] = useState<OptimizationRecord[]>([]);
@@ -112,7 +108,8 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
   const [principal, setPrincipal] = useState<Principal | null>(null);
 
   // UI flow states
-  const [activeTab, setActiveTab] = useState<TabType>('evaluations');
+  const [activeTab, setActiveTab] = useState<TabType>(() => new URLSearchParams(window.location.search).get('tab') === 'improvement' ? 'improvement' : 'evaluations');
+  const selectTab = (next: TabType) => { if (next === activeTab || window.dispatchEvent(new Event('rca:before-navigation', { cancelable: true }))) setActiveTab(next); };
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [detail, setDetail] = useState<OptimizationRecord | null>(null);
@@ -128,39 +125,17 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
 
   // Register Dataset Modal state
   const [registerModalOpen, setRegisterModalOpen] = useState(false);
-  const defaultDatasetJSON = JSON.stringify(
-    {
-      id: 'incident_examples_v1',
-      version: '1.0.0',
-      purpose: 'example',
-      capability: 'incident_triage',
-      description: 'Production-calibrated incident cases for offline verification.',
-      train: [
-        {
-          id: 'case-train-01',
-          prompt: 'Triage ticket INC-4091: High latency detected on Checkout Payment Gateway.',
-          expected_outcome: 'FINDINGS',
-          expected_facts: ['Payment gateway timeout', 'High retry volume'],
-        },
-      ],
-      holdout: [
-        {
-          id: 'case-holdout-01',
-          prompt: 'Triage ticket INC-4092: Transient network jitter on Auth Redis cluster.',
-          expected_outcome: 'FINDINGS',
-          expected_facts: ['Transient packet drops', 'Redis replica lag within SLA'],
-        },
-      ],
-    },
-    null,
-    2
-  );
+  const defaultDatasetJSON = JSON.stringify({
+    id: '', version: '', purpose: 'benchmark', capability: '', description: '',
+    train: [], holdout: [],
+  }, null, 2);
   const [datasetText, setDatasetText] = useState(defaultDatasetJSON);
   const [datasetJsonValid, setDatasetJsonValid] = useState<boolean>(true);
   const [datasetJsonStats, setDatasetJsonStats] = useState<{ train: number; holdout: number; id: string } | null>(null);
 
   // Review state
   const [reviewReason, setReviewReason] = useState('');
+  const queuedRequest = useRef<{ fingerprint: string; key: string } | null>(null);
 
   // Validate dataset JSON live
   useEffect(() => {
@@ -264,7 +239,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
   const kpis = useMemo(() => {
     const total = items.length;
     const pending = items.filter(i => i.status === 'PENDING_APPROVAL').length;
-    const approved = items.filter(i => i.status === 'APPROVED').length;
+    const approved = items.filter(i => i.is_active === true).length;
     const datasetCount = datasets.length;
     const minQualityGain = config?.optimization?.min_quality_gain ?? 0.02;
     return { total, pending, approved, datasetCount, minQualityGain };
@@ -280,15 +255,19 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
     setError(null);
     setMessage(null);
     try {
-      const record: OptimizationRecord = await createOptimization({
+      const payload = { kind: 'optimize' as const, optimization: {
         dataset_id: activeSelectedDataset.dataset_id,
         dataset_version: activeSelectedDataset.version,
         target_kind: targetKind,
         target_name: targetName.trim(),
-      });
-      setMessage(`Offline evaluation completed with verdict: ${record.status.replaceAll('_', ' ')}`);
-      setDetail(record);
-      setActiveTab('evaluations');
+      } };
+      const fingerprint = JSON.stringify(payload);
+      if (queuedRequest.current?.fingerprint !== fingerprint) queuedRequest.current = { fingerprint, key: crypto.randomUUID() };
+      const job = await enqueueImprovement(payload, queuedRequest.current!.key);
+      queuedRequest.current = null;
+      setMessage(`Evaluation queued as ${job.job_id}. Follow progress in Continuous improvement.`);
+      setDetail(null);
+      selectTab('improvement');
       await loadData(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Evaluation execution failed.');
@@ -344,6 +323,19 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
     } finally {
       setBusy(false);
     }
+  };
+
+  // Register new immutable dataset version
+  const handleRestore = async (action: 'rollback' | 'revoke') => {
+    if (busy || !detail?.report_hash || !reviewReason.trim()) return;
+    setBusy(true); setError(null);
+    try {
+      const updated = await undoOptimization(detail.optimization_id, action, detail.report_hash, reviewReason.trim());
+      setDetail(updated as OptimizationRecord); setReviewReason('');
+      setMessage(action === 'rollback' ? 'Previous configuration restored. New investigations use the restored version.' : 'Optimization revoked. New investigations use the configured baseline.');
+      await loadData(true);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Restoration failed. Refresh the report and retry.'); }
+    finally { setBusy(false); }
   };
 
   // Register new immutable dataset version
@@ -413,7 +405,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
             </h1>
             <p className="hero-lede">
               Offline replay evaluation, prompt & skill tuning, and two-person governance review.
-              Offline comparisons evaluate candidate models against immutable baseline datasets before production activation.
+              Offline comparisons evaluate candidate instructions against immutable baseline datasets before production activation.
             </p>
             <div className="hero-meta-strip">
               <span className="hero-stat-chip highlight">
@@ -440,7 +432,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  setActiveTab('runner');
+                  selectTab('runner');
                   setDetail(null);
                 }}
                 disabled={busy}
@@ -544,7 +536,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
             <button
               className={`opt-tab-btn ${activeTab === 'evaluations' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('evaluations');
+                selectTab('evaluations');
               }}
             >
               <FlaskConical size={14} />
@@ -554,7 +546,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
             <button
               className={`opt-tab-btn ${activeTab === 'runner' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('runner');
+                selectTab('runner');
                 setDetail(null);
               }}
             >
@@ -564,7 +556,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
             <button
               className={`opt-tab-btn ${activeTab === 'datasets' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('datasets');
+                selectTab('datasets');
                 setDetail(null);
               }}
             >
@@ -575,13 +567,14 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
             <button
               className={`opt-tab-btn ${activeTab === 'policy' ? 'active' : ''}`}
               onClick={() => {
-                setActiveTab('policy');
+                selectTab('policy');
                 setDetail(null);
               }}
             >
               <ShieldCheck size={14} />
               Governance & Policies
             </button>
+            {isAdminUser && <button type="button" className={`opt-tab-btn ${activeTab === 'improvement' ? 'active' : ''}`} onClick={() => { selectTab('improvement'); setDetail(null); }}>Continuous improvement</button>}
           </div>
 
           {activeTab === 'datasets' && (
@@ -595,6 +588,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
           )}
         </div>
 
+        {activeTab === 'improvement' && principal && isAdminUser && <Improvement principal={principal} datasets={datasets} promptNames={promptStages} skillNames={skills.map(skill => skill.id)} onDataset={() => void loadData(true)} onReport={id => { selectTab('evaluations'); void handleInspect(id); }} />}
         {/* TAB 1: Evaluations History */}
         {activeTab === 'evaluations' && (
           <>
@@ -640,10 +634,10 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
                     Offline replay evaluations compare candidate model instructions against registered baseline datasets to measure quality gains before activating changes in production.
                   </p>
                   <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-                    <button className="btn btn-primary" onClick={() => setActiveTab('runner')}>
+                    <button className="btn btn-primary" onClick={() => selectTab('runner')}>
                       <Play size={14} /> Configure & Run Evaluation
                     </button>
-                    <button className="btn btn-secondary" onClick={() => setActiveTab('datasets')}>
+                    <button className="btn btn-secondary" onClick={() => selectTab('datasets')}>
                       <Database size={14} /> View Curated Datasets
                     </button>
                   </div>
@@ -981,6 +975,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
                   )}
 
                   {/* Two-Person Governance Review Box */}
+                  {detail.is_active && <section className="opt-governance-box"><h3>Restore or revoke active changes</h3><p>Restore the previous approved configuration, or revoke this optimization to use the configured baseline. The server checks that this exact report is still active.</p>{isAuthorOfDetail ? <p>A different administrator must review restoration.</p> : isAdminUser && <><label htmlFor="restore-reason">Reason</label><textarea id="restore-reason" className="opt-textarea" rows={3} maxLength={2000} value={reviewReason} onChange={event => setReviewReason(event.target.value)} disabled={busy} /><div className="knowledge-actions"><button type="button" className="btn btn-secondary" disabled={busy || !reviewReason.trim()} onClick={() => void handleRestore('rollback')}>Restore previous configuration</button><button type="button" className="btn btn-secondary" disabled={busy || !reviewReason.trim()} onClick={() => void handleRestore('revoke')}>Revoke optimization</button></div></>}</section>}
                   {detail.status === 'PENDING_APPROVAL' && (
                     <div className="opt-review-card">
                       <div className="opt-review-header">
@@ -1196,7 +1191,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
               <button
                 className="btn btn-secondary"
                 disabled={busy}
-                onClick={() => setActiveTab('evaluations')}
+                onClick={() => selectTab('evaluations')}
               >
                 Cancel
               </button>
@@ -1243,7 +1238,7 @@ export const Optimization: React.FC<OptimizationPageProps> = ({ onNavigate, onSe
                       style={{ padding: '4px 10px', fontSize: 12 }}
                       onClick={() => {
                         setSelectedDatasetKey(`${dataset.dataset_id}@${dataset.version}`);
-                        setActiveTab('runner');
+                        selectTab('runner');
                       }}
                     >
                       Use in Replay <ArrowUpRight size={12} />

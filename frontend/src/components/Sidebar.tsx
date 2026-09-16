@@ -15,7 +15,7 @@ export type ActivePage =
   | 'optimization' | 'agents' | 'tools' | 'alerts' | 'health-checks' | 'project-setup'
   | 'persistence' | 'policy' | 'roles' | 'governance' | 'knowledge' | 'users' | 'billing'
   | 'settings' | 'harness-library' | 'triage-board'
-  | 'tickets' | 'rca-workbench' | 'feedback' | 'docs' | 'artifacts' | 'orchestration';
+  | 'tickets' | 'rca-workbench' | 'feedback' | 'docs' | 'platform-docs' | 'artifacts' | 'orchestration';
 
 interface SidebarProps {
   settings: UiSettingsConfig;
@@ -37,6 +37,7 @@ export const PAGE_ICONS: Record<ActivePage, LucideIcon> = {
   'rca-workbench': SearchCode,
   feedback: Star,
   docs: BookMarked,
+  'platform-docs': BookMarked,
   artifacts: Layers,
   orchestration: GitBranch,
   chat: Terminal,
@@ -95,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const PROJECT_PAGE_KEYS = [
     'triage-board', 'tickets', 'rca-workbench', 'chat', 'runs',
-    'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'docs', 'metrics',
+    'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'docs', 'platform-docs', 'metrics',
     ...(canAdminister ? ['project-setup'] : []),
   ];
 

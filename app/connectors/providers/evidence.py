@@ -6,7 +6,7 @@ import os
 import re
 import ssl
 import time
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx2
 
@@ -92,6 +92,39 @@ class ConfluenceConnector(EvidenceConnector):
         result["items"] = [{key: row.get(key) for key in ("id", "title", "spaceId", "status", "version", "body")} for row in result["items"]]
         result["possibly_truncated"] |= bool(data.get("_links", {}).get("next"))
         return result
+
+    async def read_capture_page(self, *, cursor=None, limit=50):
+        """Read one bounded page; provider links never become request destinations."""
+        if cursor is not None and (not isinstance(cursor, str) or not cursor or len(cursor) > 4096):
+            raise ValueError("Invalid Confluence cursor")
+        limit = min(max(1, limit), self.max_results, 100)
+        path = f"/api/v2/spaces/{identifier(self.scope)}/pages"
+        params = {"limit": limit, "body-format": "storage", "status": "current"}
+        if cursor:
+            params["cursor"] = cursor
+        data = await self.get(path, params)
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list) or len(data["results"]) > limit:
+            raise ConnectorError("Unexpected Confluence capture response")
+        items = data["results"]
+        if any(not isinstance(row, dict) or str(row.get("spaceId")) != self.scope or not str(row.get("id", "")).isdigit() for row in items):
+            raise ConnectorError("Confluence capture space or page identity mismatch")
+        links = data.get("_links") or {}
+        if not isinstance(links, dict):
+            raise ConnectorError("Invalid Confluence pagination links")
+        link = links.get("next")
+        next_cursor = None
+        if link:
+            if not isinstance(link, str) or len(link) > 8192:
+                raise ConnectorError("Invalid Confluence next-page link")
+            parsed = urlsplit(link)
+            endpoint = urlsplit(self.endpoint)
+            if (parsed.netloc and parsed.netloc != endpoint.netloc) or parsed.path not in {"", path, endpoint.path.rstrip("/") + path}:
+                raise ConnectorError("Confluence pagination link is outside the authorized endpoint")
+            values = parse_qs(parsed.query).get("cursor", [])
+            if len(values) != 1 or not values[0] or len(values[0]) > 4096 or values[0] == cursor:
+                raise ConnectorError("Invalid or repeated Confluence cursor")
+            next_cursor = values[0]
+        return {"items": items, "next_cursor": next_cursor, "possibly_truncated": bool(next_cursor)}
 
 
 class GitLabConnector(EvidenceConnector):

@@ -96,7 +96,7 @@ parameter_fields:
   icon: globe
 - variable_name: topic_filter
   label: Kafka Topic Filter
-  description: Exact authorized topic name used by the current native metadata reader. Wildcards and message-content filters are unsupported.
+  description: Legacy case-sensitive topic-name pattern applied to the single bound topic. Clear it before using the saved multi-topic selector. Message-content filters are unsupported.
   value_type: string
   default_value: ''
   allow_project_override: true

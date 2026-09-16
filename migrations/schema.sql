@@ -320,6 +320,72 @@ CREATE TABLE platform.investigation_findings (
 
 
 --
+-- Name: knowledge_captures; Type: TABLE; Schema: platform; Owner: omitted
+--
+
+CREATE TABLE platform.knowledge_captures (
+    capture_key character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    source_kind character varying(32) NOT NULL,
+    source_id character varying(512) NOT NULL,
+    source_hash character varying(128) NOT NULL,
+    source_modified_at double precision NOT NULL,
+    unavailable_at double precision,
+    doc_id character varying(128) NOT NULL,
+    created_at double precision NOT NULL,
+    last_seen_at double precision NOT NULL
+);
+
+
+--
+-- Name: knowledge_okf_bundles; Type: TABLE; Schema: platform; Owner: omitted
+--
+
+CREATE TABLE platform.knowledge_okf_bundles (
+    bundle_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    name character varying(256) NOT NULL,
+    revision integer NOT NULL,
+    content_hash character varying(128) NOT NULL,
+    concept_count integer NOT NULL,
+    created_at double precision NOT NULL,
+    updated_at double precision NOT NULL
+);
+
+
+--
+-- Name: knowledge_source_states; Type: TABLE; Schema: platform; Owner: omitted
+--
+
+CREATE TABLE platform.knowledge_source_states (
+    source_key character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    source_kind character varying(32) NOT NULL,
+    source_id character varying(512) NOT NULL,
+    unavailable_at double precision NOT NULL,
+    source_modified_at double precision
+);
+
+
+--
+-- Name: knowledge_uploads; Type: TABLE; Schema: platform; Owner: omitted
+--
+
+CREATE TABLE platform.knowledge_uploads (
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    source_sha256 character varying(64) NOT NULL,
+    doc_id character varying(128) NOT NULL,
+    revision integer NOT NULL,
+    content_hash character varying(128) NOT NULL,
+    created_at double precision NOT NULL
+);
+
+
+--
 -- Name: parameter_definitions; Type: TABLE; Schema: platform; Owner: omitted
 --
 
@@ -462,7 +528,14 @@ CREATE TABLE platform.platform_knowledge (
     author_subject character varying(256),
     reviewer_subject character varying(256),
     reviewed_at double precision,
-    review_reason character varying(2000)
+    review_reason character varying(2000),
+    okf jsonb,
+    okf_bundle_id character varying(128),
+    okf_concept_path character varying(1024),
+    associations jsonb,
+    required_associations jsonb,
+    structure jsonb,
+    capture jsonb
 );
 
 
@@ -881,6 +954,34 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.investigation_evidence TO rc
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.investigation_findings TO rca_app;
+
+
+--
+-- Name: TABLE knowledge_captures; Type: ACL; Schema: platform; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.knowledge_captures TO rca_app;
+
+
+--
+-- Name: TABLE knowledge_okf_bundles; Type: ACL; Schema: platform; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.knowledge_okf_bundles TO rca_app;
+
+
+--
+-- Name: TABLE knowledge_source_states; Type: ACL; Schema: platform; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.knowledge_source_states TO rca_app;
+
+
+--
+-- Name: TABLE knowledge_uploads; Type: ACL; Schema: platform; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE platform.knowledge_uploads TO rca_app;
 
 
 --
@@ -1831,6 +1932,92 @@ CREATE TABLE optimization.active_optimized_content (
 
 
 --
+-- Name: improvement_candidates; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.improvement_candidates (
+    candidate_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    author_subject character varying(256) NOT NULL,
+    source_key character varying(256) NOT NULL,
+    source_run_id character varying(128) NOT NULL,
+    source_subject character varying(256) NOT NULL,
+    capability character varying(64) NOT NULL,
+    status character varying(32) NOT NULL,
+    revision integer NOT NULL,
+    payload_json character varying NOT NULL,
+    verified_json character varying,
+    verifier_subject character varying(256),
+    reason character varying,
+    created_at double precision NOT NULL,
+    updated_at double precision NOT NULL
+);
+
+
+--
+-- Name: improvement_jobs; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.improvement_jobs (
+    job_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    author_subject character varying(256) NOT NULL,
+    payload_json character varying NOT NULL,
+    fingerprint character varying(128) NOT NULL,
+    idempotency_key character varying(128),
+    status character varying(32) NOT NULL,
+    attempts integer NOT NULL,
+    cancel_requested boolean NOT NULL,
+    lease_owner character varying(128),
+    lease_until double precision,
+    result_json character varying,
+    error character varying,
+    created_at double precision NOT NULL,
+    updated_at double precision NOT NULL
+);
+
+
+--
+-- Name: improvement_schedules; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.improvement_schedules (
+    schedule_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    author_subject character varying(256) NOT NULL,
+    name character varying(128) NOT NULL,
+    payload_json character varying NOT NULL,
+    interval_seconds integer NOT NULL,
+    enabled boolean NOT NULL,
+    revision integer NOT NULL,
+    next_run_at double precision NOT NULL,
+    created_at double precision NOT NULL,
+    updated_at double precision NOT NULL
+);
+
+
+--
+-- Name: optimization_changes; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.optimization_changes (
+    change_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    optimization_id character varying(128) NOT NULL,
+    actor_subject character varying(256) NOT NULL,
+    action character varying(32) NOT NULL,
+    previous_hash character varying(128) NOT NULL,
+    restored_hash character varying(128),
+    reason character varying NOT NULL,
+    created_at double precision NOT NULL
+);
+
+
+--
 -- Name: optimization_datasets; Type: TABLE; Schema: optimization; Owner: omitted
 --
 
@@ -1881,6 +2068,97 @@ CREATE TABLE optimization.optimization_revisions (
     edited_by text NOT NULL,
     created_time timestamp with time zone NOT NULL
 );
+
+
+--
+-- Name: ticket_closure_judgments; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.ticket_closure_judgments (
+    judgment_id character varying(128) NOT NULL,
+    tracking_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    closure_hash character varying(128) NOT NULL,
+    context_hash character varying(128) NOT NULL,
+    model character varying(128) NOT NULL,
+    prompt_hash character varying(128) NOT NULL,
+    status character varying(32) NOT NULL,
+    deviation_score double precision,
+    confidence double precision NOT NULL,
+    payload_json text NOT NULL,
+    closure_json text NOT NULL,
+    usage_json text NOT NULL,
+    created_at double precision NOT NULL
+);
+
+
+--
+-- Name: ticket_closure_tracking; Type: TABLE; Schema: optimization; Owner: omitted
+--
+
+CREATE TABLE optimization.ticket_closure_tracking (
+    tracking_id character varying(128) NOT NULL,
+    tenant_id character varying(256) NOT NULL,
+    project_id character varying(256) NOT NULL,
+    source_run_id character varying(128) NOT NULL,
+    ticket_key character varying(64) NOT NULL,
+    capability character varying(64) NOT NULL,
+    selection_json text NOT NULL,
+    snapshot_hash character varying(128) NOT NULL,
+    original_json text NOT NULL,
+    status character varying(32) NOT NULL,
+    closure_hash character varying(128),
+    latest_judgment_id character varying(128),
+    last_checked_at double precision,
+    closed_at double precision,
+    source_modified_at double precision,
+    last_error character varying(1000),
+    created_at double precision NOT NULL,
+    updated_at double precision NOT NULL
+);
+
+
+--
+-- Name: TABLE improvement_candidates; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.improvement_candidates TO rca_app;
+
+
+--
+-- Name: TABLE improvement_jobs; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.improvement_jobs TO rca_app;
+
+
+--
+-- Name: TABLE improvement_schedules; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.improvement_schedules TO rca_app;
+
+
+--
+-- Name: TABLE optimization_changes; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.optimization_changes TO rca_app;
+
+
+--
+-- Name: TABLE ticket_closure_judgments; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.ticket_closure_judgments TO rca_app;
+
+
+--
+-- Name: TABLE ticket_closure_tracking; Type: ACL; Schema: optimization; Owner: omitted
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE optimization.ticket_closure_tracking TO rca_app;
 
 
 --
@@ -3069,6 +3347,38 @@ ALTER TABLE ONLY platform.investigation_findings
 
 
 --
+-- Name: knowledge_captures knowledge_captures_pkey; Type: CONSTRAINT; Schema: platform; Owner: omitted
+--
+
+ALTER TABLE ONLY platform.knowledge_captures
+    ADD CONSTRAINT knowledge_captures_pkey PRIMARY KEY (capture_key);
+
+
+--
+-- Name: knowledge_okf_bundles knowledge_okf_bundles_pkey; Type: CONSTRAINT; Schema: platform; Owner: omitted
+--
+
+ALTER TABLE ONLY platform.knowledge_okf_bundles
+    ADD CONSTRAINT knowledge_okf_bundles_pkey PRIMARY KEY (bundle_id);
+
+
+--
+-- Name: knowledge_source_states knowledge_source_states_pkey; Type: CONSTRAINT; Schema: platform; Owner: omitted
+--
+
+ALTER TABLE ONLY platform.knowledge_source_states
+    ADD CONSTRAINT knowledge_source_states_pkey PRIMARY KEY (source_key);
+
+
+--
+-- Name: knowledge_uploads knowledge_uploads_pkey; Type: CONSTRAINT; Schema: platform; Owner: omitted
+--
+
+ALTER TABLE ONLY platform.knowledge_uploads
+    ADD CONSTRAINT knowledge_uploads_pkey PRIMARY KEY (tenant_id, project_id, source_sha256);
+
+
+--
 -- Name: parameter_definitions parameter_definitions_pkey; Type: CONSTRAINT; Schema: platform; Owner: omitted
 --
 
@@ -3322,6 +3632,27 @@ CREATE INDEX ix_triage_queue_stays_ticket ON platform.triage_queue_stays USING b
 --
 
 CREATE INDEX ix_triage_tickets_project ON platform.triage_tickets USING btree (tenant_id, project_id);
+
+
+--
+-- Name: knowledge_captures_source_version; Type: INDEX; Schema: platform; Owner: omitted
+--
+
+CREATE INDEX knowledge_captures_source_version ON platform.knowledge_captures USING btree (tenant_id, project_id, source_kind, source_id, source_modified_at DESC, last_seen_at DESC, created_at DESC);
+
+
+--
+-- Name: knowledge_source_states_scope; Type: INDEX; Schema: platform; Owner: omitted
+--
+
+CREATE INDEX knowledge_source_states_scope ON platform.knowledge_source_states USING btree (tenant_id, project_id, source_kind, source_id);
+
+
+--
+-- Name: uq_knowledge_okf_path; Type: INDEX; Schema: platform; Owner: omitted
+--
+
+CREATE UNIQUE INDEX uq_knowledge_okf_path ON platform.platform_knowledge USING btree (tenant_id, project_id, okf_bundle_id, okf_concept_path);
 
 
 --
@@ -3953,6 +4284,54 @@ ALTER TABLE ONLY optimization.active_optimized_content
 
 
 --
+-- Name: improvement_candidates improvement_candidates_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.improvement_candidates
+    ADD CONSTRAINT improvement_candidates_pkey PRIMARY KEY (candidate_id);
+
+
+--
+-- Name: improvement_candidates improvement_candidates_tenant_id_project_id_source_key_key; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.improvement_candidates
+    ADD CONSTRAINT improvement_candidates_tenant_id_project_id_source_key_key UNIQUE (tenant_id, project_id, source_key);
+
+
+--
+-- Name: improvement_jobs improvement_jobs_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.improvement_jobs
+    ADD CONSTRAINT improvement_jobs_pkey PRIMARY KEY (job_id);
+
+
+--
+-- Name: improvement_jobs improvement_jobs_tenant_id_project_id_author_subject_idempo_key; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.improvement_jobs
+    ADD CONSTRAINT improvement_jobs_tenant_id_project_id_author_subject_idempo_key UNIQUE (tenant_id, project_id, author_subject, idempotency_key);
+
+
+--
+-- Name: improvement_schedules improvement_schedules_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.improvement_schedules
+    ADD CONSTRAINT improvement_schedules_pkey PRIMARY KEY (schedule_id);
+
+
+--
+-- Name: optimization_changes optimization_changes_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.optimization_changes
+    ADD CONSTRAINT optimization_changes_pkey PRIMARY KEY (change_id);
+
+
+--
 -- Name: optimization_datasets optimization_datasets_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
 --
 
@@ -3974,6 +4353,73 @@ ALTER TABLE ONLY optimization.optimization_datasets
 
 ALTER TABLE ONLY optimization.optimization_revisions
     ADD CONSTRAINT optimization_revisions_pkey PRIMARY KEY (optimization_id);
+
+
+--
+-- Name: ticket_closure_judgments ticket_closure_judgments_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.ticket_closure_judgments
+    ADD CONSTRAINT ticket_closure_judgments_pkey PRIMARY KEY (judgment_id);
+
+
+--
+-- Name: ticket_closure_judgments ticket_closure_judgments_tracking_id_closure_hash_context_h_key; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.ticket_closure_judgments
+    ADD CONSTRAINT ticket_closure_judgments_tracking_id_closure_hash_context_h_key UNIQUE (tracking_id, closure_hash, context_hash);
+
+
+--
+-- Name: ticket_closure_tracking ticket_closure_tracking_pkey; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.ticket_closure_tracking
+    ADD CONSTRAINT ticket_closure_tracking_pkey PRIMARY KEY (tracking_id);
+
+
+--
+-- Name: ticket_closure_tracking ticket_closure_tracking_tenant_id_project_id_source_run_id__key; Type: CONSTRAINT; Schema: optimization; Owner: omitted
+--
+
+ALTER TABLE ONLY optimization.ticket_closure_tracking
+    ADD CONSTRAINT ticket_closure_tracking_tenant_id_project_id_source_run_id__key UNIQUE (tenant_id, project_id, source_run_id, ticket_key);
+
+
+--
+-- Name: improvement_candidates_scope; Type: INDEX; Schema: optimization; Owner: omitted
+--
+
+CREATE INDEX improvement_candidates_scope ON optimization.improvement_candidates USING btree (tenant_id, project_id, created_at);
+
+
+--
+-- Name: improvement_jobs_claim; Type: INDEX; Schema: optimization; Owner: omitted
+--
+
+CREATE INDEX improvement_jobs_claim ON optimization.improvement_jobs USING btree (tenant_id, status, lease_until, created_at);
+
+
+--
+-- Name: improvement_schedules_due; Type: INDEX; Schema: optimization; Owner: omitted
+--
+
+CREATE INDEX improvement_schedules_due ON optimization.improvement_schedules USING btree (tenant_id, enabled, next_run_at);
+
+
+--
+-- Name: ix_ticket_closure_judgments_tracking; Type: INDEX; Schema: optimization; Owner: omitted
+--
+
+CREATE INDEX ix_ticket_closure_judgments_tracking ON optimization.ticket_closure_judgments USING btree (tenant_id, project_id, tracking_id, created_at);
+
+
+--
+-- Name: ix_ticket_closure_tracking_scope; Type: INDEX; Schema: optimization; Owner: omitted
+--
+
+CREATE INDEX ix_ticket_closure_tracking_scope ON optimization.ticket_closure_tracking USING btree (tenant_id, project_id, tracking_id);
 
 
 --

@@ -12,10 +12,12 @@ from sqlalchemy import (
     Column,
     Float,
     Integer,
+    Index,
     JSON,
     MetaData,
     String,
     Table,
+    UniqueConstraint,
     delete,
     insert,
     select,
@@ -115,6 +117,13 @@ platform_knowledge = Table(
     Column("content", String, nullable=False),
     Column("media_type", String(64), nullable=False, default="text/markdown"),
     Column("upload", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("structure", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("capture", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("okf", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("associations", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("required_associations", JSON().with_variant(JSONB, "postgresql"), nullable=True),
+    Column("okf_bundle_id", String(128)),
+    Column("okf_concept_path", String(1024)),
     Column("size_bytes", Integer, nullable=False, default=0),
     Column("status", String(32), nullable=False, default="active"),
     Column("revision", Integer, nullable=False, default=0),
@@ -125,6 +134,63 @@ platform_knowledge = Table(
     Column("review_reason", String(2000)),
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
+    UniqueConstraint("tenant_id", "project_id", "okf_bundle_id", "okf_concept_path", name="uq_knowledge_okf_path"),
+)
+
+knowledge_okf_bundles = Table(
+    "knowledge_okf_bundles", metadata,
+    Column("bundle_id", String(128), primary_key=True),
+    Column("tenant_id", String(256), nullable=False),
+    Column("project_id", String(256), nullable=False),
+    Column("name", String(256), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("content_hash", String(128), nullable=False),
+    Column("concept_count", Integer, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False),
+)
+
+knowledge_captures = Table(
+    "knowledge_captures", metadata,
+    Column("capture_key", String(128), primary_key=True),
+    Column("tenant_id", String(256), nullable=False),
+    Column("project_id", String(256), nullable=False),
+    Column("source_kind", String(32), nullable=False),
+    Column("source_id", String(512), nullable=False),
+    Column("source_hash", String(128), nullable=False),
+    Column("source_modified_at", Float, nullable=False),
+    Column("unavailable_at", Float),
+    Column("doc_id", String(128), nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("last_seen_at", Float, nullable=False),
+)
+
+knowledge_source_states = Table(
+    "knowledge_source_states", metadata,
+    Column("source_key", String(128), primary_key=True),
+    Column("tenant_id", String(256), nullable=False),
+    Column("project_id", String(256), nullable=False),
+    Column("source_kind", String(32), nullable=False),
+    Column("source_id", String(512), nullable=False),
+    Column("unavailable_at", Float, nullable=False),
+    Column("source_modified_at", Float),
+)
+
+Index("knowledge_captures_source_version", knowledge_captures.c.tenant_id, knowledge_captures.c.project_id,
+      knowledge_captures.c.source_kind, knowledge_captures.c.source_id, knowledge_captures.c.source_modified_at.desc(),
+      knowledge_captures.c.last_seen_at.desc(), knowledge_captures.c.created_at.desc())
+Index("knowledge_source_states_scope", knowledge_source_states.c.tenant_id, knowledge_source_states.c.project_id,
+      knowledge_source_states.c.source_kind, knowledge_source_states.c.source_id)
+
+knowledge_uploads = Table(
+    "knowledge_uploads", metadata,
+    Column("tenant_id", String(256), primary_key=True),
+    Column("project_id", String(256), primary_key=True),
+    Column("source_sha256", String(64), primary_key=True),
+    Column("doc_id", String(128), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("content_hash", String(128), nullable=False),
+    Column("created_at", Float, nullable=False),
 )
 
 platform_alerts = Table(
@@ -360,13 +426,14 @@ DEFAULT_UI_NAVIGATION = [
         ("billing", "Billing", "Manage budgets and quotas", "Monitoring", True),
         ("settings", "Platform settings", "Configure the workspace", "Admin console", True),
         ("harness-library", "Harness library", "Manage workflow templates", "Configuration", True),
-        ("triage-board", "Live Triage Board", "SLA-driven queue & autonomous triage", "Workspace", True),
+        ("triage-board", "Live Triage Board", "Recorded incident queue and guided triage", "Workspace", True),
         ("tickets", "Incidents & Tickets", "Enterprise ticket and incident desk", "Workspace", True),
         ("rca-workbench", "RCA Workbench", "Multi-methodology root cause analysis", "Workspace", True),
         ("feedback", "SRE Feedback Loop", "Calibrate model prompts and queries", "Workspace", True),
         ("artifacts", "Artifacts & Storage", "Manage investigation artifacts and skills", "Workspace", True),
         ("orchestration", "Agent Orchestration", "Visual workflow DAG and topology", "Workspace", True),
-        ("docs", "Playbooks & Docs", "Operational playbooks and schema tester", "Workspace", True),
+        ("docs", "Project docs & playbooks", "Read approved documents and playbooks for this project", "Workspace", True),
+        ("platform-docs", "Platform handbook", "Read deployment, configuration and operating guides for the platform", "Help", True),
     )
 ]
 

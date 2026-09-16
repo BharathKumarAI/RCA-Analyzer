@@ -87,6 +87,20 @@ def model_factory(stage, config):
     return FixtureModel(model=config.model, stage=stage)
 
 
+def candidate_receipt(client, headers, candidate):
+    """Exercise the real candidate API with a local evidence fixture."""
+    uploaded = client.post("/api/v1/files", headers=headers,
+        files={"files": ("candidate.txt", b"2026-09-11T10:15:00Z timeout observed", "text/plain")})
+    assert uploaded.status_code == 201, uploaded.text
+    evidence = uploaded.json()
+    tested = client.post("/api/v1/project/test", headers=headers, json=candidate | {"run": {
+        "capability": "attachment_review", "prompt": "Review the recorded timeout evidence",
+        "chat_id": evidence["chat_id"], "attachment_ids": [item["attachment_id"] for item in evidence["attachments"]],
+    }})
+    assert tested.status_code == 200 and tested.json()["receipt"]["passed"], tested.text
+    return tested.json()["run"]["run_id"]
+
+
 def settings_for(directory, mode="demo"):
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_key = (

@@ -11,7 +11,7 @@ from app.optimization.models import OptimizationConfig
 from app.tools.catalog import ALLOWED_ACTIONS
 from app.configuration.models import ConnectorTemplate, CatalogSkillRecord
 
-STAGES = {"triage", "logs", "extraction", "synthesis", "router", "orchestrator"}
+STAGES = {"triage", "logs", "evidence", "extraction", "synthesis", "router", "orchestrator"}
 
 
 def _normalize_legacy_connector_template(row: dict) -> dict:
@@ -187,13 +187,13 @@ class PlatformConfiguration:
         prompts = read("prompts.yaml")
         if (
             not isinstance(prompts, dict)
-            or set(prompts) != STAGES
+            or set(prompts) not in (STAGES, STAGES - {"evidence"})
             or not all(
                 isinstance(text, str) and text.strip() for text in prompts.values()
             )
         ):
             raise ValueError(
-                "prompts.yaml must define all six nonempty stage instructions"
+                "prompts.yaml must define the six core nonempty stage instructions and optional evidence instruction"
             )
         for cap in registry.list_all():
             if cap.enabled and set(cap.allowed_actions) - ALLOWED_ACTIONS:

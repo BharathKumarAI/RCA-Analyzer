@@ -2,9 +2,11 @@
 
 Start here for the complete product, implementation and operating flow. The five primary guides explain the system; five detailed handbooks cover connectors, ADK, data, security and knowledge. All maintained human-facing technical guides live in this folder. Root project/agent instruction entrypoints and runtime skill/storage-layout notes remain beside the files that require them.
 
+In the application, these deployment guides appear in **Platform handbook** (`/admins/platform-docs`). **Project docs & playbooks** (`/p/{project_key}/docs`) is a separate reader for that project's approved Knowledge documents. The [navigation guide](project.md#administration-and-project-navigation-flow) explains access and the review workflow.
+
 ## Explore the system
 
-Click a diagram node to open its detailed explanation. The linked reading paths below each graph provide the same navigation in Markdown viewers that disable Mermaid links. Links are relative to the document, so keep the `docs/` layout intact when publishing it. Sequence-diagram participants expose related-document links in renderers that support that feature.
+Use the linked reading paths below each diagram to open its detailed explanation. The application renders diagrams without interactive links; other Markdown viewers may also support linked nodes and sequence participants. Links are relative to the document, so keep the `docs/` layout intact when publishing it.
 
 ```mermaid
 flowchart TD
@@ -57,7 +59,7 @@ Chat and metrics development: [product requirements](project.md#chat-and-metrics
 | [Connectors](connectors.md) | Object model, exact form groups, all ten seed field/auth dictionaries, ownership, save/test/enable gates, Direct/MCP/Hybrid, native reads and extension workflow |
 | [ADK harness](harness.md) | Native classes, conditional stages, graph compiler, sessions/events, model/tool boundaries, authoring, approval and new agent/skill decisions |
 | [Data model](data-model.md) | Schema ownership, linked relationship flows, application/native table dictionary, blob lifecycle, consolidated DDL by schema and ten read-only PostgreSQL diagnostic queries |
-| [Knowledge and improvement](knowledge.md) | Document lifecycle, Open Knowledge Format integration design, exact retrieval rules, storage/APIs, ADK optimization, evaluation gates and a proposed self-improvement roadmap |
+| [Knowledge and improvement](knowledge.md) | Document lifecycle, implemented Open Knowledge Format exchange, exact retrieval rules, storage/APIs, ADK optimization, evaluation gates and governed scheduled improvement |
 | [Security](security.md) | Identity, roles, project boundaries, OIDC, CSRF, independent review, provider controls, untrusted data, storage and documented gaps |
 
 ## Follow one feature end to end

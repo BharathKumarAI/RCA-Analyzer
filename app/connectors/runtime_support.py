@@ -12,7 +12,7 @@ def connector_runtime_support(adapter: str) -> list[dict[str, str]]:
         "itsm": [
             {"name": "Jira REST API", "status": "supported", "detail": "Version 3, bounded Atlassian Document Format parsing and project-scoped requests."},
             {"name": "Comments and attachments", "status": "supported", "detail": "Reads returned comments and attachment metadata. File processing uses local uploads; remote attachment downloads are unavailable."},
-            {"name": "Dynamic JQL and search fields", "status": "limited", "detail": "Scoped JQL validation and saved filters are available. Queue polling and configurable runtime search-field selection are not implemented."},
+            {"name": "Dynamic JQL and search fields", "status": "limited", "detail": "Nested scoped filters, active project-member mappings and bounded live match tests are available. Queue polling and configurable runtime search-field selection are not implemented."},
             {"name": "Linked issues, qTest links and historical tickets", "status": "unavailable", "detail": "Automatic relationship traversal and historical similarity retrieval are not implemented."},
             {"name": "Create, update and delete tickets", "status": "unavailable", "detail": "Issue mutations are blocked by release policy."},
         ],
@@ -23,7 +23,7 @@ def connector_runtime_support(adapter: str) -> list[dict[str, str]]:
         "gitlab": [{"name": "Deployment evidence", "status": "supported", "detail": "Reads deployment records from one authorized project ID."}],
         "kubernetes": [{"name": "Infrastructure health", "status": "supported", "detail": "Reads pod status in one authorized namespace. Cluster mutations and remote execution are unavailable."}],
         "unix": [{"name": "Log evidence", "status": "supported", "detail": "Reads a bounded tail of the authorized log path over SFTP. Shell commands cannot execute."}],
-        "kafka": [{"name": "Topic evidence", "status": "limited", "detail": "Reads bounded partition metadata for one authorized topic. Message consumption, production and consumer-group lag are unavailable."}],
+        "kafka": [{"name": "Topic evidence", "status": "limited", "detail": "Reads bounded partition metadata for selected topics within the saved connection's approved names. Explicit selection and include/exclude filters are supported; metadata never permits topic creation. Message consumption, production and consumer-group lag are unavailable."}],
         "oracle": [{"name": "Session diagnostics", "status": "supported", "detail": "Reads a fixed, bounded session wait snapshot for one authorized database username using Thin mode and a read-only account. Arbitrary SQL and database mutations are unavailable."}],
     }
     return [*details.get(adapter, []), *common]

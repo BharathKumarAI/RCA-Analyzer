@@ -37,6 +37,8 @@ class RunRequest(BaseModel):
     chat_id: str | None = Field(default=None, pattern=r"^chat_[0-9a-f]{32}$")
     attachment_ids: tuple[str, ...] = Field(default=(), max_length=100)
     connector_selections: dict[str, ConnectorSelection] = Field(default_factory=dict, max_length=10)
+    environment_id: str | None = Field(default=None, min_length=1, max_length=128)
+    knowledge_document_ids: tuple[str, ...] = Field(default=(), max_length=3)
 
 
 class RunContract(BaseModel):

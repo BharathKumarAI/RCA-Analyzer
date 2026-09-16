@@ -109,7 +109,7 @@ class AgentConfigurationService:
     def _stage_names(self):
         value = self.profiles
         if hasattr(value, "stages"):
-            return set(value.stages) | {"extraction", "triage", "logs", "synthesis"}
+            return set(value.stages) | {"extraction", "triage", "logs", "synthesis", "evidence"}
         if isinstance(value, dict) and "stages" in value:
             return set(value["stages"])
         return {"extraction", "triage", "logs", "synthesis", "fast_synthesis"}

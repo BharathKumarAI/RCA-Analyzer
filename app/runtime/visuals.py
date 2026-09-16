@@ -3,16 +3,16 @@
 from datetime import datetime
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictStr, StringConstraints, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$")]
-Label = Annotated[str, Field(min_length=1, max_length=160)]
+Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=160)]
 EvidenceId = Annotated[str, Field(min_length=1, max_length=128)]
 Cell = Union[Annotated[StrictStr, Field(max_length=1000)], Annotated[StrictFloat, Field(allow_inf_nan=False)], StrictBool, None]
 
 
 class VisualModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid")
 
 
 class CitedDatum(VisualModel):
@@ -34,7 +34,9 @@ class VisualBase(VisualModel):
 
 class ChartPoint(CitedDatum):
     label: Label
-    value: Annotated[StrictFloat, Field(allow_inf_nan=False)] | None
+    # ADK omits null object fields when forwarding validated workflow output.
+    # Missing therefore retains the same unknown meaning on the second validation.
+    value: Annotated[StrictFloat, Field(allow_inf_nan=False)] | None = None
 
 
 class ChartVisual(VisualBase):
@@ -100,7 +102,7 @@ class TableVisual(VisualBase):
 
 class CodeVisual(VisualBase, CitedDatum):
     kind: Literal["code"]
-    language: Literal["text", "json", "yaml", "sql", "python", "javascript", "typescript", "shell", "java", "xml", "diff"]
+    language: Literal["text", "json", "yaml", "sql", "python", "javascript", "typescript", "shell", "java", "xml", "diff", "mermaid"]
     code: str = Field(min_length=1, max_length=8000)
 
 

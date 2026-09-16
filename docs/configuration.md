@@ -165,8 +165,10 @@ For example, an instance-and-environment override takes precedence over the same
 
 The original uploaded file remains separate from edited text. Downloading an original does not generate a document from subsequent text edits. Deletion is disabled to retain audit history. At investigation time the service verifies eligible revision content, applies bounded keyword selection, and freezes selected excerpts and hashes into the run. Sources: [knowledge service](../app/configuration/knowledge.py), [upload API](../app/api/routes/knowledge_uploads.py), [catalog endpoints](../app/api/routes/catalog.py).
 
+Structured articles use the same lifecycle: bounded topic/summary/blocks generate canonical Markdown and participate in the reviewed hash. Capture jobs organize approved original documents, closed Jira tickets, authorized Confluence pages and verified feedback into separate drafts. The `knowledge.capture_lookback_months` parameter starts at three calendar months and accepts 1–24; the capture settings API uses existing parameter definition/override revision checks. Saved external connector selections and capability permissions remain mandatory. See [capture contracts and source-update behavior](knowledge.md#structured-topics-and-source-capture). Sources: [models](../app/configuration/knowledge_structure.py), [settings and source admission](../app/configuration/knowledge.py), [capture job request](../app/optimization/improvement_models.py).
 
-See the [complete knowledge-base and improvement handbook](knowledge.md) for forms, storage, retrieval, APIs, optimization and the proposed feedback loop.
+
+See the [complete knowledge-base and improvement handbook](knowledge.md) for forms, storage, scoped retrieval, OKF exchange, evaluation and the governed feedback loop. Knowledge scope changes are immutable reviewed revisions. Once approved, required-document rules continue blocking their matching capabilities through edits or revocation until an independently approved revision removes the requirement. Sources: [knowledge service](../app/configuration/knowledge.py), [scope regression](../tests/integration/test_knowledge_associations.py).
 
 ## Workflow: change an agent or harness
 
@@ -188,4 +190,4 @@ Follow [forms](connectors.md#template-and-form-contract) → [saved records](dat
 
 ## OKF policy integration
 
-See the [OKF administration design](knowledge.md#project-and-administration-experience) for proposed import, export and freshness policies. Implement any new controls through database-managed definitions with real consumers. Portable source lifecycle and verification metadata cannot replace local draft/review/approval state.
+The Knowledge page supports bounded OKF preview, draft import and hash-checked export. Freshness and eligibility use database-managed `knowledge.okf_*` parameter definitions. Portable source lifecycle and verification metadata cannot replace local draft/review/approval state. See [OKF administration](knowledge.md#project-and-administration-experience), [exchange implementation](../app/configuration/knowledge_okf.py) and [policy resolution](../app/configuration/knowledge.py).

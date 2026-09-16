@@ -165,7 +165,7 @@ def available_builtins(capability, stages, options, actions, attachments=False, 
         names.append("triage_agent")
     if "logs" in enabled and "log_search.query_range" in actions and stages["logs"].enabled:
         names.append("logs_investigator")
-    if "evidence" in enabled and any(a.split('.')[0] not in {"itsm", "log_search"} for a in actions) and stages["logs"].enabled:
+    if "evidence" in enabled and any(a.split('.')[0] not in {"itsm", "log_search"} for a in actions) and stages["evidence"].enabled:
         names.append("connector_evidence_investigator")
     if "file" in enabled and options.attachments and attachments and stages["extraction"].enabled:
         names.append("file_investigator")

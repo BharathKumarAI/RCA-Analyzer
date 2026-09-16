@@ -33,6 +33,8 @@ assert.equal('connector_selections' in JSON.parse(calls.at(-1).init.body), false
 const connectorSelections = { jira: { instance_id: 'support-east', environment_id: 'production' }, splunk: { instance_id: 'logs-primary' } };
 await api.streamStudioRun('incident_triage', 'Inspect', () => {}, undefined, { connectorSelections });
 assert.deepEqual(JSON.parse(calls.at(-1).init.body), { capability: 'incident_triage', prompt: 'Inspect', connector_selections: connectorSelections });
+await api.streamStudioRun('attachment_review', 'Explain', () => {}, undefined, { knowledgeSelection: { environmentId: 'production', documentIds: ['kb-approved'] } });
+assert.deepEqual(JSON.parse(calls.at(-1).init.body), { capability: 'attachment_review', prompt: 'Explain', environment_id: 'production', knowledge_document_ids: ['kb-approved'] });
 assert.equal((await api.fetchStudioTrace('run-1')).events[0].sequence, 1);
 await api.exportStudioBundle('incident_triage');
 assert.equal((await calls.at(-1).init.headers.get('Authorization')), 'Bearer studio-session');
@@ -79,7 +81,7 @@ const attemptKeys = [];
 let uuid = 0;
 const context = {
   input: 'Inspect the failure', capability: 'incident_triage', runningRef: { current: false },
-  connectorScope: { ready: true, selections: { itsm: { instance_id: 'jira-main', environment_id: 'prod' } } },
+  knowledgeSelection: { environmentId: '', documentIds: [] }, connectorScope: { ready: true, selections: { itsm: { instance_id: 'jira-main', environment_id: 'prod' } } },
   attemptRef: { current: null }, traceRef: { current: null }, traceFetchRef: { current: null }, abortRef: { current: null },
   AbortController, crypto: { randomUUID: () => `key-${++uuid}` },
   setInput: value => { context.input = typeof value === 'function' ? value(context.input) : value; },

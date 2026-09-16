@@ -1072,11 +1072,27 @@ class TriageStore:
             "timestamp": now,
         }
         async with self.engine.begin() as conn:
+            # Bind feedback to the source version at submission, even if the ticket is
+            # subsequently refreshed from another run.
+            ticket = (await conn.execute(select(triage_tickets).where(
+                triage_tickets.c.tenant_id == tenant_id,
+                triage_tickets.c.project_id == project_id,
+                triage_tickets.c.ticket_id == ticket_key,
+            ).with_for_update())).mappings().first()
+            if ticket is None:
+                raise ValueError("Ticket not found")
+            investigation_id = await conn.scalar(select(triage_investigations.c.investigation_id).where(
+                triage_investigations.c.tenant_id == tenant_id,
+                triage_investigations.c.project_id == project_id,
+                triage_investigations.c.ticket_id == ticket_key,
+            ).order_by(triage_investigations.c.created_at.desc()).limit(1))
+            payload["source_run_id"] = (ticket["custom_fields"] or {}).get("source_run_id")
+            payload["investigation_id"] = investigation_id
             await conn.execute(
                 insert(investigation_events).values({
                     "event_id": event_id,
                     "ticket_id": ticket_key,
-                    "investigation_id": None,
+                    "investigation_id": investigation_id,
                     "tenant_id": tenant_id,
                     "project_id": project_id,
                     "event_type": "SRE_CALIBRATION_FEEDBACK",
@@ -1096,6 +1112,8 @@ class TriageStore:
             "author": author,
             "time": "Just now",
             "timestamp": now,
+            "source_run_id": payload["source_run_id"],
+            "investigation_id": investigation_id,
         }
 
     async def list_calibration_feedback(
@@ -1130,6 +1148,8 @@ class TriageStore:
                     "author": r["actor_id"],
                     "time": f"{int((now - r['occurred_at']) // 60)}m ago" if (now - r["occurred_at"]) < 3600 else f"{int((now - r['occurred_at']) // 3600)}h ago",
                     "timestamp": r["occurred_at"],
+                    "source_run_id": r["payload"].get("source_run_id"),
+                    "investigation_id": r["investigation_id"],
                 }
                 for r in rows
             ]

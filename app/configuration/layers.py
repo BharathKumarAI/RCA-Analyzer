@@ -221,12 +221,17 @@ class ConfigurationLayers:
             preferences = preferences.model_copy(
                 update=user.preferences.model_dump(exclude_unset=True)
             )
+        resolved_prompts = {**prompts, **(project.prompts if project else {})}
+        # Preserve existing six-stage database configurations using their saved
+        # logs instruction. New configurations have an independent evidence key.
+        if "evidence" not in resolved_prompts and "logs" in resolved_prompts:
+            resolved_prompts["evidence"] = resolved_prompts["logs"]
         return {
             "settings": limits.apply(settings),
             "max_tool_calls": limits.max_tool_calls,
             "workflow": workflow,
             "preferences": preferences,
-            "prompts": {**prompts, **(project.prompts if project else {})},
+            "prompts": resolved_prompts,
             "disabled_connectors": project.disabled_connectors if project else (),
             "environments": project.environments if project else (),
         }

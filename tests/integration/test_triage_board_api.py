@@ -202,6 +202,14 @@ def test_import_recorded_investigation_is_real_scoped_and_idempotent(tmp_path):
         imported = client.post(f"/api/v1/triage/runs/{run_id}/import", headers=headers)
         assert imported.status_code == 200, imported.text
         assert imported.json()["ticket_id"] == "SAMSON-101"
+        feedback_body = {"ticket_key": "SAMSON-101", "rating": "DOWN", "tags": ["Source grounding"], "comment": "Check password=source-secret before citing this connection."}
+        feedback_response = client.post("/api/v1/triage/feedback", headers=headers, json=feedback_body)
+        assert feedback_response.status_code == 200, feedback_response.text
+        assert feedback_response.json()["source_run_id"] == run_id
+        assert feedback_response.json()["investigation_id"] == imported.json()["investigation_id"]
+        assert "source-secret" not in feedback_response.text
+        assert client.post("/api/v1/triage/feedback", headers=headers, json={**feedback_body, "comment": "   "}).status_code == 422
+        assert client.post("/api/v1/triage/feedback", headers=headers, json={**feedback_body, "tags": ["x" * 81]}).status_code == 422
         assert client.post(f"/api/v1/triage/runs/{run_id}/import", headers=headers).json() == imported.json()
         board = client.get("/api/v1/triage/live-board", headers=headers).json()
         assert board["total_tickets"] == 1

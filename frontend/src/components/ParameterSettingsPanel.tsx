@@ -17,6 +17,7 @@ interface ParameterSettingsPanelProps {
   scope: PanelScope;
   tool?: string;
   excludeNames?: string[];
+  includeNames?: string[];
 }
 
 const formatValue = (value: unknown): string =>
@@ -30,7 +31,7 @@ const parseValue = (raw: string, type: ParameterDefinitionRow['value_type'], all
   return parsed;
 };
 
-export function ParameterSettingsPanel({ principal, scope, tool, excludeNames }: ParameterSettingsPanelProps) {
+export function ParameterSettingsPanel({ principal, scope, tool, excludeNames, includeNames }: ParameterSettingsPanelProps) {
   const [parameters, setParameters] = useState<ParameterDefinitionRow[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -71,9 +72,10 @@ export function ParameterSettingsPanel({ principal, scope, tool, excludeNames }:
         row =>
           (!tool || row.tool === tool) &&
           !excludeNames?.includes(row.variable_name) &&
+          (!includeNames || includeNames.includes(row.variable_name)) &&
           (scope === 'project' ? row.project_visible : true)
       ),
-    [parameters, scope, tool, excludeNames]
+    [parameters, scope, tool, excludeNames, includeNames]
   );
 
   const isEditable = (row: ParameterDefinitionRow) => {

@@ -155,6 +155,23 @@ def test_approved_knowledge_can_answer_without_external_sources(tmp_path):
         assert ordinary["reason_code"] == "approved_project_knowledge"
 
 
+def test_explicit_knowledge_selects_its_authorized_local_capability(tmp_path):
+    settings, token = settings_for(tmp_path, mode="live")
+    with TestClient(create_app(settings, model_factory=model_factory)) as client:
+        registry = client.app.state.registry
+        capability = registry.get("attachment_review").model_copy(update={"id": "scoped_guidance"})
+        registry._capabilities[capability.id] = capability
+        document = approve_knowledge(client, token, draft(client, token, associations={"capability_ids": [capability.id]}))
+        chat_id = chat(client, token)
+        result = resolve(client, token, chat_id, "Explain this guidance", knowledge_document_ids=[document["id"]])
+        assert result["capability"] == capability.id
+        assert result["reason_code"] == "approved_project_knowledge"
+        rejected = client.post("/api/v1/chat/resolve", headers=token("viewer"), json={
+            "chat_id": chat_id, "prompt": "Explain this guidance", "knowledge_document_ids": ["unavailable"],
+        })
+        assert rejected.status_code == 403
+
+
 def test_missing_connection_uses_real_blocked_run_and_no_invented_answer(tmp_path):
     settings, token = settings_for(tmp_path, mode="live")
     with TestClient(create_app(settings, model_factory=model_factory)) as client:

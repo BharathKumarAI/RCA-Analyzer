@@ -22,6 +22,7 @@ from app.persistence.telemetry import telemetry
 from app.runtime.run_contract import InvestigationResult, RunContract, content_hash
 from sqlalchemy import select
 from app.persistence.triage import TriageStore
+from app.policy.redaction import redact
 from app.runtime.sla_engine import compute_ticket_sla_state, rank_focus_queue, resolve_sla_targets
 
 router = APIRouter(prefix="/api/v1/triage", tags=["triage-board"])
@@ -518,10 +519,10 @@ class TicketCommentRequest(BaseModel):
 
 
 class CalibrationFeedbackRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     ticket_key: str = Field(min_length=2, max_length=64)
     rating: str = Field(pattern=r"^(UP|DOWN)$")
-    tags: List[str] = Field(default_factory=list, max_length=20)
+    tags: List[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=20)
     comment: str = Field(min_length=1, max_length=4000)
 
 
@@ -597,8 +598,8 @@ async def record_feedback(
         principal.project_id,
         body.ticket_key,
         body.rating,
-        body.tags,
-        body.comment,
+        list(dict.fromkeys(redact(tag, max_text=80) for tag in body.tags)),
+        redact(body.comment, max_text=4000),
         actor_name,
     )
 

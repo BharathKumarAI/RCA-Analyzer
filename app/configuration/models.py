@@ -127,7 +127,7 @@ ProjectSection = Literal[
     "harness",
 ]
 StageName = Literal[
-    "orchestrator", "triage", "logs", "extraction", "router", "synthesis"
+    "orchestrator", "triage", "logs", "evidence", "extraction", "router", "synthesis"
 ]
 ConnectorName = Literal["itsm", "log_search", "confluence", "signalfx", "qtest", "gitlab", "oracle", "kafka", "unix", "kubernetes"]
 

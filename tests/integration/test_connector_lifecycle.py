@@ -127,12 +127,22 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
     monkeypatch.setenv("JIRA_API_TOKEN", "mock-token-secret")
 
     reject_jql = False
+    returned_project = "PAY"
+    searched = []
 
     async def jira_probe(request):
         if request.url.path in ("/rest/api/2/project/PAY", "/rest/api/3/project/PAY"):
             return httpx2.Response(200, json={"key": "PAY", "name": "Payments"})
         if request.url.path in ("/rest/api/2/jql/autocompletedata", "/rest/api/3/jql/autocompletedata"):
-            return httpx2.Response(200, json={"visibleFieldNames": [{"cfid": "cf[1]", "operators": ["=", "in", "is", "is not"]}]})
+            return httpx2.Response(200, json={"visibleFieldNames": [{"cfid": "cf[1]", "operators": ["=", "in", "is", "is not"]},
+                                                                  {"value": "assignee", "operators": ["in"]}]})
+        if request.url.path == "/rest/api/3/search/jql":
+            import json
+            body = json.loads(request.content)
+            searched.append(body)
+            assert body["fields"] == ["summary", "status", "priority"]
+            return httpx2.Response(200, json={"issues": [{"key": returned_project + "-1", "fields": {
+                "summary": "Check token=private-material", "status": {"name": "Open"}}}], "nextPageToken": "more-results"})
         if request.url.path in ("/rest/api/2/jql/parse", "/rest/api/3/jql/parse"):
             assert request.method == "POST"
             assert request.url.params["validation"] == "strict"
@@ -140,7 +150,8 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
                 return httpx2.Response(200, json={"queries": [{"errors": ["Unknown value"]}]})
             return httpx2.Response(200, json={"queries": [{"structure": {"where": {}}, "errors": []}]})
         if request.url.path in ("/rest/api/2/field", "/rest/api/3/field"):
-            return httpx2.Response(200, json=[{"id": "customfield_1", "name": "Queue", "searchable": True, "schema": {"type": "option"}}])
+            return httpx2.Response(200, json=[{"id": "customfield_1", "name": "Queue", "searchable": True, "schema": {"type": "option"}},
+                                             {"id": "assignee", "name": "Assignee", "searchable": True, "schema": {"type": "user"}}])
         return httpx2.Response(404, json={"error": "missing"})
 
     def controlled_jira(**kwargs):
@@ -204,6 +215,7 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
                 },
                 "timeout_seconds": 30,
                 "max_results": 100,
+                "jira_member_mapping": {"analyst": "jira:analyst-1"},
             }
 
             # 1. Candidate validation
@@ -314,6 +326,7 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
                         },
                         "timeout_seconds": 30,
                         "max_results": 100,
+                        "jira_member_mapping": {"analyst": "jira:analyst-1"},
                     },
                     "expected_revision": 0,
                     "bindings": [
@@ -349,6 +362,25 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
             assert preview.json()["execution_enabled"] is False
             assert preview.json()["validation"] == "jira_strict"
             assert preview.json()["instance_revision"] == 1
+            assert any(member["subject"] == "analyst" and member["jira_account_id"] == "jira:analyst-1" for member in preview.json()["members"])
+            test_path = preview_path.replace("/preview", "/test")
+            result = client.post(test_path, headers=headers, json={"query": {
+                "groups": [{"filters": [{"field": "customfield_1", "operator": "=", "value": "Operations"}]}],
+                "assignees": {"member_ids": ["analyst"]}}, "max_results": 1})
+            assert result.status_code == 200, result.text
+            assert result.json()["returned_count"] == 1 and result.json()["possibly_truncated"] is True
+            assert result.json()["issues"] == [{"key": "PAY-1", "summary": "Check token=[REDACTED]", "status": "Open", "priority": None}]
+            assert '"assignee" IN ("jira:analyst-1")' in searched[-1]["jql"]
+            assert searched[-1]["maxResults"] == 1
+            assert client.post(test_path, headers=headers, json={"query": {"assignees": {"member_ids": ["foreign"]}}}).status_code == 422
+            custom = client.post(test_path, headers=headers, json={"custom_jql": 'status = Open ORDER BY created DESC', "max_results": 1})
+            assert custom.status_code == 200 and searched[-1]["jql"].endswith("ORDER BY created DESC")
+            returned_project = "FOREIGN"
+            assert client.post(test_path, headers=headers, json={"query": {}, "max_results": 1}).status_code == 502
+            returned_project = "PAY"
+            assert client.post(test_path, headers=token("viewer"), json={"query": {}}).status_code == 403
+            assert client.post(test_path.replace("/payments/", "/other/"), headers=headers, json={"query": {}}).status_code == 403
+            assert client.post(test_path + "?environment_id=staging", headers=headers, json={"query": {}}).status_code == 422
             reject_jql = True
             assert client.post(preview_path, headers=headers, json={}).status_code == 422
             reject_jql = False
@@ -403,7 +435,7 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
                     "operation": "test_connection",
                 },
             )
-            assert test_res.status_code == 200
+            assert test_res.status_code == 200, test_res.text
             assert "stage_results" in test_res.json()
             assert test_res.json()["candidate_hash"] == candidate_hash
 

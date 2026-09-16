@@ -158,7 +158,7 @@ This table describes current native provider consumption. Larger historical form
 | qTest / `qtest.read_evidence` | Project identifier | Bearer-token reference | Root project test runs |
 | GitLab / `gitlab.read_evidence` | Project identifier | API-key reference sent as `PRIVATE-TOKEN` | Recent deployment records |
 | Kubernetes / `kubernetes.read_evidence` | Namespace | Service-account token reference | Pod names and status within that namespace |
-| Kafka / `kafka.read_evidence` | Topic | SASL SCRAM over TLS, username/password reference | Partition metadata, not general message consumption |
+| Kafka / `kafka.read_evidence` | Selected topics within the saved connection's explicit approved names | SASL SCRAM over TLS, username/password reference | Bounded partition metadata; no topic creation or message consumption |
 | Unix/Tuxedo / `unix.read_evidence` | Fixed configured file path and SSH host | Username plus password or private-key reference; known-hosts reference | Bounded SFTP file read, not shell/Tuxedo command execution |
 | Oracle / `oracle.read_evidence` | One bound database username | Saved database username and password secret reference; Thin mode, explicit Easy Connect DSN | Fixed bounded session wait snapshot; no model-provided SQL |
 
@@ -189,6 +189,10 @@ Reading path: [form](#instance-form) → [binding](#project-binding-form) → [A
 
 Jira uses Cloud REST v3, cursor pagination and bounded ADF traversal. JQL is constrained to the authorized project. The existence of Jira attachment metadata does not authorize remote attachment fetching; local bounded uploads remain the supported attachment input. No Jira mutations are supported. Sources: [Jira provider](../app/connectors/providers/jira.py), [JQL/schema endpoints](../app/api/routes/connectors_api.py), [mapping card](../frontend/src/components/connectors/JiraFieldMappingCard.tsx).
 
+The saved query builder supports nested all/any groups and active project members or project roles. Jira account IDs come only from the saved `jira_member_mapping`; roles are expanded from current database membership, and every selected member must have a mapping. Strict Jira parsing precedes a live match test, which returns at most 50 actual issues and discloses cursor truncation. Preview and testing do not activate polling or enable the connector. Sources: [bounded builder and member resolution](../app/connectors/jql.py), [authenticated endpoints](../app/api/routes/connectors_api.py), [lifecycle regression](../tests/integration/test_connector_lifecycle.py).
+
+Kafka's native `kafka_topic_selection` selects explicit approved names or applies include/exclude conditions (`equals`, `starts_with`, `contains`, `glob`) to the saved connection's resource scope. Exclusion wins; matching zero topics remains empty. A selection beyond its configured cap fails rather than silently broadening or truncating names. The preview reads real partition metadata with an aggregate result cap and reports unavailable topics and truncation. It neither consumes messages nor discovers names outside that scope. Metadata requests explicitly disable automatic topic creation and require broker metadata protocol version 4 or later. Sources: [selection contract](../app/connectors/kafka_topics.py), [provider](../app/connectors/providers/infrastructure.py), [API regression](../tests/integration/test_kafka_topics_api.py).
+
 ## Direct, MCP and Hybrid
 
 `direct` constructs the native provider. `mcp` resolves a configured MCP endpoint/token and an exact binding for the connector's governed operation. `hybrid` requires an explicit direct-or-MCP route for every governed operation; it does not imply automatic fallback after a failed call.
@@ -217,6 +221,9 @@ These paths are under `/api/v1`. The server derives tenant and author identity; 
 | `/projects/{project_id}/connectors/{instance_id}/enable` or `/disable` | Explicit instance lifecycle action |
 | `/projects/{project_id}/connectors/{instance_id}/fields` | Jira metadata discovery for the saved environment |
 | `/projects/{project_id}/connectors/{instance_id}/jql/preview` | Bounded scoped JQL preview |
+| `/projects/{project_id}/connectors/{instance_id}/jql/test` | Strict validation and bounded actual matches for grouped or custom JQL |
+| `/projects/{project_id}/connectors/{instance_id}/kafka/topics` | Saved connection's authorized topic names; not broker-wide discovery |
+| `/projects/{project_id}/connectors/{instance_id}/kafka/topics/preview` | Actual bounded partition metadata for an authorized selection |
 | `/connectors/validate`, `/connectors/test` | Candidate validation/probe; not independent authorization to enable |
 
 Source: [endpoint implementation and exact request models](../app/api/routes/connectors_api.py).
@@ -276,7 +283,7 @@ Declared limitations: ['Bounded recent deployment records only; pipelines and re
 
 [Template source](../blob_local/platform/config/connector_templates/jira.yaml); native behavior: [provider-specific forms](#provider-specific-forms).
 
-Declared limitations: ['Read-only ticket lookup; comment writes and issue mutations are governance-restricted.', 'Uses Jira Cloud REST API Version 3 with Atlassian Document Format (ADF) rich-text support.', 'JQL preview validates scoped queries; saved custom JQL does not enable queue execution.']
+Declared limitations: ['Read-only ticket lookup; comment writes and issue mutations are governance-restricted.', 'Uses Jira Cloud REST API Version 3 with Atlassian Document Format (ADF) rich-text support.', 'Scoped JQL preview and bounded match tests are available; saved filters do not enable queue polling.']
 
 | Field | Type / requirement | Declared ownership | Runtime binding / meaning |
 | --- | --- | --- | --- |

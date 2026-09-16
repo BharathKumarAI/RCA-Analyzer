@@ -21,6 +21,7 @@ import {
   Square,
   X,
 } from 'lucide-react';
+import { RunKnowledgeSelector, type RunKnowledgeSelection } from '../components/RunKnowledgeSelector';
 import { AnswerMarkdown } from '../components/AnswerMarkdown';
 import { ChatFiles } from '../components/ChatFiles';
 import { RunFeedback } from '../components/RunFeedback';
@@ -257,6 +258,7 @@ export function Chat({
   const [capabilities, setCapabilities] = useState<CapabilityItem[]>([]);
   const [capability, setCapability] = useState('');
   const connectorScope = useRunConnectorSelections(capability);
+  const [knowledgeSelection, setKnowledgeSelection] = useState<RunKnowledgeSelection>({ environmentId: '', documentIds: [] });
   const [question, setQuestion] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [retainedAttachmentIds, setRetainedAttachmentIds] = useState<string[]>([]);
@@ -671,7 +673,7 @@ export function Chat({
       if (!selectedCapability) {
         setPhase('Understanding your question');
         const resolution = await resolveChatQuestion(
-          { chat_id: conversationId, prompt: sentQuestion, attachment_ids: attachmentIds },
+          { chat_id: conversationId, prompt: sentQuestion, attachment_ids: attachmentIds, knowledge_document_ids: knowledgeSelection.documentIds, environment_id: knowledgeSelection.environmentId || undefined },
           controller.current.signal,
         );
         if (!mounted.current || controller.current.signal.aborted) return;
@@ -706,6 +708,7 @@ export function Chat({
       const fingerprint = JSON.stringify({
         chat_id: conversationId,
         capability: selectedCapability,
+        knowledgeSelection,
         prompt: sentQuestion,
         attachment_ids: attachmentIds,
         connector_selections: Object.fromEntries(Object.entries(connectorSelections).sort(([left], [right]) => left.localeCompare(right)).map(([name, selection]) => [name, { instance_id: selection.instance_id, environment_id: selection.environment_id }])),
@@ -745,7 +748,7 @@ export function Chat({
           }
         },
         controller.current.signal,
-        { chatId: conversationId, attachmentIds, connectorSelections, idempotencyKey },
+        { chatId: conversationId, attachmentIds, connectorSelections, idempotencyKey, knowledgeSelection },
       );
       if (mounted.current) {
         setFiles([]);
@@ -1552,6 +1555,7 @@ export function Chat({
                 )}
               </div>
               <RunConnectorSelectors state={connectorScope} disabled={loading || busy} />
+              <RunKnowledgeSelector capability={capability} connectors={connectorScope.selections} value={knowledgeSelection} onChange={setKnowledgeSelection} disabled={loading || busy} />
             </form>
             <p className="chat-composer-note">
               Review the evidence before acting.{' '}

@@ -176,10 +176,10 @@ export const Topbar: React.FC<TopbarProps> = ({
   const visibleNavItems = settings.navigation.filter(item =>
     item.visible &&
     (projectKey
-      ? ['triage-board', 'tickets', 'rca-workbench', 'chat', 'runs', 'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'metrics', ...(canAdmin ? ['project-setup'] : [])].includes(item.page)
+      ? ['triage-board', 'tickets', 'rca-workbench', 'chat', 'runs', 'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'docs', 'platform-docs', 'metrics', ...(canAdmin ? ['project-setup'] : [])].includes(item.page)
       : (!isPlatformAdmin && ['settings', 'capabilities', 'policy'].includes(item.page)
           ? false
-          : !['triage-board', 'tickets', 'rca-workbench', 'chat', 'runs', 'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'project-setup'].includes(item.page)))
+          : !['triage-board', 'tickets', 'rca-workbench', 'chat', 'runs', 'feedback', 'artifacts', 'orchestration', 'knowledge', 'insights', 'docs', 'project-setup'].includes(item.page)))
   );
 
   const filteredNavItems = visibleNavItems.filter(item => {

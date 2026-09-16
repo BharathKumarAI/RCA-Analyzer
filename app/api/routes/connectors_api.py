@@ -32,9 +32,15 @@ from app.connectors.candidate_testing import (
     _NATIVE_AUTH_TYPES,
 )
 from app.connectors.providers.jira import JiraConnector
-from app.connectors.jql import JqlQuery, build_jql, field_contract
+from app.connectors.providers.infrastructure import KafkaConnector
+from app.connectors.kafka_topics import KafkaTopicSelection, select_topics
+from app.connectors.jql import (
+    JqlQuery, JqlTestRequest, build_jql, field_contract, resolve_member_accounts,
+    scope_jql_expression, validate_member_mapping,
+)
 from app.connectors.providers.registry import resolve_project_connector
 from app.connectors.providers.secrets import connection_secret_references
+from app.policy.redaction import redact
 
 router = APIRouter(prefix="/api/v1", tags=["connectors"])
 
@@ -776,6 +782,25 @@ async def save_project_connector(
     bindings_dict = candidate.get("bindings", [])
     _validate_project_environment_bindings(request, principal, bindings_dict)
 
+    if "jira_member_mapping" in candidate or "jql_builder" in candidate:
+        if (template.get("provider_adapter_id") or payload.template_id) != "itsm":
+            raise HTTPException(422, "Jira query settings require a Jira connector")
+        try:
+            if "jira_member_mapping" in candidate:
+                members = await store.list_users(principal.tenant_id, principal.project_id)
+                candidate["jira_member_mapping"] = validate_member_mapping(candidate["jira_member_mapping"], members)
+            if candidate.get("jql_builder") is not None:
+                candidate["jql_builder"] = JqlQuery.model_validate(candidate["jql_builder"]).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+    if candidate.get("kafka_topic_selection") is not None:
+        if (template.get("provider_adapter_id") or payload.template_id) != "kafka":
+            raise HTTPException(422, "Topic selection requires a Kafka connector")
+        try:
+            candidate["kafka_topic_selection"] = KafkaTopicSelection.model_validate(candidate["kafka_topic_selection"]).model_dump(mode="json")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
     if payload.environment_connections:
         require_roles(principal, {Role.PLATFORM_ADMIN})
     connections_dict = [c.model_dump() for c in payload.environment_connections] if payload.environment_connections else None
@@ -1133,8 +1158,36 @@ async def preview_project_connector_jql(
     return await _project_jira_metadata(project_id, instance_id, request, principal, environment_id, True, body)
 
 
-async def _project_jira_metadata(project_id, instance_id, request, principal, environment_id, include_schema=False, query=None):
-    """Resolve and validate one saved instance before reading real Jira metadata."""
+class JqlIssueMatch(BaseModel):
+    key: str
+    summary: str
+    status: str | None = None
+    priority: str | None = None
+
+
+class JqlMatchResponse(BaseModel):
+    instance_id: str
+    instance_revision: int
+    environment_id: str | None = None
+    jql: str
+    issues: list[JqlIssueMatch]
+    returned_count: int
+    possibly_truncated: bool
+    tested_at: float
+    validation: Literal["jira_strict"] = "jira_strict"
+    read_only: Literal[True] = True
+
+
+@router.post("/projects/{project_id}/connectors/{instance_id}/jql/test", response_model=JqlMatchResponse)
+async def test_project_connector_jql(
+    project_id: str, instance_id: str, body: JqlTestRequest, request: Request, principal: Principal,
+    environment_id: Optional[str] = Query(default=None, max_length=64),
+):
+    return await _project_jira_metadata(project_id, instance_id, request, principal, environment_id, True, body.query, body)
+
+
+async def _saved_project_source(project_id, instance_id, request, principal, environment_id, adapter):
+    """Resolve an authorized saved draft or enabled source for bounded inspection."""
     require_roles(principal, ADMIN_ROLES)
     if principal.project_id != project_id:
         raise HTTPException(403, "Caller cannot access out-of-scope project connectors")
@@ -1153,8 +1206,8 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
         raise HTTPException(409, "The connector template version is no longer available.")
     if not _deployment_connector_enabled(request, template):
         raise HTTPException(409, "Connector adapter is disabled by deployment configuration.")
-    if instance.get("template_id") != "itsm" and template.get("provider_adapter_id") != "itsm":
-        raise HTTPException(409, "Field discovery is currently supported only for Jira instances.")
+    if (template.get("provider_adapter_id") or instance.get("template_id")) != adapter:
+        raise HTTPException(409, "The saved instance does not match the requested provider.")
 
     definition = instance.get("definition_json") or {}
     dependency = definition.get("environment_dependency") or instance.get("environment_dependency")
@@ -1190,6 +1243,7 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
     resolvable = dict(instance)
     resolvable["status"] = "enabled"
     resolvable["enabled"] = True
+    resolvable["provider_adapter_id"] = adapter
     try:
         provider = resolve_project_connector(
             resolvable,
@@ -1201,16 +1255,36 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+    return instance, candidate, provider, candidate.get("environment_id", environment_id)
+
+
+async def _project_jira_metadata(project_id, instance_id, request, principal, environment_id, include_schema=False, query=None, test=None):
+    instance, candidate, provider, environment_id = await _saved_project_source(
+        project_id, instance_id, request, principal, environment_id, "itsm")
     if not isinstance(provider, JiraConnector):
         await provider.aclose()
         raise HTTPException(409, "Saved instance does not resolve to the Jira provider.")
+    store = request.app.state.platform_admin
+    definition = instance.get("definition_json") or {}
     try:
+        members = await store.list_users(principal.tenant_id, principal.project_id) if include_schema else []
+        mapping = definition.get("jira_member_mapping") or {}
         limiter = getattr(request.app.state, "integration_probe_limiter", _CANDIDATE_TEST_SEMAPHORE)
         async with limiter, asyncio.timeout(float(candidate.get("timeout_seconds", 30))):
             fields = await provider.discover_fields(include_schema=include_schema)
             if query is not None:
-                generated_jql = build_jql(provider.project_key, query, fields)
+                accounts = resolve_member_accounts(query.assignees, mapping, members) if query.assignees else None
+                generated_jql = build_jql(provider.project_key, query, fields, member_accounts=accounts)
+            elif test is not None:
+                generated_jql = scope_jql_expression(test.custom_jql, provider.project_key)
+            if query is not None or test is not None:
                 await provider.validate_jql(generated_jql)
+            if test is not None:
+                matches = await provider.search_issues(
+                    generated_jql, max_results=min(test.max_results, int(candidate.get("max_results", 100))),
+                    fields=["summary", "status", "priority"],
+                    timeout_s=float(candidate.get("timeout_seconds", 30)),
+                )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     except asyncio.TimeoutError:
@@ -1219,6 +1293,19 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
         raise HTTPException(502, "Jira metadata or query validation failed") from None
     finally:
         await provider.aclose()
+    if test is not None:
+        def label(value):
+            return value.get("name") if isinstance(value, dict) and isinstance(value.get("name"), str) else None
+
+        issues = [JqlIssueMatch(key=item["key"], summary=str(item.get("fields", {}).get("summary") or ""),
+                               status=label(item.get("fields", {}).get("status")),
+                               priority=label(item.get("fields", {}).get("priority"))).model_dump()
+                  for item in matches["issues"]]
+        return JqlMatchResponse(
+            instance_id=instance_id, instance_revision=instance["revision"], environment_id=environment_id,
+            jql=generated_jql, issues=redact(issues, max_text=2000), returned_count=len(issues),
+            possibly_truncated=matches["possibly_truncated"], tested_at=time.time(),
+        )
     result = {
         "instance_id": instance_id,
         "instance_revision": instance.get("revision"),
@@ -1228,6 +1315,9 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
     }
     if include_schema:
         result["query_fields"] = [item for field in fields if (item := field_contract(field)) is not None]
+        result["members"] = [{"subject": member["subject"], "name": member["name"],
+                              "roles": member.get("roles") or [], "jira_account_id": mapping.get(member["subject"])}
+                             for member in members if member.get("status") == "active"][:250]
     if query is not None:
         result["jql"] = generated_jql
         result["execution_enabled"] = False
@@ -1238,6 +1328,63 @@ async def _project_jira_metadata(project_id, instance_id, request, principal, en
 # -----------------------------------------------------------------------------
 # CANDIDATE VALIDATION & TESTING ENGINE
 # -----------------------------------------------------------------------------
+
+class KafkaTopicOutcome(BaseModel):
+    topic: str
+    status: Literal["ok", "unavailable"]
+    partitions: list[dict[str, Any]]
+    possibly_truncated: bool
+
+
+class KafkaTopicPreview(BaseModel):
+    instance_id: str
+    instance_revision: int
+    environment_id: str | None = None
+    selected_topics: list[str]
+    topics: list[KafkaTopicOutcome]
+    partial: bool
+    possibly_truncated: bool
+    tested_at: float
+    read_only: Literal[True] = True
+
+
+@router.get("/projects/{project_id}/connectors/{instance_id}/kafka/topics")
+async def kafka_topic_scope(project_id: str, instance_id: str, request: Request, principal: Principal,
+                            environment_id: Optional[str] = Query(default=None, max_length=64)):
+    instance, _, provider, environment_id = await _saved_project_source(project_id, instance_id, request, principal, environment_id, "kafka")
+    try:
+        if not isinstance(provider, KafkaConnector):
+            raise HTTPException(409, "Topic selection requires a native Kafka connection")
+        return {"instance_id": instance_id, "instance_revision": instance["revision"], "environment_id": environment_id,
+                "authorized_topics": sorted(set(provider.allowed_topics)), "discovery_performed": False}
+    finally:
+        await provider.aclose()
+
+
+@router.post("/projects/{project_id}/connectors/{instance_id}/kafka/topics/preview", response_model=KafkaTopicPreview)
+async def preview_kafka_topics(project_id: str, instance_id: str, body: KafkaTopicSelection, request: Request, principal: Principal,
+                               environment_id: Optional[str] = Query(default=None, max_length=64)):
+    instance, candidate, provider, environment_id = await _saved_project_source(project_id, instance_id, request, principal, environment_id, "kafka")
+    try:
+        if not isinstance(provider, KafkaConnector):
+            raise HTTPException(409, "Topic selection requires a native Kafka connection")
+        select_topics(provider.allowed_topics, body)
+        provider.topic_selection, provider.topic_filter = body, None
+        limiter = getattr(request.app.state, "integration_probe_limiter", _CANDIDATE_TEST_SEMAPHORE)
+        async with limiter, asyncio.timeout(float(candidate.get("timeout_seconds", 30))):
+            result = await provider.read_evidence()
+        return KafkaTopicPreview(instance_id=instance_id, instance_revision=instance["revision"], environment_id=environment_id,
+                                 tested_at=time.time(), **{key: result[key] for key in ("selected_topics", "topics", "partial", "possibly_truncated")})
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Kafka topic preview timed out") from None
+    except Exception:
+        raise HTTPException(502, "Kafka topic preview failed") from None
+    finally:
+        await provider.aclose()
 
 @router.post("/projects/{project_id}/connectors/{instance_id}/test")
 async def test_saved_connector(

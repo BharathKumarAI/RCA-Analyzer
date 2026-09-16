@@ -1,0 +1,8 @@
+import { request } from './api';
+export interface KafkaTopicCondition { operator: 'equals' | 'starts_with' | 'contains' | 'glob'; value: string; }
+export interface KafkaTopicSelection { mode: 'explicit' | 'filters'; topics: string[]; include: KafkaTopicCondition[]; exclude: KafkaTopicCondition[]; max_matched_topics: number; }
+export interface KafkaTopicScope { instance_id: string; instance_revision: number; environment_id: string | null; authorized_topics: string[]; discovery_performed: false; }
+export interface KafkaTopicPreview { instance_id: string; instance_revision: number; environment_id: string | null; selected_topics: string[]; topics: { topic: string; status: 'ok' | 'unavailable'; partitions: Record<string, unknown>[]; possibly_truncated: boolean }[]; partial: boolean; possibly_truncated: boolean; tested_at: number; read_only: true; }
+const path = (project: string, instance: string, preview: boolean, environment?: string) => `/api/v1/projects/${encodeURIComponent(project)}/connectors/${encodeURIComponent(instance)}/kafka/topics${preview ? '/preview' : ''}${environment ? `?environment_id=${encodeURIComponent(environment)}` : ''}`;
+export const fetchKafkaTopicScope = (project: string, instance: string, environment?: string, signal?: AbortSignal) => request<KafkaTopicScope>(path(project, instance, false, environment), { signal });
+export const previewKafkaTopics = (project: string, instance: string, selection: KafkaTopicSelection, environment?: string, signal?: AbortSignal) => request<KafkaTopicPreview>(path(project, instance, true, environment), { method: 'POST', body: selection, signal });

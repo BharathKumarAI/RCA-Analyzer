@@ -10,6 +10,7 @@ This is the application database reference, not an Oracle connector query interf
 - [Connector records](#connector-records)
 - [Run and evidence records](#run-and-evidence-records)
 - [Governance records](#governance-records)
+- [Improvement records](#improvement-records)
 - [Triage records are a separate path](#triage-records-are-a-separate-path)
 - [Storage lifecycles](#storage-lifecycles)
 - [Read-only sample queries](#read-only-sample-queries)
@@ -48,7 +49,7 @@ Reading path: [configuration](#configuration-records) → [governance](#governan
 | `project` | Project scope keys and typed scoped overrides | Scope fields participate in deterministic resolution |
 | `runtime` | Runs, captured evidence, chats, artifacts, browser sessions and trace | A persisted run is not a durable queued task |
 | `governance` | Reviewable definitions, active selections and audit | Blob presence alone never grants activation |
-| `optimization` | Datasets, reviewed revisions and active optimized content | Offline evaluation is not live quality certification |
+| `optimization` | Datasets, reviewed revisions, active content, feedback candidates and leased improvement jobs/schedules | Improvement jobs recover after restart; ordinary investigations do not resume automatically |
 | `adk` | Native ADK state/session/event tables | Managed through the native session service |
 | `mlflow` | Native MLflow tracking schema | Library-owned schema; inspect the installed version rather than inventing a fixed application table list |
 | Blob store | Original uploads, extracted artifacts and content-addressed definitions/exports | Database metadata and blobs require coordinated restoration |
@@ -124,11 +125,21 @@ Connection `credentials_json` contains references where supported; never assume 
 
 `contract_json`, `result_json` and `bundle_json` are serialized application documents; read their model contracts before extracting nested fields. Some are text columns rather than PostgreSQL JSONB, so example queries cast explicitly. Epoch-second business timestamps are distinct from timestamp-typed ETL lineage and native ADK timestamps. Sources: [store definitions](../app/persistence/store.py), [run contract](../app/runtime/run_contract.py), [evidence schema](../app/schemas/evidence.py), [trace](../app/persistence/run_events.py).
 
+Project candidate investigations use the same run/session/evidence records. Their immutable model snapshot adds `project_candidate` with the exact candidate configuration/hash, dependency fingerprint, project revision and optional editor revision. The authenticated author receives a run-ID receipt; only a live `SUCCEEDED` run matching the draft and current dependencies can authorize `/project/setup`. Test receipts are audited in `governance.parameter_audit` with `tool='project_candidate'`. Testing does not activate the draft. This gate covers project setup; separately governed template, harness and parameter changes retain their own endpoints and review rules. Sources: [candidate service](../app/runtime/project_candidate.py), [setup routes](../app/api/routes/catalog.py), [isolation and stale-receipt checks](../tests/integration/test_project_candidate.py).
+
 ## Governance records
 
 Agent drafts and review history use `governance.agent_config_drafts`, `agent_config_audit` and `active_agent_configs`. Harness bundles use `harness_bundles`, `harness_bundle_audit` and `harness_activations`. Their active pointers identify eligible content; history remains separate from current selection.
 
-Knowledge's current document metadata is in `platform.platform_knowledge`; its immutable revisions and audit behavior are owned by the knowledge service. Shared governance audit details also support other reviewed content. Do not invent a `knowledge_revisions` SQL table based on a conceptual lifecycle diagram. Sources: [agent service](../app/configuration/service.py), [harness service](../app/configuration/harness_workspace.py), [knowledge service](../app/configuration/knowledge.py), [review migration](../migrations/history/022_knowledge_review.sql).
+Knowledge's current document metadata is in `platform.platform_knowledge`; its immutable revisions and audit behavior are owned by the knowledge service. OKF bundle identity is recorded in `platform.knowledge_okf_bundles`; reviewed association metadata stays on the document and inside its immutable snapshot. Shared governance audit details also support other reviewed content. Do not invent a `knowledge_revisions` SQL table based on a conceptual lifecycle diagram. Sources: [agent service](../app/configuration/service.py), [harness service](../app/configuration/harness_workspace.py), [knowledge service](../app/configuration/knowledge.py), [review migration](../migrations/history/022_knowledge_review.sql).
+
+## Improvement records
+
+`optimization.improvement_candidates` freezes bounded recorded evidence and its source run hash. A rating is a preparation signal; independent verification records the expected outcome and facts before a candidate can enter a benchmark. Dataset blobs retain that verification provenance, the source run's resolved connector/environment scope, explicit knowledge selections and any frozen reviewed knowledge corpus. Replay uses those identities only against recorded providers, never to open live clients. `optimization.improvement_jobs` owns immutable requests, subject-scoped idempotency keys, attempts, lease fencing, cancellation and results. `optimization.improvement_schedules` owns revisioned cadence and next-run state. Every claimed job rechecks current membership and acquires the matching project runtime. These records do not add automatic resumption to ordinary investigation runs.
+
+`optimization.optimization_changes` records explicit rollback/revoke actions and previous/restored hashes; the existing active-content pointer remains authoritative. Candidate/job transitions use the existing `governance.parameter_audit` with `tool='improvement'`. Candidate list responses contain metadata only; the scoped detail API returns the full retained snapshot. Governance snapshots are retained independently of source-run cleanup, so later run expiry does not erase a curated dataset's evidence. Sources: [improvement service](../app/optimization/improvement.py), [optimization service](../app/optimization/service.py), [migration 030](../migrations/history/030_improvement_workflow.sql), [worker recovery checks](../tests/integration/test_improvement_api.py).
+
+`optimization.ticket_closure_tracking` freezes each eligible source run and exact Jira instance/environment selection. Open tickets remain tracked beyond the discovery window. `optimization.ticket_closure_judgments` retains immutable comparisons keyed by tracking identity, semantic closure hash and judge configuration hash; the tracking row points to the current comparison. Reopened or unavailable tickets have no current closure assessment. Threshold crossings create deduplicated internal alerts in `platform.platform_alerts`. Scores describe model assessment with coverage, not measured diagnostic accuracy. Sources: [closure service](../app/optimization/closure_tracking.py), [migration 034](../migrations/history/034_ticket_closure_tracking.sql).
 
 ## Triage records are a separate path
 
@@ -166,7 +177,7 @@ ORDER BY version DESC
 LIMIT 30;
 ```
 
-Compare with `SCHEMA_VERSION` in [database startup](../app/persistence/database.py), currently 28. A migration version alone does not prove connector/model readiness.
+Compare with `SCHEMA_VERSION` in [database startup](../app/persistence/database.py), currently 34. A migration version alone does not prove connector/model readiness.
 
 ### 2. Inspect active project membership
 
@@ -383,6 +394,42 @@ Declared primary key: `optimization_id`. [Model](../app/optimization/service.py#
 
 `optimization_id` (String(128); required); `tenant_id` (String(256); required); `project_id` (String(256); required); `author_subject` (String(256); required); `request_json` (String; required); `dataset_hash` (String(128); required); `parent_hash` (String(128); nullable); `context_hash` (String(128); required); `report_hash` (String(128); nullable); `status` (String(32); required); `reason` (String; nullable); `created_at` (Float; required); `deadline` (Float; required); `reviewer_subject` (String(256); nullable); `reviewed_at` (Float; nullable).
 
+#### `optimization.improvement_candidates`
+
+Declared primary key: `candidate_id`. [Model](../app/optimization/improvement.py); [creating migration](../migrations/history/030_improvement_workflow.sql).
+
+`candidate_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `author_subject` (VARCHAR(256); required); `source_key` (VARCHAR(256); required); `source_run_id` (VARCHAR(128); required); `source_subject` (VARCHAR(256); required); `capability` (VARCHAR(64); required); `status` (VARCHAR(32); required); `revision` (INTEGER; required); `payload_json` (VARCHAR; required); `verified_json` (VARCHAR; nullable); `verifier_subject` (VARCHAR(256); nullable); `reason` (VARCHAR; nullable); `created_at` (FLOAT; required); `updated_at` (FLOAT; required).
+
+#### `optimization.improvement_jobs`
+
+Declared primary key: `job_id`. [Model](../app/optimization/improvement.py); [creating migration](../migrations/history/030_improvement_workflow.sql).
+
+`job_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `author_subject` (VARCHAR(256); required); `payload_json` (VARCHAR; required); `fingerprint` (VARCHAR(128); required); `idempotency_key` (VARCHAR(128); nullable); `status` (VARCHAR(32); required); `attempts` (INTEGER; required); `cancel_requested` (BOOLEAN; required); `lease_owner` (VARCHAR(128); nullable); `lease_until` (FLOAT; nullable); `result_json` (VARCHAR; nullable); `error` (VARCHAR; nullable); `created_at` (FLOAT; required); `updated_at` (FLOAT; required).
+
+#### `optimization.improvement_schedules`
+
+Declared primary key: `schedule_id`. [Model](../app/optimization/improvement.py); [creating migration](../migrations/history/030_improvement_workflow.sql).
+
+`schedule_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `author_subject` (VARCHAR(256); required); `name` (VARCHAR(128); required); `payload_json` (VARCHAR; required); `interval_seconds` (INTEGER; required); `enabled` (BOOLEAN; required); `revision` (INTEGER; required); `next_run_at` (FLOAT; required); `created_at` (FLOAT; required); `updated_at` (FLOAT; required).
+
+#### `optimization.optimization_changes`
+
+Declared primary key: `change_id`. [Model](../app/optimization/service.py); [creating migration](../migrations/history/030_improvement_workflow.sql).
+
+`change_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `optimization_id` (VARCHAR(128); required); `actor_subject` (VARCHAR(256); required); `action` (VARCHAR(32); required); `previous_hash` (VARCHAR(128); required); `restored_hash` (VARCHAR(128); nullable); `reason` (VARCHAR; required); `created_at` (FLOAT; required).
+
+#### `optimization.ticket_closure_tracking`
+
+Declared primary key: `tracking_id`. [Model](../app/optimization/closure_tracking.py); [creating migration](../migrations/history/034_ticket_closure_tracking.sql).
+
+Columns: `tracking_id`, `tenant_id`, `project_id`, `source_run_id`, `ticket_key`, `capability`, `selection_json`, `snapshot_hash`, `original_json`, `status`, `closure_hash`, `latest_judgment_id`, `last_checked_at`, `closed_at`, `source_modified_at`, `last_error`, `created_at`, `updated_at`. Scope/run/ticket is unique; authoritative source modification time fences delayed observations.
+
+#### `optimization.ticket_closure_judgments`
+
+Declared primary key: `judgment_id`. [Model](../app/optimization/closure_tracking.py); [creating migration](../migrations/history/034_ticket_closure_tracking.sql).
+
+Columns: `judgment_id`, `tracking_id`, `tenant_id`, `project_id`, `closure_hash`, `context_hash`, `model`, `prompt_hash`, `status`, `deviation_score`, `confidence`, `payload_json`, `closure_json`, `usage_json`, `created_at`. Tracking/closure/context is unique. Insufficient closure evidence has a null deviation score.
+
 ### platform application tables
 
 #### `platform.active_configuration`
@@ -451,6 +498,12 @@ Declared primary key: `tenant_id`, `tool`, `variable_name`. [Model](../app/confi
 
 `tenant_id` (String(256); required); `tool` (String(64); required); `variable_name` (String(64); required); `value_type` (String(16); required); `description` (String(2000); required); `default_value` (JSON().with_variant(JSONB, 'postgresql'); required); `enabled` (Boolean; required); `allow_project_override` (Boolean; required); `category` (String(120); required); `subcategory` (String(120); nullable); `allowed_values` (JSON().with_variant(JSONB, 'postgresql'); nullable); `scope` (String(16); required); `icon` (String(64); required); `label` (String(256); nullable); `section` (String(64); nullable); `display_order` (Integer; nullable); `is_required` (Boolean; required); `ownership` (String(32); required); `validation_rules` (JSON().with_variant(JSONB, 'postgresql'); nullable); `runtime_binding` (String(128); nullable); `revision` (Integer; required); `updated_at` (Float; required).
 
+#### `platform.knowledge_okf_bundles`
+
+Declared primary key: `bundle_id`. [Model](../app/persistence/platform_admin.py); [creating migration](../migrations/history/029_knowledge_okf.sql).
+
+`bundle_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `name` (VARCHAR(256); required); `revision` (INTEGER; required); `content_hash` (VARCHAR(128); required); `concept_count` (INTEGER; required); `created_at` (FLOAT; required); `updated_at` (FLOAT; required).
+
 #### `platform.platform_alert_config`
 
 Declared primary key: `tenant_id`, `project_id`. [Model](../app/persistence/platform_admin.py#L148); [creating migration](../migrations/history/006_platform_admin.sql).
@@ -475,11 +528,29 @@ Declared primary key: `tenant_id`, `project_id`. [Model](../app/persistence/plat
 
 `tenant_id` (String(256); required); `project_id` (String(256); required); `max_file_bytes` (Integer; required); `max_files` (Integer; required); `max_text_chars` (Integer; required); `max_pdf_pages` (Integer; required); `max_rows` (Integer; required); `max_cells` (Integer; required); `parser_timeout_seconds` (Integer; required); `concurrency` (Integer; required); `allowed_extensions` (JSON().with_variant(JSONB, 'postgresql'); required); `retention_days` (Integer; required); `auto_prune_enabled` (Boolean; required); `updated_at` (Float; required).
 
+#### `platform.knowledge_uploads`
+
+Declared primary key: `tenant_id`, `project_id`, `source_sha256`. [Model](../app/persistence/platform_admin.py); [creating migration](../migrations/history/032_knowledge_uploads.sql).
+
+Columns: `tenant_id`, `project_id`, `source_sha256`, `doc_id`, `revision`, `content_hash`, `created_at`. Exact uploaded bytes identify one immutable revision within the project. The current document can later change or be revoked; an upload match returns its current state and separately identifies the matched revision, without restoring it.
+
+#### `platform.knowledge_captures`
+
+Declared primary key: `capture_key`. [Model](../app/persistence/platform_admin.py); [creating migration](../migrations/history/033_structured_knowledge.sql).
+
+Columns: `capture_key`, `tenant_id`, `project_id`, `source_kind`, `source_id`, `source_hash`, `source_modified_at`, `unavailable_at`, `doc_id`, `created_at`, `last_seen_at`. A source version maps to one derived document; repeated observations preserve human edits. New versions create independently reviewable drafts and make older captured guidance ineligible for new answers. History remains available for audit.
+
+#### `platform.knowledge_source_states`
+
+Source-level unavailability fences prevent a delayed in-flight read from restoring withdrawn guidance, including when no captured version existed at withdrawal time. State is project-scoped and retained independently of a particular derived document. [Model](../app/persistence/platform_admin.py); [creating migration](../migrations/history/033_structured_knowledge.sql).
+
 #### `platform.platform_knowledge`
 
-Declared primary key: `doc_id`. [Model](../app/persistence/platform_admin.py#L106); [creating migration](../migrations/history/006_platform_admin.sql).
+Declared primary key: `doc_id`. [Model](../app/persistence/platform_admin.py); [creating migration](../migrations/history/006_platform_admin.sql).
 
-`doc_id` (String(128); required); `tenant_id` (String(256); required); `project_id` (String(256); required); `title` (String(256); required); `category` (String(128); required); `tags` (JSON().with_variant(JSONB, 'postgresql'); required); `content` (String; required); `media_type` (String(64); required); `upload` (JSON().with_variant(JSONB, 'postgresql'); nullable); `size_bytes` (Integer; required); `status` (String(32); required); `revision` (Integer; required); `content_hash` (String(128); nullable); `author_subject` (String(256); nullable); `reviewer_subject` (String(256); nullable); `reviewed_at` (Float; nullable); `review_reason` (String(2000); nullable); `created_at` (Float; required); `updated_at` (Float; required).
+`doc_id` (VARCHAR(128); required); `tenant_id` (VARCHAR(256); required); `project_id` (VARCHAR(256); required); `title` (VARCHAR(256); required); `category` (VARCHAR(128); required); `tags` (JSON; required); `content` (VARCHAR; required); `structure` (JSON; nullable); `capture` (JSON; nullable); `media_type` (VARCHAR(64); required); `upload` (JSON; nullable); `okf` (JSON; nullable); `associations` (JSON; nullable); `required_associations` (JSON; nullable); `okf_bundle_id` (VARCHAR(128); nullable); `okf_concept_path` (VARCHAR(1024); nullable); `size_bytes` (INTEGER; required); `status` (VARCHAR(32); required); `revision` (INTEGER; required); `content_hash` (VARCHAR(128); nullable); `author_subject` (VARCHAR(256); nullable); `reviewer_subject` (VARCHAR(256); nullable); `reviewed_at` (FLOAT; nullable); `review_reason` (VARCHAR(2000); nullable); `created_at` (FLOAT; required); `updated_at` (FLOAT; required).
+
+Review fields come from [migration 022](../migrations/history/022_knowledge_review.sql), OKF fields and the scoped unique concept-path index from [029](../migrations/history/029_knowledge_okf.sql), and optional reviewed `associations` plus the enforced `required_associations` pointer from [031](../migrations/history/031_knowledge_associations.sql). Structured topic/block data and read-only source provenance come from [033](../migrations/history/033_structured_knowledge.sql).
 
 #### `platform.platform_notification_reads`
 
@@ -689,9 +760,13 @@ Declared primary key: `run_id`. [Model](../app/persistence/store.py#L40); [creat
 
 `platform.schema_migrations` is managed by the migration runner and records applied versions/checksums. Shared lineage columns include `etl_loaded_at`, `etl_source_system` and `etl_batch_id`; tracking migrations add audit/tracking fields where defined. These fields are separate from the business timestamps shown above. Inspect the migration SQL for the exact table coverage, triggers and grants. [Migration runner](../scripts/migrate.py), [initial DDL](../migrations/history/001_initial.sql), [actor tracking](../migrations/history/002_etl_actors.sql), [tracking columns](../migrations/history/003_tracking_columns.sql).
 
-## Proposed OKF persistence extension
+## OKF and knowledge association persistence
 
-The [OKF mapping](knowledge.md#okf-content-model-and-mapping) proposes a versioned metadata envelope and stable concept/import identity attached to existing knowledge records. These are not present columns or tables. A future migration must preserve verification of historical immutable snapshots; never backfill new fields into old hashed content.
+[Migration 029](../migrations/history/029_knowledge_okf.sql) adds the versioned `okf` metadata envelope, `okf_bundle_id`, `okf_concept_path` and the bundle catalog. Import preserves stable concept identity within tenant/project/bundle scope and saves drafts through the existing independent review lifecycle. Export uses verified selected snapshots; bundle presence does not approve concepts. [Migration 031](../migrations/history/031_knowledge_associations.sql) adds nullable `associations` containing `environment_ids`, `capability_ids`, `connector_instance_ids` and `required`. Association edits are saved as new document revisions and included in content-hash review. The separate nullable `required_associations` field records the last independently approved required scope; drafts and revocation preserve that requirement. Only approval of a revision removing the requirement clears it.
+
+Old records retain null optional fields. Snapshot serialization includes OKF and association fields only when present, preserving historical immutable hashes without backfilling new fields into old content. Sources: [knowledge snapshots and validation](../app/configuration/knowledge.py), [OKF import/export](../app/configuration/knowledge_okf.py), [content mapping](knowledge.md#okf-content-model-and-mapping).
+
+[Migration 032](../migrations/history/032_knowledge_uploads.sql) adds project-local exact-file identities. It registers valid current legacy uploads without changing their content hashes; future uploads record identity, document revision and audit in one transaction. Historical files replaced before this migration are not retrospectively indexed. Bounded batch uploads report independent per-file outcomes and safely deduplicate retries. Sources: [upload service](../app/configuration/knowledge.py), [API](../app/api/routes/knowledge_uploads.py), [concurrency and rollback tests](../tests/integration/test_knowledge_batch_uploads.py).
 
 ## Consolidated DDL and schema design
 
@@ -703,7 +778,7 @@ The [OKF mapping](knowledge.md#okf-content-model-and-mapping) proposes a version
 | `project` | Bootstrap project identity and deterministic parameter overrides; validation depends on platform definitions |
 | `runtime` | Runs, evidence, conversations, browser sessions and feedback; foreign keys preserve record relationships |
 | `governance` | Reviewed drafts, activation and audit history; hashes bind approval to content |
-| `optimization` | Dataset registrations, evaluation revisions and current project content pointer |
+| `optimization` | Dataset registrations, evaluation revisions, active content, review changes, feedback candidates and leased jobs/schedules |
 | `adk` | Native agent sessions, events and state; upstream metadata requirements remain intact |
 | `mlflow` | Native tracking/evaluation and prompt registry objects; upstream migrations own their evolution |
 
@@ -732,7 +807,7 @@ Reading path: [history](../migrations/history) → [migration runner](../scripts
 
 ### Migration and data boundaries
 
-The 28 historical SQL files were relocated without changing their bytes; the runner still checks their original versions and hashes. Fresh and existing installations use the same upgrade chain. Add future numbered migrations in `migrations/history` and regenerate the consolidated reference afterward. Do not apply `schema.sql` over an existing database or mark it as migrated: it intentionally contains no ledger/native-version data. The reference is a review/verification artifact, not a replacement deployment command.
+The original 28 historical SQL files were relocated without changing their bytes; migrations 029–034 add OKF, improvement jobs, reviewed knowledge associations, upload identities, structured capture and ticket-closure comparisons. The runner still checks their original versions and hashes. Fresh and existing installations use the same upgrade chain. Add future numbered migrations in `migrations/history` and regenerate the consolidated reference afterward. Do not apply `schema.sql` over an existing database or mark it as migrated: it intentionally contains no ledger/native-version data. The reference is a review/verification artifact, not a replacement deployment command.
 
 Foreign-key constraints are emitted after all tables, because grouping complete schema scripts independently would break references across schemas. Audit functions and triggers remain in the generated DDL. Migration-defined privileges are retained; deployment additionally provisions the restricted role and applies its final grants. Role passwords and role ownership are not exported. Required native metadata and reviewed configuration are deployment data and remain outside this schema-only reference. Sources: [exporter](../scripts/export_database_ddl.py), [deployment](../scripts/deploy_database.py).
 

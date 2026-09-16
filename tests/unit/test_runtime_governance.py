@@ -143,8 +143,9 @@ def test_full_request_budget_counts_schema_history_and_system_instructions():
     )
     original = request.config.system_instruction
     contexts = {"MARKER": [{"evidence_id": "ev_a", "source": "itsm", "data": {"text": "x" * 8000}}]}
-    fitted, projections = fit_evidence(request, contexts, [], 3000)
-    assert request_size(fitted) <= 3000
+    budget = request_size(request) + 1000
+    fitted, projections = fit_evidence(request, contexts, [], budget)
+    assert request_size(fitted) <= budget
     assert fitted.config.system_instruction.startswith("Required rules.")
     assert fitted.contents == request.contents
     assert request.config.system_instruction == original

@@ -16,6 +16,11 @@ stages:
     thinking_level: low
     temperature: 1.0
     max_output_tokens: 4096
+  evidence:
+    model: gemini-3.8-flash
+    thinking_level: low
+    temperature: 1.0
+    max_output_tokens: 4096
   synthesis:
     model: gemini-3.8-flash
     thinking_level: high
@@ -31,17 +36,20 @@ profiles:
     extraction: extraction
     triage: triage
     logs: logs
+    evidence: evidence
     synthesis: synthesis
     tool_call_limit: 12
   fast-investigation:
     extraction: extraction
     triage: triage
     logs: logs
+    evidence: evidence
     synthesis: fast_synthesis
     tool_call_limit: 8
   high-reasoning-synthesis:
     extraction: extraction
     triage: triage
     logs: logs
+    evidence: evidence
     synthesis: synthesis
     tool_call_limit: 12
