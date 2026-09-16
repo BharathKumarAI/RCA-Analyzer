@@ -23,7 +23,7 @@ RCA assist helps a team investigate incidents using bounded, attributable eviden
 
 ## Chat and metrics development contract
 
-**Status: development requirements, not verified deployment behavior.** Extend existing Chat, Insights and Metrics. CopilotKit adoption is conditional on the [compatibility trial](development.md#chat-and-metrics-delivery-plan); native ADK and SQLAlchemy remain authoritative.
+**Status: implemented workspace contracts with local regression coverage; target deployment verification remains required.** Chat, Insights and Metrics use the existing governed APIs. CopilotKit adoption is conditional on the [compatibility trial](development.md#chat-and-metrics-delivery-plan); native ADK and SQLAlchemy remain authoritative.
 
 The target chat journey is:
 
@@ -82,13 +82,13 @@ A deployment has one tenant and multiple database-managed projects. Users see ac
 | Area | Current interpretation |
 | --- | --- |
 | Connector policy | All ten implemented connector types are available according to project enablement, capability actions, credentials and resource constraints |
-| Runtime gaps | The registry includes all ten providers, but Oracle is still blocked by an old policy guard and baseline templates disable the eight additional providers; see [configuration](configuration.md#all-connectors-enabled-per-project) |
+| Connector activation | Oracle supports fixed diagnostics through saved project credentials and resource bindings. Additional deployment adapters remain explicit opt-ins; templates alone do not activate connections. See [configuration](configuration.md#all-connectors-enabled-per-project). |
 | Database and external writes | Oracle scope is fixed read-only diagnostics; arbitrary/model-supplied SQL, Jira mutations and other source-system writes remain unsupported |
 | Files | Local uploads and bounded extraction; image OCR only, no remote URLs, macros, or arbitrary execution |
 | Knowledge | Reviewed reference documents; keyword retrieval is not general semantic memory or fresh incident observation |
 | Execution | API-process execution with persisted records; no durable queue, automatic resumption, or recovery worker |
 | Measurements | Recorded timings and provider usage; missing values remain unknown; feedback is not an accuracy score |
-| Triage workspace | Persisted workflow with static response data and synthetic proposal execution; see the [implementation boundary](#triage-workspace-implementation-boundary) |
+| Triage workspace | Imports recorded live investigations, preserves evidence provenance and executes saved follow-up questions through the governed runner; local workflow actions never write to source systems. See [implementation boundary](#triage-workspace-implementation-boundary). |
 | Demo and tests | Explicit simulations and isolated checks; neither proves live diagnosis quality or production readiness |
 
 Sources: [provider inventory](../app/connectors/providers/registry.py), [project policy](../AGENTS.md), [parsers](../app/inputs/files.py), [knowledge retrieval](../app/configuration/knowledge.py), [runner](../app/runtime/runner.py), [telemetry](../app/persistence/telemetry.py), [offline evaluation](../scripts/eval.py).
@@ -255,28 +255,28 @@ Reading path: [draft](#seven-step-project-setup) → [scope](configuration.md#sc
 
 ## Triage workspace implementation boundary
 
-The triage workspace currently has persisted ticket, queue-stay, investigation, proposal, evidence, finding, action and event records. The board computes SLA state from ticket/stay inputs and ranks the queue. However, its read path leaves empty projects empty but still returns hardcoded team/health cards and related-ticket examples, and the proposal execution endpoint saves a synthetic result instead of invoking a governed connector.
+The triage workspace contains project-scoped ticket, queue-stay, investigation, proposal, evidence, finding, action and event records. Empty projects remain empty. From Runs, **Add to triage** imports a completed live investigation containing recorded Jira ticket evidence. Repeating the import does not duplicate evidence or findings. Imported confidence is unassessed until an analyst evaluates it. Sources: [Runs](../frontend/src/pages/Runs.tsx), [triage API](../app/api/routes/triage.py), [triage store](../app/persistence/triage.py).
 
 ```mermaid
 flowchart TD
-  B[Board request] --> SEED[Seed predefined tickets when empty: gap]
-  B --> DB[Read triage records and compute SLA]
-  DB --> W[Ticket workspace]
-  W --> Q[Edit tool proposal]
-  Q --> X[Execute proposal: synthetic result gap]
-  X --> E[Promote into triage evidence record]
-  LIVE[Separate live investigation] --> ADK[Governed ADK runner and runtime evidence]
-  click B "project.md#project-page-map" "Project pages"
-  click SEED "project.md#triage-workspace-implementation-boundary" "Implementation gap"
-  click DB "data-model.md#triage-records-are-a-separate-path" "Triage tables"
-  click W "project.md#project-page-map" "Ticket workspace"
-  click Q "security.md#known-security-and-implementation-limits" "Separate endpoint controls"
-  click X "project.md#triage-workspace-implementation-boundary" "Synthetic execution limitation"
-  click E "data-model.md#triage-records-are-a-separate-path" "Evidence distinction"
-  click LIVE "architecture.md#detailed-execution-walkthrough" "Live request path"
-  click ADK "harness.md#tool-and-model-boundaries" "Governed execution"
+  LIVE[Governed live investigation] --> DB[Saved run and redacted evidence]
+  DB --> IMPORT[Authorized project intake]
+  IMPORT --> W[Ticket workspace and queue]
+  W --> Q[Saved follow-up question]
+  Q --> RUN[Existing authenticated run API]
+  RUN --> ADK[Governed native ADK workflow]
+  ADK --> E[New recorded evidence and run ID]
+  E --> REVIEW[Analyst evidence review]
+  W --> LOCAL[Local assignment, stage and approval records]
+  click RUN "architecture.md#detailed-execution-walkthrough" "Execution boundary"
+  click W "data-model.md#triage-records-are-a-separate-path" "Workspace tables"
+  click REVIEW "security.md#known-security-and-implementation-limits" "Read-only source policy"
 ```
 
-Reading path: [triage tables](data-model.md#triage-records-are-a-separate-path) → [known controls/gaps](security.md#known-security-and-implementation-limits); for real source investigation use the [ADK run path](architecture.md#detailed-execution-walkthrough).
+The board derives assignments from saved tickets. Performance cards use persisted telemetry; unknown trends, accuracy and connector health remain unavailable. Related tickets require a saved matching service and do not imply measured similarity or a confirmed cause. SLA targets come from the `triage.sla_targets_seconds` database parameter; missing priorities show **Not configured**. Waiting, handoff and resolution close local queue intervals; returning or resuming opens an interval only when needed. Sources: [board API](../app/api/routes/triage.py), [queue persistence](../app/persistence/triage.py), [SLA engine](../app/runtime/sla_engine.py).
 
-These are implementation gaps against the project's no-mock-data policy. The documentation does not certify the triage board as live-integrated, its status cards as measured health, or its approve/escalate actions as source-system writes. They must be reconciled separately. Sources: [triage API](../app/api/routes/triage.py), [SLA calculations](../app/runtime/sla_engine.py), [triage store](../app/persistence/triage.py).
+Follow-up proposals retain the original capability and saved connector selectors. Execution rechecks current authorization/configuration through the existing runner and records the resulting run ID and evidence. Arbitrary connector parameters and legacy proposals without a governed capability cannot execute. Approval, comments, escalation and status changes are local workspace operations; they do not post to Jira, run remediation or perform other source-system writes. Sources: [proposal execution](../app/api/routes/triage.py), [access policy](../app/policy/access.py).
+
+Five Whys, fishbone, FMEA, Kepner–Tregoe, fault-tree and ensemble actions execute through `POST /api/v1/triage/tickets/{ticket_id}/rca`. Each reuses the imported live run's capability and connector selectors under the current caller's authorization, without copying its private conversation or original prompt. The selected method guides a new native investigation; its saved findings, citations, recommendations and uncertainty appear in the workbench. `GET` refreshes saved results without starting work. Failed or blocked attempts retain an inspectable run ID, and retries use the same idempotency key. Sources: [methodology API](../app/api/routes/triage.py), [saved-result projection](../app/persistence/triage.py), [workbench](../frontend/src/pages/RCAWorkbench.tsx), [contract tests](../tests/integration/test_triage_methodology_api.py).
+
+Method-specific numeric diagrams and scores remain unavailable unless actually recorded; generic native results do not manufacture FMEA rankings, probabilities or causal chains. The method controls request an evidence-backed analysis, not a guarantee that evidence establishes a cause. Source: [analysis panel](../frontend/src/components/RcaAnalysisPanel.tsx).

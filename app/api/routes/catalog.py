@@ -163,7 +163,7 @@ class PlatformSettingsUpdatePayload(BaseModel):
     max_context_chars: int = Field(default=64000, ge=1000, le=256000)
     retention_days: int = Field(default=90, ge=1, le=2555)
     allowed_extensions: list[str] = [".txt", ".log", ".json", ".csv", ".pdf"]
-    mode: str = "demo"
+    mode: str = "live"
 
 
 _PROJECT_SETUP_SAMPLE_YAML = """# ==============================================================================
@@ -831,12 +831,14 @@ async def health():
 @router.get("/ready")
 async def ready(request: Request):
     try:
-        await request.app.state.store.ping()
+        async with asyncio.timeout(request.app.state.settings.health_timeout_seconds):
+            await request.app.state.store.ping()
         healthy = request.app.state.settings.auth_configured
     except Exception:
         healthy = False
     return JSONResponse(
-        {"ready": healthy, "mode": request.app.state.settings.mode},
+        {"ready": healthy, "mode": request.app.state.settings.mode,
+         "live_execution": request.app.state.settings.mode == "live"},
         status_code=200 if healthy else 503,
     )
 
@@ -2810,4 +2812,3 @@ async def set_project_availability(
             raise HTTPException(409, "Availability changed. Refresh before trying again.")
         await save_project_setup(ProjectConfigPayload(yaml=yaml.safe_dump(content)), request, principal)
         return {"id": resource_id, "project_enabled": payload.enabled}
-

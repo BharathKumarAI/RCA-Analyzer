@@ -20,7 +20,7 @@ This release runs a FastAPI process, PostgreSQL, and a React frontend. Local dev
 
 ## Chat and metrics integration rollout
 
-**Acceptance runbook for proposed work, not deployment certification.** Follow the [delivery plan](development.md#chat-and-metrics-delivery-plan). Resolve the [platform authorization gap](configuration.md#chat-and-metrics-integration-policy) before exposing tenant-wide metrics.
+**Acceptance runbook, not deployment certification.** Follow the [delivery plan](development.md#chat-and-metrics-delivery-plan) and verify [platform metrics authorization](configuration.md#chat-and-metrics-integration-policy) in the target deployment.
 
 1. Record revision, dependency versions and transport choice. Trial CopilotKit against the governed ADK runner; retain the existing UI/API as rollback without moving history into a second store.
 2. Verify authentication, active membership, private conversation ownership and project switching. Test cross-project denial for streams, evidence and downloads as well as normal requests.
@@ -41,7 +41,7 @@ make db-deploy
 
 The local deployer starts PostgreSQL, applies migrations, seeds missing configuration, grants runtime permissions and creates missing credentials in private `.env` and `.env.runtime` files. Repeat deployment preserves active configuration. Configure authentication and source credentials using [.env.example](../.env.example); do not commit or print secrets. Source: [local deployer](../scripts/deploy_local_database.py).
 
-Set `RCA_MODE=demo` for explicitly simulated runs. Live runs require real model access, authorized connector endpoints/credentials, and active project membership. `RCA_TENANT_ID` owns the deployment; `RCA_PROJECT_ID` identifies its bootstrap project. Bearer verification uses `RCA_AUTH_ISSUER`, `RCA_AUTH_AUDIENCE`, and `RCA_AUTH_PUBLIC_KEY`; trusted `RCA_PRINCIPALS_JSON` supplies bootstrap membership. Sources: [settings](../app/settings.py), [authentication](../app/identity/auth.py).
+New settings, local deployment configuration and container images default to `RCA_MODE=live`. Set `RCA_MODE=demo` explicitly only for a non-diagnostic simulation; it returns `SIMULATED` without fake source evidence. Existing database-managed configuration remains authoritative and is not overwritten by new defaults; inspect its mode before release. Live runs require real model access, authorized connector endpoints/credentials, and active project membership. `RCA_TENANT_ID` owns the deployment; `RCA_PROJECT_ID` identifies its bootstrap project. Bearer verification uses `RCA_AUTH_ISSUER`, `RCA_AUTH_AUDIENCE`, and `RCA_AUTH_PUBLIC_KEY`; trusted `RCA_PRINCIPALS_JSON` supplies bootstrap membership. Sources: [settings](../app/settings.py), [authentication](../app/identity/auth.py).
 
 ```sh
 make dev
@@ -63,7 +63,15 @@ To serve the built frontend through FastAPI, run `npm run build` from `frontend/
 
 For company sign-in, configure and independently approve the OIDC provider, use the exact HTTPS callback URL, and provision subject membership before login. Preserve bearer bootstrap/recovery configuration. Browser-session security and real identity-provider setup are described in [sign-in reference](reference/data-access-and-operations.md#browser-sign-in); implementation is in [OIDC configuration](../app/configuration/oidc.py).
 
-Configure each project's enabled connector instances, environments, authorized resources and secret references. All implemented connector types are in scope; do not mark an unconfigured or unhealthy connection ready. Current Oracle and template-enable gaps are listed in [configuration](configuration.md#all-connectors-enabled-per-project). Documentation changes do not enable deployment records. Sources: [provider resolution](../app/connectors/providers/registry.py), [connector API](../app/api/routes/connectors_api.py).
+Configure each project's enabled connector instances, environments, authorized resources and secret references. All implemented connector types are in scope; do not mark an unconfigured or unhealthy connection ready. Oracle uses fixed bounded diagnostics; deployment adapters and saved project connections still require explicit enablement as described in [configuration](configuration.md#all-connectors-enabled-per-project). Publishing template metadata does not enable deployment records. Sources: [provider resolution](../app/connectors/providers/registry.py), [connector API](../app/api/routes/connectors_api.py).
+
+## Container and release checks
+
+The [Docker image](../Dockerfile) builds the real frontend, runs as a non-root account and defaults to live database-backed configuration. [Compose](../docker-compose.yml) and the image healthcheck use bounded `/ready` requests. `/health` remains process liveness. Development mock servers and token issuers are excluded from the image by [.dockerignore](../.dockerignore). [CI](../.github/workflows/ci.yml) checks Python and frontend code, runs offline smoke contracts and builds the image.
+
+The distinction between liveness and readiness follows the [Kubernetes probe guidance](https://kubernetes.io/docs/concepts/workloads/pods/probes/). For an actual deployment, verify database migrations/grants, persistent blob storage, approved OIDC/JWT settings, model access, and at least one scoped read from every enabled provider. Exercise duplicate requests, cancellation and reconnect against the chosen ingress timeout. An image build or passing offline fixtures cannot establish any of these live behaviors.
+
+Application execution remains request-owned. Use one application process per instance and account for process interruption during rollout; there is no durable worker or automatic run recovery. A cloud/cluster release needs its own approved target, secrets, ingress/TLS, storage, backup and restore validation. No cloud deployment is implied by local changes.
 
 ## Database and configuration rollout
 
@@ -80,7 +88,7 @@ Sources: [migration runner](../scripts/migrate.py), [deployment](../scripts/depl
 | Surface | Meaning |
 | --- | --- |
 | `GET /health` | Process liveness |
-| `GET /ready` | Storage/auth readiness, not proof of live model or connector success |
+| `GET /ready` | Bounded storage/auth readiness with a `live_execution` flag; not proof of model or connector success |
 | `GET /api/v1/connectors/health` | Authenticated connector health |
 | `GET /api/v1/config` | Authenticated redacted effective settings |
 | Insights and run events | Recorded timings/usage; coverage limits and missing values remain visible |

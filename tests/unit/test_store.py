@@ -62,6 +62,14 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(created)
         self.assertFalse(created_again)
         self.assertEqual(first.run_id, again.run_id)
+        replay = await self.store.find_idempotent_run(self.principal, "key", "request-a")
+        self.assertEqual(replay.run_id, first.run_id)
+        for changed in ({"project_id": "other"}, {"tenant_id": "other"}, {"subject": "other"}):
+            self.assertIsNone(await self.store.find_idempotent_run(
+                self.principal.model_copy(update=changed), "key", "request-a"
+            ))
+        with self.assertRaises(ValueError):
+            await self.store.find_idempotent_run(self.principal, "key", "request-b")
         with self.assertRaises(ValueError):
             await self.store.create_run(
                 contract.model_copy(update={"run_id": "run_third"}),
@@ -85,6 +93,16 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             response.run_id, self.principal, status="CANCELLED"
         )
         self.assertEqual(unchanged.status, "FAILED")
+
+    async def test_run_responses_project_the_saved_incident_identifier(self):
+        contract = make_contract(self.principal).model_copy(update={
+            "request": RunRequest(text="Inspect the recorded incident", incident_id="PAY-42")})
+        created, _ = await self.store.create_run(contract, None, "incident-request", 9999999999)
+        self.assertEqual(created.incident_id, "PAY-42")
+        self.assertEqual((await self.store.get_run(created.run_id, self.principal)).incident_id, "PAY-42")
+        self.assertEqual((await self.store.list_runs(self.principal))[0].incident_id, "PAY-42")
+        unbound, _ = await self.store.create_run(make_contract(self.principal), None, "unbound-request", 9999999999)
+        self.assertIsNone(unbound.incident_id)
 
     async def test_run_counts_refresh_expired_work(self):
         contract = make_contract(self.principal)

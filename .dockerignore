@@ -15,6 +15,10 @@ blob_local/*
 !blob_local/platform/
 data/
 tests/
+scripts/dev_connector_servers.py
+scripts/issue_dev_token.py
+scripts/smoke_test.py
+scripts/eval.py
 docs/
 infra/
 observability/

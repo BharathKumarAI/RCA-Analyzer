@@ -167,6 +167,10 @@ async def test_chat_context_is_bounded_owner_scoped_and_not_new_evidence(governa
     assert await gov.store.chat_context(next_contract.model_copy(update={
         "model_config_json": json.dumps({"disabled_connectors": ["itsm"]})
     }), 1000) == []
+    assert await gov.store.chat_context(next_contract.model_copy(update={
+        "request": RunRequest(text="Follow up", chat_id=gov.contract.request.chat_id,
+                              connector_selections={"itsm": {"instance_id": "jira_prod"}})
+    }), 1000) == []
     for changed in ({"subject": "other"}, {"tenant_id": "other"}, {"project_id": "other"}):
         with pytest.raises(PermissionError):
             await gov.store.chat_context(next_contract.model_copy(update={

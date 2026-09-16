@@ -225,7 +225,7 @@ export const Docs: React.FC = () => {
                     <strong style={{ fontSize: '13px', color: 'var(--ink-primary)' }}>Review RCA Hypotheses</strong>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--ink-secondary)', lineHeight: 1.5, margin: 0 }}>
-                    Inspect the AI-synthesized root cause statement, failure boundary, and evaluated hypotheses. Verify that confidence exceeds 85%.
+                    Inspect the saved summary, evidence, and uncertainties. Validate findings against their sources before acting.
                   </p>
                 </div>
 
@@ -245,7 +245,7 @@ export const Docs: React.FC = () => {
                     <strong style={{ fontSize: '13px', color: 'var(--ink-primary)' }}>Handoff or Resolve</strong>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--ink-secondary)', lineHeight: 1.5, margin: 0 }}>
-                    Promote verified findings, post an internal note or sync to Jira, and dispatch ticket to the responsible application team with complete context.
+                    Review findings, save a local investigation note, and record the responsible team. Connected source systems remain read only.
                   </p>
                 </div>
               </div>

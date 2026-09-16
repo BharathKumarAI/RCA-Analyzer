@@ -679,16 +679,14 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
 
-  // Policy-blocked check (e.g. Oracle execution disallowed)
+  // Resolve availability from the saved connector template policy.
   const isPolicyBlocked = useMemo(() => {
     return (
       template?.availability === 'disabled_by_policy' ||
       (template?.availability !== undefined && !['published', 'active'].includes(template.availability)) ||
-      template?.is_enabled_by_policy === false ||
-      template?.system_name === 'oracle' ||
-      instance?.template_id === 'oracle'
+      template?.is_enabled_by_policy === false
     );
-  }, [template, instance]);
+  }, [template]);
 
   // --------------------------------------------------------------------------
   // Candidate Payload Builder
@@ -1884,18 +1882,8 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                   </div>
                 )}
 
-                {/* Domain Specific: Oracle (Policy Blocked) */}
                 {connectorType === 'oracle' && (
-                  <div className="rca_assist-policy-callout" role="alert">
-                    <ShieldAlert size={18} />
-                    <div>
-                      <strong>Policy-Restricted Integration</strong>
-                      <p>
-                        Database querying and Oracle execution are blocked by organizational governance policy.
-                        Project instances cannot be saved or tested while this connector is blocked.
-                      </p>
-                    </div>
-                  </div>
+                  <p className="rca_assist-field-hint">Use a saved schema scope and a tcp:// or tcps:// host:port/service endpoint. Only fixed, bounded read diagnostics are supported.</p>
                 )}
 
                 {/* Domain Specific: Confluence */}
@@ -2298,7 +2286,7 @@ export const ConnectorInstanceEditor: React.FC<ConnectorInstanceEditorProps> = (
                   <div>
                     <strong>Repository Release Policy Enforcement</strong>
                     <p>
-                      Jira write mutations (issue creation, modification, transitions), database querying, and arbitrary command execution are strictly disabled by repository policy. All active tools execute in read-only diagnostic mode.
+                      Jira write mutations (issue creation, modification, transitions), arbitrary SQL, and arbitrary command execution are strictly disabled by repository policy. All active tools execute in read-only diagnostic mode.
                     </p>
                   </div>
                 </div>

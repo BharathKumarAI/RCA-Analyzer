@@ -397,6 +397,7 @@ class JiraConnector(BaseConnector):
             "status": (fields.get("status") or {}).get("name", ""),
             "created": fields.get("created"),
             "updated": fields.get("updated"),
+            "resolved": fields.get("resolutiondate"),
             "description": description_text,
             "description_adf": raw_desc if isinstance(raw_desc, dict) else None,
             "priority": priority,

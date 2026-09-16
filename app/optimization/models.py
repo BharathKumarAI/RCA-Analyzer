@@ -49,6 +49,8 @@ class Case(Strict):
     attachments: list[str] = Field(default_factory=list, max_length=10)
     expected_outcome: Literal["FINDINGS", "INSUFFICIENT_EVIDENCE"]
     expected_facts: list[str] = Field(min_length=1, max_length=20)
+    recorded_sources: dict[str, dict] = Field(default_factory=dict)
+    provenance: dict = Field(default_factory=dict)
 
 
 class Dataset(Strict):
@@ -59,6 +61,7 @@ class Dataset(Strict):
     description: str = Field(min_length=1, max_length=2000)
     train: list[Case] = Field(min_length=1, max_length=100)
     holdout: list[Case] = Field(min_length=1, max_length=100)
+    knowledge_corpus: list[dict] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def distinct_cases(self):
@@ -66,7 +69,7 @@ class Dataset(Strict):
         if len({case.id for case in cases}) != len(cases):
             raise ValueError("Dataset case IDs must be unique across splits")
         # Exact duplicate examples cannot masquerade as independent holdout data.
-        fingerprints = [case.model_dump_json(exclude={"id"}) for case in cases]
+        fingerprints = [case.model_dump_json(exclude={"id", "provenance"}) for case in cases]
         if len(set(fingerprints)) != len(cases):
             raise ValueError("Train and holdout examples must be distinct")
         return self

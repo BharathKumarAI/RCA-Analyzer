@@ -715,8 +715,8 @@ async def save_project_connector(
         raise HTTPException(409, "Connector adapter is disabled by deployment configuration.")
 
     # Policy gate
-    if not template.get("is_enabled_by_policy", True) or template.get("type") == "oracle":
-        raise HTTPException(403, "Database querying and Oracle execution are blocked by policy.")
+    if not template.get("is_enabled_by_policy", True):
+        raise HTTPException(403, "Connector execution is blocked by policy.")
 
     # Validate candidate settings against template (drafts can be saved incomplete)
     candidate = _project_candidate(payload, template)
@@ -980,7 +980,7 @@ async def enable_project_connector_connection(
     template = await _find_template(request, instance["template_id"], instance.get("template_version", "1.0.0"))
     if not template or template.get("status", template.get("availability")) != "published" or not _deployment_connector_enabled(request, template):
         raise HTTPException(409, "Connector template or deployment adapter is no longer available.")
-    if template.get("type") == "oracle" or not template.get("is_enabled_by_policy", True):
+    if not template.get("is_enabled_by_policy", True):
         raise HTTPException(403, "Connector execution is blocked by release policy.")
     try:
         updated = await store.set_environment_connection_enabled(
@@ -1007,10 +1007,6 @@ async def enable_project_connector(
         raise HTTPException(404, f"Connector instance '{instance_id}' not found")
     if instance.get("status") == "archived":
         raise HTTPException(404, f"Connector instance '{instance_id}' not found")
-
-    # Policy gate
-    if instance.get("template_id") == "oracle" or instance.get("system_name") == "oracle":
-        raise HTTPException(403, "Oracle connector execution is blocked by policy.")
 
     # 1. Retrieve the immutable template definition for validation.
     template_found = await _find_template(

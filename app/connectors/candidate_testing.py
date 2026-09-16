@@ -22,6 +22,7 @@ from app.connectors.providers.evidence import (
     ConfluenceConnector, GitLabConnector, QTestConnector, SignalFxConnector, KubernetesConnector,
 )
 from app.connectors.providers.infrastructure import KafkaConnector, UnixConnector
+from app.connectors.providers.oracle import OracleConnector, validate_oracle_endpoint
 from app.connectors.providers.secrets import environment_secret
 from app.connectors.providers.registry import connection_route, resolve_mcp_connection, McpConnectionConfiguration, _unix_host
 from app.connectors.health import CheckStatus
@@ -40,6 +41,7 @@ _SCOPE_FIELDS = {
     "qtest": "scope",
     "gitlab": "scope",
     "kubernetes": "scope",
+    "oracle": "scope",
     "kafka": "topic",
     "unix": "path",
 }
@@ -55,6 +57,7 @@ _NATIVE_AUTH_TYPES = {
     "qtest": {"bearer_token"},
     "gitlab": {"api_key_header"},
     "kubernetes": {"k8s_service_account_token"},
+    "oracle": {"database_password"},
     "kafka": {"sasl_scram_tls"},
     "unix": {"ssh_private_key", "ssh_password"},
 }
@@ -67,6 +70,7 @@ _NATIVE_REQUIRED_FIELDS = {
     "qtest": {"token_secret_ref"},
     "gitlab": {"api_key_secret_ref"},
     "kubernetes": {"token_secret_ref"},
+    "oracle": {"database_username", "password_secret_ref"},
     "kafka": {"username", "password_secret_ref"},
     "unix": {
         "ssh_private_key": {"username", "private_key_ref", "known_hosts_ref"},
@@ -342,8 +346,8 @@ def validate_candidate_configuration(
                     errors.append(f"Environment mapping row #{idx + 1} is missing Tool Environment.")
 
     # Check policy enablement
-    if not template.get("is_enabled_by_policy", True) or template.get("type") == "oracle":
-        errors.append("Database querying and Oracle execution are disabled by policy.")
+    if not template.get("is_enabled_by_policy", True):
+        errors.append("Connector execution is disabled by policy.")
         return False, errors
 
     # Check tool access rules and enforce release policy restrictions
@@ -378,7 +382,7 @@ def validate_candidate_configuration(
     connector_type = template.get("provider_adapter_id") or template.get("type")
     if selected_route == "mcp":
         endpoint = candidate["mcp_configuration"]["endpoint"]
-    if not endpoint and connector_type not in {"oracle"}:
+    if not endpoint:
         errors.append("Endpoint is required.")
     elif endpoint:
         parsed = urlparse(endpoint)
@@ -391,6 +395,13 @@ def validate_candidate_configuration(
         elif connector_type == "unix":
             if parsed.scheme not in {"", "sftp", "ssh"} or parsed.username or parsed.password or parsed.query or parsed.fragment:
                 errors.append("Unix endpoint must identify an SSH/SFTP host without embedded credentials.")
+        elif connector_type == "oracle":
+            try:
+                validate_oracle_endpoint(endpoint)
+            except ValueError as exc:
+                errors.append(str(exc))
+            if candidate.get("driver_mode", "thin") != "thin" or candidate.get("connection_format", "dsn") not in {"dsn", "ezconnect"}:
+                errors.append("Oracle supports Thin mode with an explicit Easy Connect DSN only.")
         elif parsed.scheme not in {"http", "https"} or parsed.username or parsed.password or parsed.query or parsed.fragment:
             errors.append("Connector endpoint must use an approved scheme without embedded credentials or query parameters.")
 
@@ -421,6 +432,12 @@ def validate_candidate_configuration(
     max_results = candidate.get("max_results", 100)
     if type(max_results) is not int or max_results < 1 or max_results > 1000:
         errors.append("max_results must be an integer between 1 and 1000.")
+    max_bytes = candidate.get("max_response_bytes", 1048576)
+    if type(max_bytes) is not int or not 1024 <= max_bytes <= 8388608:
+        errors.append("max_response_bytes must be an integer between 1024 and 8388608.")
+    max_window = candidate.get("max_window_seconds", 86400)
+    if type(max_window) is not int or not 60 <= max_window <= 604800:
+        errors.append("max_window_seconds must be an integer between 60 and 604800.")
 
     credentials = candidate.get("credentials", {})
     if not isinstance(credentials, dict):
@@ -575,11 +592,15 @@ async def execute_candidate_test(
             }},
         }
 
-    template_type = template.get("type")
+    template_type = template.get("provider_adapter_id") or template.get("type")
     endpoint = candidate.get("endpoint", "")
     credentials = {} if selected_route == "mcp" else candidate.get("credentials", {})
     auth_type = "mcp_bearer_token" if selected_route == "mcp" else candidate.get("auth_type")
     timeout_s = float(candidate.get("timeout_seconds", 10))
+    limits = {
+        "max_response_bytes": candidate.get("max_response_bytes", 1048576),
+        "max_results": candidate.get("max_results", 100),
+    }
     scope = _scope_value(candidate, template_type)
 
     # Resolve credentials from environment server-side
@@ -647,6 +668,7 @@ async def execute_candidate_test(
                     api_token=resolved_secrets.get("api_token_secret_ref", ""),
                     timeout_s=timeout_s,
                     custom_field_mapping=custom_field_mapping,
+                    max_response_bytes=limits["max_response_bytes"],
                 )
             elif template_type == "log_search":
                 index = _text(candidate.get("index")) or scope
@@ -657,7 +679,8 @@ async def execute_candidate_test(
                     token=resolved_secrets.get("token_secret_ref", ""),
                     index=index,
                     timeout_s=timeout_s,
-                    max_results=int(candidate.get("max_results", 100)),
+                    max_window_seconds=candidate.get("max_window_seconds", 86400),
+                    **limits,
                 )
             elif template_type == "confluence":
                 client = ConfluenceConnector(
@@ -665,6 +688,7 @@ async def execute_candidate_test(
                     scope=scope,
                     token=resolved_secrets.get("token_secret_ref", ""),
                     timeout_s=timeout_s,
+                    **limits,
                 )
             elif template_type == "signalfx":
                 client = SignalFxConnector(
@@ -672,6 +696,7 @@ async def execute_candidate_test(
                     scope=scope,
                     token=resolved_secrets.get("api_key_secret_ref", ""),
                     timeout_s=timeout_s,
+                    **limits,
                 )
             elif template_type == "qtest":
                 client = QTestConnector(
@@ -679,6 +704,7 @@ async def execute_candidate_test(
                     scope=scope,
                     token=resolved_secrets.get("token_secret_ref", ""),
                     timeout_s=timeout_s,
+                    **limits,
                 )
             elif template_type == "gitlab":
                 client = GitLabConnector(
@@ -686,6 +712,7 @@ async def execute_candidate_test(
                     scope=scope,
                     token=resolved_secrets.get("api_key_secret_ref", ""),
                     timeout_s=timeout_s,
+                    **limits,
                 )
             elif template_type == "kubernetes":
                 client = KubernetesConnector(
@@ -693,6 +720,16 @@ async def execute_candidate_test(
                     scope=scope,
                     token=resolved_secrets.get("token_secret_ref", ""),
                     timeout_s=timeout_s,
+                    **limits,
+                )
+            elif template_type == "oracle":
+                client = OracleConnector(
+                    dsn=endpoint, scope=scope,
+                    user=credentials.get("database_username", ""),
+                    password=resolved_secrets.get("password_secret_ref", ""),
+                    driver_mode=candidate.get("driver_mode", "thin"),
+                    connection_format=candidate.get("connection_format", "dsn"),
+                    timeout_s=timeout_s, **limits,
                 )
             elif template_type == "kafka":
                 client = KafkaConnector(
@@ -702,6 +739,7 @@ async def execute_candidate_test(
                     password=resolved_secrets.get("password_secret_ref", ""),
                     topic_filter=candidate.get("topic_filter"),
                     timeout_s=timeout_s,
+                    **limits,
                 )
             elif template_type == "unix":
                 client = UnixConnector(
@@ -715,6 +753,7 @@ async def execute_candidate_test(
                     private_key_passphrase=resolved_secrets.get("private_key_passphrase_ref", ""),
                     auth_method=auth_type,
                     timeout_s=timeout_s,
+                    **limits,
                 )
             else:
                 return {

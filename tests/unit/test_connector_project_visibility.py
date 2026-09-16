@@ -35,7 +35,7 @@ def test_catalog_exposes_only_installed_native_authentication():
         for item in PlatformConfiguration.load(Settings()).connector_templates
     }
     assert catalog["kafka"]["native_auth_profile_ids"] == ["sasl_scram_tls"]
-    assert catalog["oracle"]["native_auth_profile_ids"] == []
+    assert catalog["oracle"]["native_auth_profile_ids"] == ["database_password"]
     assert set(catalog["itsm"]["native_auth_profile_ids"]) == {"basic_auth", "api_token"}
 
 

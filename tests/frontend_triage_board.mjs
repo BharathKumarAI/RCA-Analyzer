@@ -15,7 +15,7 @@ assert.match(triageComponent, /work-buckets-bar/, 'renders Work Buckets Bar');
 assert.match(triageComponent, /Tool Pane/, 'renders Contextual Tool Pane');
 assert.match(triageComponent, /Assignment Journey/, 'renders Assignment Journey timeline');
 assert.match(triageComponent, /Governed Action Proposals/, 'renders Governed Action proposals');
-assert.match(triageComponent, /Approve & Execute/, 'renders explicit human approval button');
+assert.match(triageComponent, /Record approval/, 'records approval without claiming external execution');
 
 // 2. Verify Triage Types
 assert.match(triageTypes, /export interface TriageTicket/, 'exports TriageTicket interface');

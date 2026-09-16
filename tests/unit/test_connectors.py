@@ -29,6 +29,7 @@ class ConnectorTests(unittest.TestCase):
                         "summary": "Outage",
                         "status": {"name": "Open"},
                         "created": "2026-01-01T00:00:00Z",
+                        "resolutiondate": "2026-01-01T02:00:00Z",
                         "description": "details",
                         "components": [{"name": "Checkout"}],
                     },
@@ -51,7 +52,9 @@ class ConnectorTests(unittest.TestCase):
             await connector.aclose()
             return result
 
-        self.assertEqual(asyncio.run(run())["summary"], "Outage")
+        result = asyncio.run(run())
+        self.assertEqual(result["summary"], "Outage")
+        self.assertEqual(result["resolved"], "2026-01-01T02:00:00Z")
         self.assertEqual(
             seen,
             {

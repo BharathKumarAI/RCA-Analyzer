@@ -23,7 +23,7 @@ class ContentLayoutTests(unittest.TestCase):
             profiles = yaml.safe_load(path.read_text())
             profiles["stages"]["triage"]["temperature"] = 0.4
             path.write_text(yaml.safe_dump(profiles))
-            with patch.dict(os.environ, {"RCA_CONTENT_ROOT": str(bundle)}, clear=True):
+            with patch.dict(os.environ, {"RCA_CONTENT_ROOT": str(bundle), "RCA_MODE": "demo"}, clear=True):
                 settings = Settings.from_env()
             self.assertEqual(settings.config_dir, bundle / "config")
             settings = settings.model_copy(

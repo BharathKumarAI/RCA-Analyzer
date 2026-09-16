@@ -26,10 +26,21 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install OCR runtime
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr postgresql-client-16
       - run: uv sync --locked --extra dev
       - run: uv run ruff check .
-      - run: uv run python -m pytest -v
+      - run: PATH="/usr/lib/postgresql/16/bin:$PATH" uv run python -m pytest -v
       - run: make smoke
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
       - run: docker build --tag rca-analyzer:ci .

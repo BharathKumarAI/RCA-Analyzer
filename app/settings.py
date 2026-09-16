@@ -17,7 +17,7 @@ CONTENT_ROOT = ROOT / "blob_local" / "platform"
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-    mode: Literal["demo", "live"] = "demo"
+    mode: Literal["demo", "live"] = "live"
     database_configuration: bool = False
     tenant_id: str = ""
     project_id: str = ""

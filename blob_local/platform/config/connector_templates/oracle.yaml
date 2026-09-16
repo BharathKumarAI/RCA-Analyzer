@@ -6,29 +6,30 @@ description: Read the current Oracle session wait snapshot for the configured da
   username. Explain blocking sessions and wait classes. This snapshot cannot establish
   historic contention. No arbitrary SQL is available.
 integration_kind: native
-protocol: OCI
+protocol: Oracle Net
 auth_method: Database Credentials
 version: 1.0.0
-availability: deprecated
-platform_enabled: false
-is_enabled_by_policy: false
+availability: published
+platform_enabled: true
+is_enabled_by_policy: true
 provider_adapter_id: oracle
 supported_operations:
 - read_evidence
 known_limitations:
-- Database querying is disabled pending scope reconciliation under repository guidance.
+- Thin mode and an explicit tcp[s]://host:port/service DSN are required.
+- A read-only account must have SELECT access to V_$SESSION; resource scope selects one database username.
 - No arbitrary SQL, table exploration, or live database mutations.
 auth_profiles:
 - id: database_password
-  name: Database Credentials (Blocked by Policy)
-  status: disabled_by_policy
-  transport_compatibility: OCI
+  name: Read-only Database Credentials
+  status: active
+  transport_compatibility: Oracle Net
   required_fields:
   - database_username
   - password_secret_ref
   optional_fields: []
   hidden_fields: []
-default_endpoint: <ORACLE_HOST>
+default_endpoint: tcp://<ORACLE_HOST>:1521/<SERVICE_NAME>
 default_secret: env://ORACLE_PASSWORD
 default_scope: platform_default
 default_config:
@@ -75,12 +76,11 @@ parameter_fields:
   icon: globe
 - variable_name: driver_mode
   label: Oracle Driver Mode
-  description: Thin uses python-oracledb without Oracle Client libraries; Thick requires the approved local client library profile.
+  description: Asynchronous Thin mode uses python-oracledb without local Oracle Client libraries.
   value_type: string
   default_value: thin
   allowed_values:
   - thin
-  - thick
   allow_project_override: true
   visible_in_project: true
   ownership: project_only
@@ -88,31 +88,13 @@ parameter_fields:
   subcategory: protocol
   icon: database
   runtime_binding: oracle.driver_mode
-- variable_name: oracle_client_lib
-  label: Oracle Client Library Directory
-  description: Approved local Oracle Client/Instant Client directory for Thick mode. Hidden and unused in Thin mode.
-  value_type: string
-  default_value: ''
-  allow_project_override: true
-  visible_in_project: true
-  required_when: driver_mode == 'thick'
-  visibility_condition:
-    field: driver_mode
-    equals: thick
-  ownership: project_only
-  category: connectivity
-  subcategory: endpoint
-  icon: folder
-  runtime_binding: oracle.oracle_client_lib
 - variable_name: connection_format
   label: Oracle Connection Format
-  description: Authorized DSN shape used by the local connection test; arbitrary SQL remains unavailable.
+  description: Explicit Easy Connect DSN with one host, port and service; TNS aliases and connection descriptors are unavailable.
   value_type: string
   default_value: dsn
   allowed_values:
   - dsn
-  - host_service
-  - tns_alias
   allow_project_override: true
   visible_in_project: true
   ownership: project_only

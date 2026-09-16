@@ -171,8 +171,24 @@ class InvestigationStore:
             mode=contract["mode"],
             capability=contract["capability"],
             chat_id=contract["request"].get("chat_id"),
+            incident_id=contract["request"].get("incident_id"),
             prompt=contract["request"].get("text", ""),
         )
+
+    async def find_idempotent_run(self, principal, idempotency_key, request_hash):
+        """Replay a saved submission without consuming another execution slot."""
+        if not idempotency_key:
+            return None
+        async with self.engine.connect() as connection:
+            row = (await connection.execute(select(runs).where(
+                runs.c.idempotency_key_hash == self._key(principal, idempotency_key),
+                self._scope(runs, principal), runs.c.subject == principal.subject,
+            ))).first()
+        if row is None:
+            return None
+        if row.request_hash != request_hash:
+            raise ValueError("Idempotency key was reused with a different request")
+        return await self.get_run(row.run_id, principal)
 
     async def create_run(
         self,
@@ -760,6 +776,8 @@ class InvestigationStore:
             if (previous.capability, previous.capability_hash, previous.policy_hash) != (
                 contract.capability, contract.capability_hash, contract.policy_hash
             ):
+                continue
+            if previous.request.connector_selections != contract.request.connector_selections:
                 continue
             if any(previous_snapshot.get(key) != snapshot.get(key)
                    for key in ("allowed_actions", "disabled_connectors", "environments", "workflow")):

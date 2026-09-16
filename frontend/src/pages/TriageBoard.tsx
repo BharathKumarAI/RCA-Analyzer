@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Activity,
   AlertOctagon,
@@ -81,7 +81,7 @@ type WorkspaceTab =
   | 'activity'
   | 'actions';
 
-export const TriageBoard: React.FC = () => {
+export const TriageBoard: React.FC<{ canEdit?: boolean }> = ({ canEdit = false }) => {
   // State
   const [liveBoard, setLiveBoard] = useState<LiveBoardResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,29 +112,36 @@ export const TriageBoard: React.FC = () => {
 
   // Escalate / Return Modal State
   const [showEscalateModal, setShowEscalateModal] = useState(false);
-  const [targetTeam, setTargetTeam] = useState('Billing Platform Team');
+  const [targetTeam, setTargetTeam] = useState('');
   const [escalateReason, setEscalateReason] = useState('');
 
   // Governed Action Approval State
   const [approvingActionId, setApprovingActionId] = useState<string | null>(null);
 
+  const boardRequest = useRef(0);
+  const workspaceRequest = useRef(0);
+  const teams = Array.from(new Set((liveBoard?.focus_queue || []).map(item => item.ticket.current_team).filter(Boolean))).sort();
+  useEffect(() => () => { boardRequest.current++; workspaceRequest.current++; }, []);
+
   // Load Board
   const loadBoard = useCallback(async (bucket = activeBucket, search = searchQuery) => {
+    const requestId = ++boardRequest.current;
     try {
       setError(null);
       const data = await fetchLiveBoard({
         work_state: bucket,
         search: search.trim() || undefined,
       });
+      if (requestId !== boardRequest.current) return;
       setLiveBoard(data);
       // Auto-select first ticket if none selected
       if (!selectedTicketId && data.focus_queue.length > 0) {
         setSelectedTicketId(data.focus_queue[0].ticket.ticket_id);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to load live triage board');
+      if (requestId === boardRequest.current) setError(err?.message || 'Failed to load live triage board');
     } finally {
-      setLoading(false);
+      if (requestId === boardRequest.current) setLoading(false);
     }
   }, [activeBucket, searchQuery, selectedTicketId]);
 
@@ -159,28 +166,34 @@ export const TriageBoard: React.FC = () => {
     targetTeam?: string
   ) => {
     e.stopPropagation();
+    if (!canEdit) return;
     try {
       await updateTicketStage(ticketId, targetState, targetTeam);
       await loadBoard();
     } catch (err: any) {
-      alert(err?.message || 'Failed to advance ticket stage');
+      setError(err?.message || 'Failed to advance ticket stage');
     }
   };
 
   // Load Ticket Workspace
   const loadWorkspace = useCallback(async (ticketId: string) => {
+    const requestId = ++workspaceRequest.current;
+    setWorkspace(null);
+    setSelectedProposalId(null);
+    setEditedQuery('');
     try {
       setWorkspaceLoading(true);
       const data = await fetchTicketWorkspace(ticketId);
+      if (requestId !== workspaceRequest.current) return;
       setWorkspace(data);
       if (data.tool_proposals.length > 0) {
         setSelectedProposalId(data.tool_proposals[0].proposal_id);
         setEditedQuery(data.tool_proposals[0].current_query);
       }
     } catch (err: any) {
-      console.error('Failed to load ticket workspace', err);
+      if (requestId === workspaceRequest.current) setError(err?.message || 'Failed to load ticket workspace');
     } finally {
-      setWorkspaceLoading(false);
+      if (requestId === workspaceRequest.current) setWorkspaceLoading(false);
     }
   }, []);
 
@@ -196,12 +209,13 @@ export const TriageBoard: React.FC = () => {
   };
 
   const handleAcknowledge = async (ticketId: string) => {
+    if (!canEdit) return;
     try {
       await acknowledgeTicket(ticketId);
       await loadBoard();
       await loadWorkspace(ticketId);
     } catch (err: any) {
-      alert(err?.message || 'Failed to acknowledge ticket');
+      setError(err?.message || 'Failed to acknowledge ticket');
     }
   };
 
@@ -211,9 +225,12 @@ export const TriageBoard: React.FC = () => {
   };
 
   const handleSaveQuery = async () => {
+    if (!canEdit) return;
     if (!selectedProposalId) return;
+    const version = workspaceRequest.current;
     try {
       const updated = await updateProposalRevision(selectedProposalId, editedQuery);
+      if (version !== workspaceRequest.current) return;
       if (workspace) {
         setWorkspace({
           ...workspace,
@@ -223,15 +240,19 @@ export const TriageBoard: React.FC = () => {
         });
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to save query revision');
+      setError(err?.message || 'Failed to save investigation prompt');
     }
   };
 
   const handleExecuteQuery = async () => {
+    if (!canEdit) return;
     if (!selectedProposalId) return;
+    const version = workspaceRequest.current;
     try {
       setExecutingTool(true);
+      await updateProposalRevision(selectedProposalId, editedQuery);
       const res = await executeToolProposal(selectedProposalId);
+      if (version !== workspaceRequest.current) return;
       if (workspace) {
         setWorkspace({
           ...workspace,
@@ -243,17 +264,20 @@ export const TriageBoard: React.FC = () => {
         });
       }
     } catch (err: any) {
-      alert(err?.message || 'Tool execution failed');
+      setError(err?.message || 'Tool execution failed');
     } finally {
       setExecutingTool(false);
     }
   };
 
   const handlePromoteEvidence = async () => {
+    if (!canEdit) return;
     if (!selectedProposalId || !evidenceSummary.trim()) return;
+    const version = workspaceRequest.current;
     try {
       setPromotingEvidence(true);
       const newEv = await promoteProposalEvidence(selectedProposalId, evidenceSummary.trim());
+      if (version !== workspaceRequest.current) return;
       if (workspace) {
         setWorkspace({
           ...workspace,
@@ -263,16 +287,19 @@ export const TriageBoard: React.FC = () => {
       setEvidenceSummary('');
       setActiveTab('evidence');
     } catch (err: any) {
-      alert(err?.message || 'Failed to promote evidence');
+      setError(err?.message || 'Failed to promote evidence');
     } finally {
       setPromotingEvidence(false);
     }
   };
 
   const handleToggleEvidence = async (evidenceId: string, currentStatus: string) => {
+    if (!canEdit) return;
     const newStatus = currentStatus === 'ACCEPTED' ? 'REJECTED' : 'ACCEPTED';
+    const version = workspaceRequest.current;
     try {
       await updateEvidenceStatus(evidenceId, newStatus);
+      if (version !== workspaceRequest.current) return;
       if (workspace) {
         setWorkspace({
           ...workspace,
@@ -282,14 +309,17 @@ export const TriageBoard: React.FC = () => {
         });
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to update evidence status');
+      setError(err?.message || 'Failed to update evidence status');
     }
   };
 
   const handleToggleFinding = async (findingId: string, currentStatus: string) => {
+    if (!canEdit) return;
     const newStatus = currentStatus === 'CONFIRMED' ? 'REJECTED' : 'CONFIRMED';
+    const version = workspaceRequest.current;
     try {
       await updateFindingStatus(findingId, newStatus);
+      if (version !== workspaceRequest.current) return;
       if (workspace) {
         setWorkspace({
           ...workspace,
@@ -299,34 +329,29 @@ export const TriageBoard: React.FC = () => {
         });
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to update finding status');
+      setError(err?.message || 'Failed to update finding status');
     }
   };
 
   const handleApproveAction = async (actionId: string) => {
+    if (!canEdit) return;
+    const version = workspaceRequest.current;
     try {
       setApprovingActionId(actionId);
       await approveGovernedAction(actionId);
-      if (workspace) {
-        setWorkspace({
-          ...workspace,
-          governed_actions: workspace.governed_actions.map(a =>
-            a.action_id === actionId
-              ? { ...a, status: 'EXECUTED', approved_by: 'You', executed_at: Date.now() / 1000 }
-              : a
-          ),
-        });
-      }
+      if (version !== workspaceRequest.current) return;
+      if (workspace) await loadWorkspace(workspace.ticket.ticket_id);
       await loadBoard();
     } catch (err: any) {
-      alert(err?.message || 'Failed to approve action');
+      setError(err?.message || 'Failed to approve action');
     } finally {
       setApprovingActionId(null);
     }
   };
 
   const handleEscalateSubmit = async () => {
-    if (!selectedTicketId || !targetTeam) return;
+    if (!canEdit) return;
+    if (!selectedTicketId || !targetTeam.trim()) return;
     try {
       await escalateTicket(selectedTicketId, targetTeam, escalateReason);
       setShowEscalateModal(false);
@@ -334,18 +359,19 @@ export const TriageBoard: React.FC = () => {
       await loadBoard();
       await loadWorkspace(selectedTicketId);
     } catch (err: any) {
-      alert(err?.message || 'Failed to escalate ticket');
+      setError(err?.message || 'Failed to escalate ticket');
     }
   };
 
   const handleReturnToTriage = async () => {
+    if (!canEdit) return;
     if (!selectedTicketId || !workspace) return;
     try {
       await returnTicket(selectedTicketId, workspace.ticket.current_team, 'Returned from resolver team for additional telemetry');
       await loadBoard();
       await loadWorkspace(selectedTicketId);
     } catch (err: any) {
-      alert(err?.message || 'Failed to return ticket');
+      setError(err?.message || 'Failed to return ticket');
     }
   };
 
@@ -353,6 +379,7 @@ export const TriageBoard: React.FC = () => {
 
   return (
     <div className="triage-board-page">
+      {error && <div role="alert" className="notice-banner">{error}<button type="button" onClick={() => setError(null)} aria-label="Dismiss error"><X size={14} /></button></div>}
       {/* Top Header */}
       <header className="triage-header">
         <div className="triage-title-group">
@@ -453,6 +480,7 @@ export const TriageBoard: React.FC = () => {
         </div>
       </section>
 
+      {!!liveBoard?.urgency_strip.unknown && <p>{liveBoard.urgency_strip.unknown} tickets have no configured SLA target.</p>}
       {/* View Mode Bar */}
       <div
         style={{
@@ -466,7 +494,7 @@ export const TriageBoard: React.FC = () => {
       >
         <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-elevated)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
           {[
-            { id: 'kanban', label: 'Kanban Board (5 Stages)', icon: Kanban },
+            { id: 'kanban', label: 'Kanban Board', icon: Kanban },
             { id: 'teamwise', label: 'Team Workload & Capacity', icon: Users },
             { id: 'comments_evidence', label: 'Comments & Evidence Stream', icon: MessageSquare },
             { id: 'focus_queue', label: 'Deep Focus Queue Desk', icon: ListOrdered },
@@ -539,7 +567,7 @@ export const TriageBoard: React.FC = () => {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(5, minmax(260px, 1fr))',
+            gridTemplateColumns: 'repeat(6, minmax(260px, 1fr))',
             gap: '14px',
             overflowX: 'auto',
             paddingBottom: '16px',
@@ -558,8 +586,8 @@ export const TriageBoard: React.FC = () => {
             },
             {
               id: 'auto',
-              title: 'In Auto-Triage',
-              badgeText: 'AI Active',
+              title: 'In Triage',
+              badgeText: 'Unassigned',
               badgeClass: 'badge-amber',
               nextStage: 'IN_TRIAGE',
               nextLabel: 'Claim Triage',
@@ -567,8 +595,8 @@ export const TriageBoard: React.FC = () => {
             },
             {
               id: 'pending',
-              title: 'Pending Review',
-              badgeText: 'RCA Ready',
+              title: 'Assigned Triage',
+              badgeText: 'Assigned',
               badgeClass: 'badge-teal',
               nextStage: 'APP_TEAM',
               nextLabel: 'Dispatch to Team',
@@ -580,17 +608,26 @@ export const TriageBoard: React.FC = () => {
               badgeText: 'In Progress',
               badgeClass: 'badge-neutral',
               nextStage: 'RESOLVED',
-              nextLabel: 'Verify & Resolve',
+              nextLabel: 'Mark Resolved',
               matcher: (t: any) => t.work_state === 'APP_TEAM' || t.work_state === 'FOLLOW_UP',
             },
             {
               id: 'resolved',
-              title: 'Resolved & Verified',
-              badgeText: 'Verified',
+              title: 'Resolved',
+              badgeText: 'Resolved',
               badgeClass: 'badge-teal',
               nextStage: null,
               nextLabel: null,
-              matcher: (t: any) => t.work_state === 'RESOLVED' || t.work_state === 'WAITING',
+              matcher: (t: any) => t.work_state === 'RESOLVED',
+            },
+            {
+              id: 'waiting',
+              title: 'Waiting',
+              badgeText: 'Waiting',
+              badgeClass: 'badge-neutral',
+              nextStage: 'IN_TRIAGE',
+              nextLabel: 'Resume Triage',
+              matcher: (t: any) => t.work_state === 'WAITING',
             },
           ].map((col) => {
             const colTickets = (liveBoard?.focus_queue || []).filter((item) => {
@@ -698,7 +735,7 @@ export const TriageBoard: React.FC = () => {
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                           <span className="badge badge-magenta" style={{ fontSize: '10px' }}>
-                            <Zap size={9} /> 89% RCA
+                            <Zap size={9} /> Review findings
                           </span>
                           {t.labels?.slice(0, 2).map((l: string, idx: number) => (
                             <span key={idx} className="badge badge-neutral" style={{ fontSize: '10px' }}>
@@ -720,7 +757,7 @@ export const TriageBoard: React.FC = () => {
                             <button
                               onClick={(e) => handleQuickAdvance(e, t.ticket_id, col.nextStage, t.current_team)}
                               className="btn btn-primary"
-                              style={{ padding: '3px 10px', fontSize: '11px', gap: '4px' }}
+                              style={{ padding: '3px 10px', fontSize: '11px', gap: '4px' }} disabled={!canEdit}
                             >
                               <span>{col.nextLabel}</span>
                               <ArrowRight size={11} />
@@ -740,21 +777,13 @@ export const TriageBoard: React.FC = () => {
       {/* TEAMWISE WORKLOAD & CAPACITY VIEW */}
       {viewMode === 'teamwise' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px', flex: 1, paddingBottom: '20px' }}>
-          {[
-            { name: 'Payments Core Team', lead: 'Sarah Jenkins', mttt: '1h 24m' },
-            { name: 'Core NetOps', lead: 'Dave Miller', mttt: '2h 05m' },
-            { name: 'Billing Platform Team', lead: 'Mike R.', mttt: '1h 45m' },
-            { name: 'Data Platform Team', lead: 'Priya S.', mttt: '2h 40m' },
-            { name: 'Identity & SSO Team', lead: 'Alex Chen', mttt: '1h 10m' },
-            { name: 'Triage Team', lead: 'Bharath Kumar', mttt: '28m' },
-          ].map((team) => {
-            const teamTickets = (liveBoard?.focus_queue || []).filter((item) =>
-              item.ticket.current_team.toLowerCase().includes(team.name.toLowerCase().split(' ')[0])
-            );
+          {!teams.length && <p>No teams are assigned to the loaded tickets.</p>}
+          {teams.map((team) => {
+            const teamTickets = (liveBoard?.focus_queue || []).filter(item => item.ticket.current_team === team);
 
             return (
               <div
-                key={team.name}
+                key={team}
                 className="platform-card"
                 style={{
                   background: 'var(--bg-card)',
@@ -769,10 +798,10 @@ export const TriageBoard: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
                   <div>
                     <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--ink-primary)' }}>
-                      {team.name}
+                      {team}
                     </div>
                     <div style={{ fontSize: '11.5px', color: 'var(--ink-tertiary)', marginTop: '2px' }}>
-                      Lead: {team.lead} • MTTT: <strong style={{ color: 'var(--accent-teal)' }}>{team.mttt}</strong>
+                      Assignments from saved project tickets
                     </div>
                   </div>
                   <span className="badge badge-magenta" style={{ fontSize: '11px', fontWeight: 800 }}>
@@ -863,7 +892,7 @@ export const TriageBoard: React.FC = () => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto' }}>
               {(workspace?.events.filter((e) => e.event_type === 'TICKET_COMMENT') || []).length === 0 ? (
                 <div style={{ padding: '32px', textAlign: 'center', color: 'var(--ink-secondary)', fontSize: '12.5px' }}>
-                  Open any ticket in the drawer to post notes and synchronized Jira comments.
+                  Open a ticket to add notes to its investigation workspace.
                 </div>
               ) : (
                 workspace?.events
@@ -939,7 +968,7 @@ export const TriageBoard: React.FC = () => {
                       {ev.source}
                     </span>
                     <span style={{ fontSize: '11px', color: 'var(--accent-teal)', fontWeight: 700 }}>
-                      {Math.round(ev.confidence * 100)}% Confidence
+                      {ev.confidence > 0 ? `${Math.round(ev.confidence * 100)}% confidence` : 'Confidence unassessed'}
                     </span>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--ink-primary)', margin: 0, lineHeight: 1.4 }}>
@@ -1059,7 +1088,7 @@ export const TriageBoard: React.FC = () => {
                     <div className="sla-progress-track">
                       <div
                         className={`sla-progress-fill fill-${sla.risk_state.toLowerCase().replace('_', '-')}`}
-                        style={{ width: `${Math.min(100, Math.round(sla.sla_utilization * 100))}%` }}
+                        style={{ width: `${Math.min(100, Math.round((sla.sla_utilization ?? 0) * 100))}%` }}
                       />
                     </div>
 
@@ -1080,7 +1109,7 @@ export const TriageBoard: React.FC = () => {
                           if (primary_action === 'Start Triage' || primary_action === 'Resume') {
                             handleAcknowledge(ticket.ticket_id);
                           }
-                        }}
+                        }} disabled={!canEdit}
                       >
                         {primary_action}
                       </button>
@@ -1121,7 +1150,7 @@ export const TriageBoard: React.FC = () => {
                       <button
                         type="button"
                         className="btn-card-action"
-                        onClick={() => handleAcknowledge(workspace.ticket.ticket_id)}
+                        onClick={() => handleAcknowledge(workspace.ticket.ticket_id)} disabled={!canEdit}
                       >
                         Start / Claim Triage
                       </button>
@@ -1130,7 +1159,7 @@ export const TriageBoard: React.FC = () => {
                         type="button"
                         className="btn-card-action"
                         onClick={handleReturnToTriage}
-                        title="Simulate team returning ticket to triage"
+                        title="Return this ticket to the local triage queue" disabled={!canEdit}
                       >
                         Return to Triage
                       </button>
@@ -1138,7 +1167,7 @@ export const TriageBoard: React.FC = () => {
                       <button
                         type="button"
                         className="btn-tool-secondary"
-                        onClick={() => setShowEscalateModal(true)}
+                        onClick={() => setShowEscalateModal(true)} disabled={!canEdit}
                       >
                         Escalate / Transfer
                       </button>
@@ -1271,23 +1300,25 @@ export const TriageBoard: React.FC = () => {
                     <div className="journey-timeline-card" style={{ borderLeft: '3px solid var(--acc)' }}>
                       <div className="journey-header" style={{ color: 'var(--acc)' }}>
                         <Sparkles size={15} /> PRISM Autonomous RCA Summary (
-                        {Math.round(workspace.investigation.auto_triage_summary.confidence * 100)}% confidence)
+                        {(workspace.investigation.auto_triage_summary.confidence ?? 0) > 0 ? `${Math.round((workspace.investigation.auto_triage_summary.confidence ?? 0) * 100)}% confidence` : 'Confidence unassessed'})
                       </div>
                       <p style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--tx)', margin: '4px 0 8px' }}>
-                        {workspace.investigation.auto_triage_summary.executive_rca}
+                        {workspace.investigation.auto_triage_summary.summary || workspace.investigation.auto_triage_summary.executive_rca || 'No summary recorded.'}
                       </p>
                       <div className="meta-pill">
                         <b>Suspected Failure Boundary:</b>{' '}
-                        {workspace.investigation.auto_triage_summary.failure_boundary}
+                        {workspace.investigation.auto_triage_summary.failure_boundary || 'Not recorded'}
                       </div>
                     </div>
 
+                    {!!workspace.investigation.auto_triage_summary.uncertainties?.length && <section><h3>Still uncertain</h3><ul>{workspace.investigation.auto_triage_summary.uncertainties.map((text, index) => <li key={index}>{text}</li>)}</ul></section>}
                     <div className="journey-timeline-card">
                       <div className="journey-header">
                         <Shield size={14} /> Investigated Hypotheses
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        {workspace.investigation.auto_triage_summary.hypotheses.map((h, idx) => (
+                        {!workspace.investigation.auto_triage_summary.hypotheses?.length && <p>No hypotheses recorded.</p>}
+                        {(workspace.investigation.auto_triage_summary.hypotheses || []).map((h, idx) => (
                           <div
                             key={idx}
                             style={{
@@ -1324,7 +1355,7 @@ export const TriageBoard: React.FC = () => {
                         <CheckCircle2 size={14} /> Actionable Next Recommendation
                       </div>
                       <p style={{ fontSize: 13, color: 'var(--tx)' }}>
-                        {workspace.investigation.auto_triage_summary.recommendation}
+                        {workspace.investigation.auto_triage_summary.recommended_actions?.join('\n') || workspace.investigation.auto_triage_summary.recommendation || 'No suggested action recorded.'}
                       </p>
                     </div>
                   </div>
@@ -1367,13 +1398,13 @@ export const TriageBoard: React.FC = () => {
 
                         {/* Rationale */}
                         <div className="tool-rationale-box">
-                          <b>Why this query?</b> {currentProposal.rationale}
+                          <b>Why this follow-up?</b> {currentProposal.rationale}
                         </div>
 
                         {/* Editable Query Container */}
                         <div className="tool-editor-wrapper">
                           <div className="tool-editor-header">
-                            <span>Query / Code Editor ({currentProposal.capability.toUpperCase()})</span>
+                            <span>Investigation prompt ({currentProposal.capability.toUpperCase()})</span>
                             <button
                               type="button"
                               className="btn-tool-secondary"
@@ -1398,15 +1429,15 @@ export const TriageBoard: React.FC = () => {
                               type="button"
                               className="btn-tool-run"
                               onClick={handleExecuteQuery}
-                              disabled={executingTool}
+                              disabled={!canEdit || (executingTool)}
                             >
                               <Play size={13} />
-                              {executingTool ? 'Executing…' : 'Run Query'}
+                              {executingTool ? 'Executing…' : 'Run investigation'}
                             </button>
                             <button
                               type="button"
                               className="btn-tool-secondary"
-                              onClick={handleSaveQuery}
+                              onClick={handleSaveQuery} disabled={!canEdit}
                             >
                               Save Revision
                             </button>
@@ -1429,7 +1460,7 @@ export const TriageBoard: React.FC = () => {
                                 type="button"
                                 className="btn-tool-secondary"
                                 onClick={handlePromoteEvidence}
-                                disabled={promotingEvidence || !evidenceSummary.trim()}
+                                disabled={!canEdit || (promotingEvidence || !evidenceSummary.trim())}
                               >
                                 <Check size={12} /> Promote to Evidence
                               </button>
@@ -1516,7 +1547,7 @@ export const TriageBoard: React.FC = () => {
                                   {finding.statement}
                                 </p>
                                 <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, display: 'block' }}>
-                                  Confidence: {Math.round(finding.confidence * 100)}% • Supported by {finding.evidence_refs.length} evidence sources
+                                  Confidence: {finding.confidence > 0 ? `${Math.round(finding.confidence * 100)}%` : 'unassessed'} • Supported by {finding.evidence_refs.length} evidence sources
                                 </span>
                               </div>
                               <button
@@ -1526,7 +1557,7 @@ export const TriageBoard: React.FC = () => {
                                 style={{
                                   color: finding.status === 'CONFIRMED' ? 'var(--acc3)' : 'var(--muted)',
                                   borderColor: finding.status === 'CONFIRMED' ? 'var(--acc3)' : 'var(--line)',
-                                }}
+                                }} disabled={!canEdit}
                               >
                                 {finding.status === 'CONFIRMED' ? 'Confirmed' : 'Confirm Finding'}
                               </button>
@@ -1592,7 +1623,7 @@ export const TriageBoard: React.FC = () => {
                                 style={{
                                   color: ev.status === 'ACCEPTED' ? 'var(--acc3)' : 'var(--muted)',
                                   borderColor: ev.status === 'ACCEPTED' ? 'var(--acc3)' : 'var(--line)',
-                                }}
+                                }} disabled={!canEdit}
                               >
                                 {ev.status === 'ACCEPTED' ? 'Accepted' : 'Accept'}
                               </button>
@@ -1627,7 +1658,7 @@ export const TriageBoard: React.FC = () => {
                                 {rel.ticket_id} • {rel.summary}
                               </span>
                               <span className="meta-pill" style={{ color: 'var(--acc3)', fontWeight: 700 }}>
-                                {Math.round(rel.similarity * 100)}% Similarity
+                                {rel.similarity === null ? 'Shared ticket context' : `${Math.round(rel.similarity * 100)}% similarity`}
                               </span>
                             </div>
                             <div style={{ marginTop: 8, fontSize: 12 }}>
@@ -1635,10 +1666,10 @@ export const TriageBoard: React.FC = () => {
                                 <b>Root Cause:</b> {rel.root_cause}
                               </p>
                               <p style={{ margin: '2px 0', color: 'var(--tx)' }}>
-                                <b>Resolution:</b> {rel.resolution}
+                                <b>Resolution:</b> {rel.resolution || 'No resolution recorded'}
                               </p>
                               <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--dim)' }}>
-                                Resolved {rel.resolved_at} by {rel.resolved_by}
+                                {rel.resolved_at ? `Resolved ${rel.resolved_at}${rel.resolved_by ? ` by ${rel.resolved_by}` : ''}` : 'Resolution time not recorded'}
                               </p>
                             </div>
                           </div>
@@ -1734,14 +1765,14 @@ export const TriageBoard: React.FC = () => {
                                   type="button"
                                   className="btn-tool-run"
                                   onClick={() => handleApproveAction(act.action_id)}
-                                  disabled={approvingActionId === act.action_id}
+                                  disabled={!canEdit || (approvingActionId === act.action_id)}
                                 >
                                   <ShieldCheck size={13} />
-                                  {approvingActionId === act.action_id ? 'Executing…' : 'Approve & Execute'}
+                                  {approvingActionId === act.action_id ? 'Approving…' : 'Record approval'}
                                 </button>
                               ) : (
                                 <span style={{ fontSize: 11, color: 'var(--acc3)', fontWeight: 600 }}>
-                                  ✓ Executed by {act.approved_by || 'Analyst'}
+                                  {act.status === 'EXECUTED' ? 'Executed' : act.status === 'APPROVED' ? 'Approved' : act.status} {act.approved_by ? `by ${act.approved_by}` : ''}
                                 </span>
                               )}
                             </div>
@@ -1765,6 +1796,7 @@ export const TriageBoard: React.FC = () => {
               Triage Team Activity
             </h3>
             <div>
+              {!liveBoard?.team_capacity.length && <p>No assigned analysts in the loaded tickets.</p>}
               {liveBoard?.team_capacity.map((analyst) => (
                 <div key={analyst.name} className="analyst-list-item">
                   <div className="analyst-info">
@@ -1793,10 +1825,11 @@ export const TriageBoard: React.FC = () => {
               Connectors Health
             </h3>
             <div>
+              {!liveBoard?.connectors_health.length && <p>No measured connector health is available.</p>}
               {liveBoard?.connectors_health.map((conn) => (
                 <div key={conn.connector} className="connector-status-row">
                   <span style={{ display: 'flex', alignItems: 'center' }}>
-                    <span className="status-dot-green" />
+                    <span>{conn.status} · </span>
                     <b>{conn.connector}</b>
                   </span>
                   <span style={{ color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
@@ -1816,19 +1849,19 @@ export const TriageBoard: React.FC = () => {
             {liveBoard && (
               <div className="metric-grid-2x2">
                 <div className="metric-tile">
-                  <span className="metric-tile-val">{liveBoard.performance_metrics.mttt}</span>
+                  <span className="metric-tile-val">{liveBoard.performance_metrics.mttt ?? 'Not measured'}</span>
                   <span className="metric-tile-label">Mean Time to Triage</span>
                 </div>
                 <div className="metric-tile">
-                  <span className="metric-tile-val">{liveBoard.performance_metrics.auto_triage_success_rate}</span>
+                  <span className="metric-tile-val">{liveBoard.performance_metrics.auto_triage_success_rate ?? 'Not measured'}</span>
                   <span className="metric-tile-label">Auto-Triage Success</span>
                 </div>
                 <div className="metric-tile">
-                  <span className="metric-tile-val">{liveBoard.performance_metrics.analyst_validation_rate}</span>
+                  <span className="metric-tile-val">{liveBoard.performance_metrics.analyst_validation_rate ?? 'Not measured'}</span>
                   <span className="metric-tile-label">Analyst Validation</span>
                 </div>
                 <div className="metric-tile">
-                  <span className="metric-tile-val">{liveBoard.performance_metrics.rca_accuracy_rate}</span>
+                  <span className="metric-tile-val">{liveBoard.performance_metrics.rca_accuracy_rate ?? 'Not measured'}</span>
                   <span className="metric-tile-label">RCA Accuracy</span>
                 </div>
               </div>
@@ -1871,17 +1904,16 @@ export const TriageBoard: React.FC = () => {
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
                 Target Application / Resolver Team
               </label>
-              <select
+              <input
                 value={targetTeam}
                 onChange={(e) => setTargetTeam(e.target.value)}
+                aria-label="Target application or resolver team"
+                maxLength={120}
+                required
+                list="triage-resolver-teams"
                 style={{ width: '100%', padding: 8, marginTop: 4 }}
-              >
-                <option value="Billing Platform Team">Billing Platform Team</option>
-                <option value="Core NetOps">Core NetOps</option>
-                <option value="Payment Gateway Team">Payment Gateway Team</option>
-                <option value="Data Platform Team">Data Platform Team</option>
-                <option value="Identity & SSO Team">Identity & SSO Team</option>
-              </select>
+              />
+              <datalist id="triage-resolver-teams">{teams.map(team => <option key={team} value={team} />)}</datalist>
             </div>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)' }}>
@@ -1906,7 +1938,7 @@ export const TriageBoard: React.FC = () => {
               <button
                 type="button"
                 className="btn-tool-run"
-                onClick={handleEscalateSubmit}
+                onClick={handleEscalateSubmit} disabled={!canEdit}
               >
                 Confirm Handoff
               </button>
@@ -1918,6 +1950,7 @@ export const TriageBoard: React.FC = () => {
       {/* Slide-out Ticket Detail Drawer */}
       {drawerTicketId && (
         <TicketDetailPanel
+          canEdit={canEdit}
           ticketId={drawerTicketId}
           onClose={() => setDrawerTicketId(null)}
           onTicketUpdated={() => loadBoard()}

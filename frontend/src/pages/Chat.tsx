@@ -24,10 +24,10 @@ import {
 import { AnswerMarkdown } from '../components/AnswerMarkdown';
 import { ChatFiles } from '../components/ChatFiles';
 import { RunFeedback } from '../components/RunFeedback';
+import { RunConnectorSelectors, useRunConnectorSelections, loadRunConnectorGroups, connectorSelectionsReady } from '../components/RunConnectorSelectors';
 import { ChatThinkingAccordion } from '../components/chat/ChatThinkingAccordion';
 import { ChatVisualCard } from '../components/chat/ChatVisualCard';
 import { ChatExecutiveBrief } from '../components/chat/ChatExecutiveBrief';
-import { ChatReasoningView } from '../components/chat/ChatReasoningView';
 import {
   cancelRun,
   fetchRun,
@@ -40,6 +40,8 @@ import {
 } from '../services/api';
 import type { RunEvidence, RunTraceEvent } from '../services/api';
 import {
+  CHAT_PAGE_SIZE,
+  CHAT_MESSAGE_PAGE_SIZE,
   createConversation,
   fetchConversations,
   fetchConversationRuns,
@@ -99,6 +101,7 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 
 const active = (run: Run) => run.status === 'RUNNING' || run.status === 'QUEUED';
+const terminal = (run: Run) => ['COMPLETED', 'FAILED', 'BLOCKED', 'CANCELLED', 'SIMULATED', 'PARTIAL'].includes(run.status);
 
 const statusText: Partial<Record<Run['status'], string>> = {
   COMPLETED: 'Complete',
@@ -240,12 +243,20 @@ export function Chat({
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [historySearch, setHistorySearch] = useState('');
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [chatId, setChatId] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [runsHasMore, setRunsHasMore] = useState(false);
+  const [messagesHasMore, setMessagesHasMore] = useState(false);
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [olderError, setOlderError] = useState<string | null>(null);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [capabilities, setCapabilities] = useState<CapabilityItem[]>([]);
   const [capability, setCapability] = useState('');
+  const connectorScope = useRunConnectorSelections(capability);
   const [question, setQuestion] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [retainedAttachmentIds, setRetainedAttachmentIds] = useState<string[]>([]);
@@ -262,7 +273,7 @@ export function Chat({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailRevision, setDetailRevision] = useState(0);
-  const [panel, setPanel] = useState<'brief' | 'reasoning' | 'sources' | 'activity' | 'files'>('brief');
+  const [panel, setPanel] = useState<'brief' | 'sources' | 'activity' | 'files'>('brief');
   const [panelOpen, setPanelOpen] = useState(false);
   const [fileCount, setFileCount] = useState(0);
   const [focusedSource, setFocusedSource] = useState<string | null>(null);
@@ -272,7 +283,11 @@ export function Chat({
   const [copiedRunId, setCopiedRunId] = useState<string | null>(null);
 
   const currentRun = useRef<string | null>(null);
+  const submissionInFlight = useRef(false);
+  const pendingAttempt = useRef<{ fingerprint: string; key: string; runId?: string } | null>(null);
   const controller = useRef<AbortController | null>(null);
+  const historyRequest = useRef<AbortController | null>(null);
+  const conversationRequest = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const composer = useRef<HTMLTextAreaElement>(null);
   const operation = useRef(0);
@@ -286,20 +301,28 @@ export function Chat({
       mounted.current = false;
       operation.current++;
       controller.current?.abort();
+      historyRequest.current?.abort();
+      conversationRequest.current?.abort();
     };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    historyRequest.current?.abort();
+    const request = new AbortController();
+    historyRequest.current = request;
     setLoading(true);
+    setHistoryLoading(false);
+    setHistoryError(null);
     setError(null);
-    Promise.all([fetchCapabilities(), fetchConfig(), fetchConversations()])
+    Promise.all([fetchCapabilities(), fetchConfig(), fetchConversations({ signal: request.signal })])
       .then(([available, settings, history]) => {
         const items = available.filter(item => item.is_authorized && item.runtime_supported !== false);
         if (cancelled) return;
         setCapabilities(items);
         setConfig(settings);
         setConversations(history);
+        setHistoryHasMore(history.length === CHAT_PAGE_SIZE);
         setCapability(previous =>
           items.find(item => item.id === initialCapability)?.id ||
           items.find(item => item.id === previous)?.id ||
@@ -310,15 +333,26 @@ export function Chat({
         if (!cancelled) setError(errorText(err));
       })
       .finally(() => {
+        if (historyRequest.current === request) historyRequest.current = null;
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      request.abort();
     };
   }, [attempt, initialCapability]);
 
   useEffect(() => {
-    if (requestVersion && !busy) {
+    if (requestVersion && !busy && !submissionInFlight.current) {
+      pendingAttempt.current = null;
+      operation.current++;
+      conversationRequest.current?.abort();
+      conversationRequest.current = null;
+      setLoading(false);
+      setOlderLoading(false);
+      setOlderError(null);
+      setRunsHasMore(false);
+      setMessagesHasMore(false);
       setChatId(null);
       setRuns([]);
       setMessages([]);
@@ -358,6 +392,7 @@ export function Chat({
   useEffect(() => {
     if (busy || !activeRunKey) return;
     let cancelled = false;
+    let timer: number;
     const poll = async () => {
       try {
         const values = await Promise.all(activeRunKey.split(',').map(fetchRun));
@@ -366,13 +401,14 @@ export function Chat({
         if (values.some(run => !active(run))) setDetailRevision(value => value + 1);
       } catch (err) {
         if (!cancelled) setError(errorText(err));
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void poll(), 2500);
       }
     };
-    const timer = window.setInterval(() => void poll(), 2500);
     void poll();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
     // Read persisted status when a conversation is reopened, including request-bound cancellation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -425,17 +461,17 @@ export function Chat({
     setEvidence([]);
     setEvents([]);
     setDurationEvent(null);
-    Promise.all([fetchRunEvidence(selectedRun), fetchRunTrace(selectedRun)])
+    Promise.allSettled([fetchRunEvidence(selectedRun), fetchRunTrace(selectedRun)])
       .then(([sources, trace]) => {
         if (cancelled) return;
-        setEvidence(sources);
-        setEvents(trace.events);
-        if (trace.truncated) {
-          setDetailError('Only the most recent saved activity is available for this investigation.');
-        }
-      })
-      .catch(err => {
-        if (!cancelled) setDetailError(errorText(err));
+        const errors: string[] = [];
+        if (sources.status === 'fulfilled') setEvidence(sources.value);
+        else errors.push(`Sources could not be loaded: ${errorText(sources.reason)}`);
+        if (trace.status === 'fulfilled') {
+          setEvents(trace.value.events);
+          if (trace.value.truncated) errors.push('Only the most recent saved activity is available for this investigation.');
+        } else errors.push(`Activity could not be loaded: ${errorText(trace.reason)}`);
+        setDetailError(errors.length ? errors.join(' ') : null);
       })
       .finally(() => {
         if (!cancelled) setDetailsLoading(false);
@@ -454,7 +490,7 @@ export function Chat({
   }, [runs.length]);
 
   const chooseConversation = async (id: string | null) => {
-    if (busy) return;
+    if (busy || submissionInFlight.current) return;
     if (
       (question.trim() || files.length) &&
       !window.confirm('Start another conversation? Your unsent message and attachments will be discarded.')
@@ -462,10 +498,19 @@ export function Chat({
       return;
     }
     currentRun.current = null;
+    if (id !== chatId || !id) pendingAttempt.current = null;
     const turn = ++operation.current;
+    conversationRequest.current?.abort();
+    conversationRequest.current = null;
+    setOlderLoading(false);
+    setOlderError(null);
+    setRunsHasMore(false);
+    setMessagesHasMore(false);
     setHistoryOpen(false);
     setError(null);
     setSelectedRun(null);
+    setEvents([]);
+    setEvidence([]);
     setFiles([]);
     setRetainedAttachmentIds([]);
     setQuestion('');
@@ -475,27 +520,83 @@ export function Chat({
     setCapability('');
     setChatId(id);
     if (!id) {
+      setLoading(false);
       composer.current?.focus();
       return;
     }
+    const request = new AbortController();
+    conversationRequest.current = request;
     setLoading(true);
     try {
       const [values, savedMessages] = await Promise.all([
-        fetchConversationRuns(id),
-        fetchConversationMessages(id),
+        fetchConversationRuns(id, { signal: request.signal }),
+        fetchConversationMessages(id, { signal: request.signal }),
       ]);
       if (!mounted.current || turn !== operation.current) return;
+      if (values.some(run => run.id === pendingAttempt.current?.runId && terminal(run))) pendingAttempt.current = null;
       setRuns(values);
+      setRunsHasMore(values.length === CHAT_PAGE_SIZE);
       setSelectedRun(values.at(-1)?.id || null);
       setMessages(savedMessages);
+      setMessagesHasMore(savedMessages.length === CHAT_MESSAGE_PAGE_SIZE);
     } catch (err) {
       if (mounted.current && turn === operation.current) setError(errorText(err));
     } finally {
+      if (conversationRequest.current === request) conversationRequest.current = null;
       if (mounted.current && turn === operation.current) setLoading(false);
     }
   };
 
+  const loadMoreConversations = async () => {
+    if (loading || historyRequest.current || !historyHasMore || !conversations.length) return;
+    const request = new AbortController();
+    historyRequest.current = request;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const page = await fetchConversations({ before: conversations.at(-1)!.created_at, signal: request.signal });
+      if (!mounted.current || request.signal.aborted || historyRequest.current !== request) return;
+      setConversations(previous => [...previous, ...page.filter(item => !previous.some(saved => saved.chat_id === item.chat_id))]);
+      setHistoryHasMore(page.length === CHAT_PAGE_SIZE);
+    } catch (err) {
+      if (mounted.current && !request.signal.aborted && historyRequest.current === request) setHistoryError(errorText(err));
+    } finally {
+      if (historyRequest.current === request) {
+        historyRequest.current = null;
+        if (mounted.current) setHistoryLoading(false);
+      }
+    }
+  };
+
+  const loadEarlierTurns = async () => {
+    if (!chatId || loading || busy || conversationRequest.current || !(runsHasMore || messagesHasMore)) return;
+    const turn = operation.current;
+    const request = new AbortController();
+    conversationRequest.current = request;
+    setOlderLoading(true);
+    setOlderError(null);
+    try {
+      const [olderRuns, olderMessages] = await Promise.all([
+        runsHasMore ? fetchConversationRuns(chatId, { before: Number(runs[0].raw?.created_at), signal: request.signal }) : Promise.resolve([]),
+        messagesHasMore ? fetchConversationMessages(chatId, { before: messages[0].sequence, signal: request.signal }) : Promise.resolve([]),
+      ]);
+      if (!mounted.current || request.signal.aborted || turn !== operation.current) return;
+      setRuns(previous => [...olderRuns.filter(item => !previous.some(saved => saved.id === item.id)), ...previous]);
+      setMessages(previous => [...olderMessages.filter(item => !previous.some(saved => saved.id === item.id)), ...previous]);
+      if (runsHasMore) setRunsHasMore(olderRuns.length === CHAT_PAGE_SIZE);
+      if (messagesHasMore) setMessagesHasMore(olderMessages.length === CHAT_MESSAGE_PAGE_SIZE);
+    } catch (err) {
+      if (mounted.current && !request.signal.aborted && turn === operation.current) setOlderError(errorText(err));
+    } finally {
+      if (conversationRequest.current === request) {
+        conversationRequest.current = null;
+        if (mounted.current) setOlderLoading(false);
+      }
+    }
+  };
+
   const upsertRun = (run: Run) => {
+    if (pendingAttempt.current?.runId === run.id && terminal(run)) pendingAttempt.current = null;
     setRuns(previous =>
       previous.some(item => item.id === run.id)
         ? previous.map(item =>
@@ -510,7 +611,7 @@ export function Chat({
 
   const send = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (busy || loading || !config || !question.trim()) return;
+    if (submissionInFlight.current || busy || runs.some(active) || loading || !config || !question.trim() || !connectorScope.ready) return;
     setError(null);
     const limits = config.file_limits;
     if (files.length > limits.max_files) {
@@ -535,7 +636,14 @@ export function Chat({
       return;
     }
     const sentQuestion = question.trim();
+    submissionInFlight.current = true;
+    const connectorSelections = { ...connectorScope.selections };
+    conversationRequest.current?.abort();
+    conversationRequest.current = null;
+    setOlderLoading(false);
     setBusy(true);
+    setEvents([]);
+    setEvidence([]);
     setQuestion('');
     setPendingQuestion(sentQuestion);
     setPhase(files.length ? 'Reading your attachments' : 'Starting your investigation');
@@ -555,6 +663,8 @@ export function Chat({
         const uploaded = await uploadInvestigationFiles(files, conversationId);
         if (!mounted.current) return;
         attachmentIds = [...attachmentIds, ...uploaded.attachments.map(item => item.attachment_id)];
+        setRetainedAttachmentIds(attachmentIds);
+        setFiles([]);
       }
       if (controller.current.signal.aborted) return;
       let selectedCapability = capability;
@@ -568,7 +678,8 @@ export function Chat({
         if (resolution.status !== 'ready' || !resolution.capability) {
           const savedMessages = await fetchConversationMessages(conversationId);
           if (!mounted.current || controller.current.signal.aborted) return;
-          setMessages(savedMessages);
+          setMessages(previous => [...previous.filter(item => !savedMessages.some(saved => saved.id === item.id)), ...savedMessages]);
+          if (!messages.length) setMessagesHasMore(savedMessages.length === CHAT_MESSAGE_PAGE_SIZE);
           setFiles([]);
           setRetainedAttachmentIds([]);
           setDetailRevision(value => value + 1);
@@ -580,8 +691,27 @@ export function Chat({
           return;
         }
         selectedCapability = resolution.capability;
+        const groups = await loadRunConnectorGroups(selectedCapability);
+        if (!mounted.current || controller.current.signal.aborted) return;
+        if (!connectorSelectionsReady(groups, connectorSelections)) {
+          setCapability(selectedCapability);
+          setQuestion(draft => draft || sentQuestion);
+          setRetainedAttachmentIds(attachmentIds);
+          setFiles([]);
+          setError('Choose the sources for this investigation, then send your question again.');
+          return;
+        }
         setPhase(resolution.message);
       }
+      const fingerprint = JSON.stringify({
+        chat_id: conversationId,
+        capability: selectedCapability,
+        prompt: sentQuestion,
+        attachment_ids: attachmentIds,
+        connector_selections: Object.fromEntries(Object.entries(connectorSelections).sort(([left], [right]) => left.localeCompare(right)).map(([name, selection]) => [name, { instance_id: selection.instance_id, environment_id: selection.environment_id }])),
+      });
+      if (pendingAttempt.current?.fingerprint !== fingerprint) pendingAttempt.current = { fingerprint, key: crypto.randomUUID() };
+      const idempotencyKey = pendingAttempt.current.key;
       await streamStudioRun(
         selectedCapability,
         sentQuestion,
@@ -589,11 +719,13 @@ export function Chat({
           if (!mounted.current) return;
           if (update.type === 'run' && typeof update.data.run_id === 'string') {
             currentRun.current = update.data.run_id;
+            if (pendingAttempt.current?.key === idempotencyKey) pendingAttempt.current.runId = update.data.run_id;
             setSelectedRun(update.data.run_id);
           }
           if (['progress', 'complete'].includes(update.type) && typeof update.data.run_id === 'string') {
             const run = mapRun(update.data);
             currentRun.current = run.id;
+            if (pendingAttempt.current?.key === idempotencyKey) pendingAttempt.current.runId = run.id;
             upsertRun(run);
             setPendingQuestion('');
             setSelectedRun(run.id);
@@ -603,13 +735,17 @@ export function Chat({
             setEvents(previous => [...previous, update.data as RunTraceEvent].slice(-2000));
           }
           if (update.type === 'error') {
+            if (typeof update.data.run_id === 'string' && ['FAILED', 'BLOCKED', 'CANCELLED'].includes(String(update.data.status))) {
+              if (pendingAttempt.current?.key === idempotencyKey) pendingAttempt.current.runId = update.data.run_id;
+              upsertRun(mapRun(update.data));
+            }
             throw new Error(
               String(update.data.detail || update.data.reason || 'The investigation could not finish.'),
             );
           }
         },
         controller.current.signal,
-        { chatId: conversationId, attachmentIds, idempotencyKey: crypto.randomUUID() },
+        { chatId: conversationId, attachmentIds, connectorSelections, idempotencyKey },
       );
       if (mounted.current) {
         setFiles([]);
@@ -635,6 +771,7 @@ export function Chat({
         }
       }
     } finally {
+      submissionInFlight.current = false;
       if (mounted.current) {
         setBusy(false);
         setStopping(false);
@@ -661,7 +798,7 @@ export function Chat({
 
   const inspect = (
     id: string,
-    tab: 'brief' | 'reasoning' | 'sources' | 'activity' | 'files',
+    tab: 'brief' | 'sources' | 'activity' | 'files',
     source?: string,
   ) => {
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -677,7 +814,7 @@ export function Chat({
       setCopiedRunId(runId);
       setTimeout(() => setCopiedRunId(null), 2000);
     } catch {
-      /* Clipboard write might not be permitted */
+      setError('Could not copy the summary. Select the text and copy it manually.');
     }
   };
 
@@ -798,7 +935,7 @@ export function Chat({
           >
             {historyOpen ? <PanelLeftClose size={16} /> : <PanelLeft size={16} />}
             <span>History</span>
-            {conversations.length ? <span className="chat-badge">{conversations.length}</span> : null}
+            {conversations.length ? <span className="chat-badge">{conversations.length}{historyHasMore ? '+' : ''}</span> : null}
           </button>
           <div className="chat-header-divider" aria-hidden="true" />
           <div className="chat-header-brand-icon" aria-hidden="true">
@@ -818,7 +955,7 @@ export function Chat({
               if (panelOpen && panel !== 'files') {
                 setPanelOpen(false);
               } else {
-                setPanel(selectedRun ? 'brief' : 'reasoning');
+                setPanel(selectedRun ? 'brief' : 'activity');
                 setPanelOpen(true);
               }
             }}
@@ -860,7 +997,7 @@ export function Chat({
               <div className="chat-history-sidebar-title">
                 <Clock3 size={15} />
                 <span>Conversations</span>
-                {conversations.length ? <span className="chat-badge">{conversations.length}</span> : null}
+                {conversations.length ? <span className="chat-badge">{conversations.length}{historyHasMore ? '+' : ''}</span> : null}
               </div>
               <div className="chat-history-sidebar-actions">
                 <button
@@ -889,10 +1026,10 @@ export function Chat({
                 <Search size={14} aria-hidden="true" />
                 <input
                   type="search"
-                  placeholder="Search conversations…"
+                  placeholder="Filter loaded conversations…"
                   value={historySearch}
                   onChange={e => setHistorySearch(e.target.value)}
-                  aria-label="Filter conversation history"
+                  aria-label="Filter loaded conversation history"
                 />
                 {historySearch && (
                   <button
@@ -912,7 +1049,7 @@ export function Chat({
                 <p className="chat-history-empty">Your conversations will appear here.</p>
               )}
               {!!conversations.length && !filteredConversations.length && (
-                <p className="chat-history-empty">No conversations match &ldquo;{historySearch}&rdquo;.</p>
+                <p className="chat-history-empty">No loaded conversations match &ldquo;{historySearch}&rdquo;.</p>
               )}
               {filteredConversations.map(item => (
                 <button
@@ -935,12 +1072,26 @@ export function Chat({
                   </div>
                 </button>
               ))}
+              {historyError && <p role="alert" className="chat-notice">Earlier conversations could not be loaded: {historyError}</p>}
+              {historyHasMore && (
+                <button type="button" className="btn btn-secondary" disabled={loading || historyLoading} aria-busy={historyLoading} onClick={() => void loadMoreConversations()}>
+                  {historyLoading ? 'Loading conversations…' : historyError ? 'Retry earlier conversations' : 'Load more conversations'}
+                </button>
+              )}
             </div>
           </aside>
         )}
         <section className="chat-conversation" aria-label="Investigation conversation">
           <div className="chat-messages">
             {loading && <p role="status" className="chat-notice">Loading your workspace…</p>}
+            {!loading && (runsHasMore || messagesHasMore) && (
+              <div className="chat-notice">
+                {olderError && <p role="alert">Earlier history could not be loaded: {olderError}</p>}
+                <button type="button" className="btn btn-secondary" disabled={busy || olderLoading} aria-busy={olderLoading} onClick={() => void loadEarlierTurns()}>
+                  {olderLoading ? 'Loading earlier history…' : olderError ? 'Retry earlier history' : 'Load earlier messages and investigations'}
+                </button>
+              </div>
+            )}
             {!loading && !turns.length && !busy && (
               <div className="chat-welcome">
                 <div className="chat-welcome-mark">
@@ -1069,7 +1220,7 @@ export function Chat({
                       events={selectedRun === run.id ? events : []}
                       activePhase={busy && currentRun.current === run.id ? phase : undefined}
                       isStreaming={active(run)}
-                      onOpenReasoningTab={() => inspect(run.id, 'reasoning')}
+                      onOpenActivityTab={() => inspect(run.id, 'activity')}
                     />
                     {run.result ? (
                       <>
@@ -1106,6 +1257,7 @@ export function Chat({
                                   <button
                                     className="chat-text-button"
                                     type="button"
+                                    disabled={!finding.evidence_ids.length}
                                     onClick={() => inspect(run.id, 'sources', finding.evidence_ids[0])}
                                   >
                                     View {finding.evidence_ids.length === 1 ? 'source' : `${finding.evidence_ids.length} sources`}
@@ -1124,7 +1276,8 @@ export function Chat({
                                       <button
                                         type="button"
                                         className="chat-text-button"
-                                        onClick={() => inspect(run.id, 'sources', finding.evidence_ids[0])}
+                                        disabled={!finding.evidence_ids.length}
+                                    onClick={() => inspect(run.id, 'sources', finding.evidence_ids[0])}
                                       >
                                         View sources
                                       </button>
@@ -1188,7 +1341,7 @@ export function Chat({
                         <div className="chat-simulated-callout">
                           <Brain size={15} />
                           <span>
-                            Open <strong>Executive brief</strong> or <strong>Reasoning trace</strong> below to review the plain-English analysis, systems audited, and diagnostic pipeline.
+                            Open <strong>Activity</strong> or <strong>Sources</strong> below to review saved investigation details.
                           </span>
                         </div>
                       </div>
@@ -1201,14 +1354,6 @@ export function Chat({
                         title="Plain-English summary for non-technical users"
                       >
                         <Briefcase size={14} /> Executive brief
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-action-btn-reasoning"
-                        onClick={() => inspect(run.id, 'reasoning')}
-                        title="Cognitive reasoning and deliberation trace"
-                      >
-                        <Brain size={14} /> Reasoning
                       </button>
                       <button type="button" onClick={() => inspect(run.id, 'sources')}>
                         <BookOpen size={14} /> {run.evidence_count || 0} sources
@@ -1277,6 +1422,9 @@ export function Chat({
                   <button type="button" onClick={() => setAttempt(value => value + 1)}>
                     Retry
                   </button>
+                )}
+                {config && chatId && !busy && (
+                  <button type="button" disabled={loading} onClick={() => void chooseConversation(chatId)}>Reload conversation</button>
                 )}
                 <button type="button" aria-label="Dismiss error" onClick={() => setError(null)}>
                   <X size={16} />
@@ -1395,7 +1543,7 @@ export function Chat({
                   <button
                     type="submit"
                     className="chat-send"
-                    disabled={loading || !config || !question.trim() || anyActive}
+                    disabled={loading || !config || !question.trim() || anyActive || !connectorScope.ready}
                     aria-label="Send question"
                   >
                     <ArrowUp size={16} />
@@ -1403,11 +1551,12 @@ export function Chat({
                   </button>
                 )}
               </div>
+              <RunConnectorSelectors state={connectorScope} disabled={loading || busy} />
             </form>
             <p className="chat-composer-note">
               Review the evidence before acting.{' '}
               {config?.mode === 'demo'
-                ? 'Demo mode produces simulated answers.'
+                ? 'Demo mode records a simulation without diagnostic findings.'
                 : 'Suggestions do not change your connected systems.'}
             </p>
           </div>
@@ -1440,16 +1589,6 @@ export function Chat({
               >
                 <Briefcase size={13} style={{ marginRight: 4 }} />
                 Executive Brief
-              </button>
-              <button
-                id="reasoning-tab"
-                role="tab"
-                aria-controls="reasoning-panel"
-                aria-selected={panel === 'reasoning'}
-                onClick={() => setPanel('reasoning')}
-              >
-                <Brain size={13} style={{ marginRight: 4 }} />
-                Reasoning
               </button>
               <button
                 id="sources-tab"
@@ -1508,18 +1647,10 @@ export function Chat({
                 </div>
               ) : panel === 'brief' ? (
                 <div id="brief-panel" role="tabpanel" aria-labelledby="brief-tab">
-                  {selected ? (
-                    <ChatExecutiveBrief run={selected} evidence={evidence} />
+                  {selected && !detailsLoading ? (
+                    <ChatExecutiveBrief run={selected} evidence={evidence} onInspectSources={() => setPanel('sources')} />
                   ) : (
                     <p className="chat-context-empty">Select an investigation to view its executive brief.</p>
-                  )}
-                </div>
-              ) : panel === 'reasoning' ? (
-                <div id="reasoning-panel" role="tabpanel" aria-labelledby="reasoning-tab">
-                  {selected ? (
-                    <ChatReasoningView run={selected} events={events} evidence={evidence} />
-                  ) : (
-                    <p className="chat-context-empty">Select an investigation to view its reasoning trace.</p>
                   )}
                 </div>
               ) : panel === 'sources' ? (
@@ -1529,7 +1660,7 @@ export function Chat({
                   </p>
                   {!evidence.length && !detailsLoading && (
                     <p>
-                      {selected && active(selected)
+                      {detailError ? 'Sources are unavailable. Retry loading saved details.' : selected && active(selected)
                         ? 'Sources will appear as evidence is saved. Refresh to check progress.'
                         : 'No sources were collected for this answer.'}
                     </p>

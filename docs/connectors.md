@@ -160,7 +160,7 @@ This table describes current native provider consumption. Larger historical form
 | Kubernetes / `kubernetes.read_evidence` | Namespace | Service-account token reference | Pod names and status within that namespace |
 | Kafka / `kafka.read_evidence` | Topic | SASL SCRAM over TLS, username/password reference | Partition metadata, not general message consumption |
 | Unix/Tuxedo / `unix.read_evidence` | Fixed configured file path and SSH host | Username plus password or private-key reference; known-hosts reference | Bounded SFTP file read, not shell/Tuxedo command execution |
-| Oracle / `oracle.read_evidence` | Fixed bounded diagnostics implemented in provider | Provider deployment configuration; currently blocked upstream | Fixed session-diagnostic SQL only; no model-provided SQL |
+| Oracle / `oracle.read_evidence` | One bound database username | Saved database username and password secret reference; Thin mode, explicit Easy Connect DSN | Fixed bounded session wait snapshot; no model-provided SQL |
 
 Sources: [native auth and scope map](../app/connectors/providers/registry.py), [REST providers](../app/connectors/providers/evidence.py), [Kafka/Unix](../app/connectors/providers/infrastructure.py), [Oracle](../app/connectors/providers/oracle.py), [tool signatures](../app/tools/catalog.py).
 
@@ -201,7 +201,7 @@ The runner starts from capability-required connectors plus connectors named in a
 
 Provider clients created for a run are closed during cleanup. Tool visibility is then restricted to available providers and permitted actions. A model cannot restore a missing connector by naming its tool in text. Sources: [per-run resolution](../app/runtime/runner.py), [provider registry](../app/connectors/providers/registry.py), [tool filtering](../app/tools/catalog.py).
 
-**Known gap:** Oracle is still blocked in the connector save/enable path and provider resolver, despite the project policy calling for fixed bounded read-only Oracle diagnostics. Baseline deployment templates also disable the eight additional providers. Do not report all ten as live-ready without reconciling those code/configuration gaps. Sources: [API policy gates](../app/api/routes/connectors_api.py), [resolver](../app/connectors/providers/registry.py), [baseline](../blob_local/platform/config/connectors.yaml).
+All ten implemented providers participate in the same project save/test/enable and runtime resolution path. Additional providers receive the saved result and response-byte limits in both connection testing and investigation execution. Their baseline deployment switches remain off until an operator configures and permits them; a published template alone does not enable a source. Sources: [API policy gates](../app/api/routes/connectors_api.py), [candidate tests](../app/connectors/candidate_testing.py), [resolver](../app/connectors/providers/registry.py), [deployment baseline](../blob_local/platform/config/connectors.yaml).
 
 ## Connector API
 
@@ -336,20 +336,19 @@ Declared limitations: ['Namespace-scoped pod status only; reading secrets, conta
 
 [Template source](../blob_local/platform/config/connector_templates/oracle.yaml); native behavior: [provider-specific forms](#provider-specific-forms).
 
-Declared limitations: ['Database querying is disabled pending scope reconciliation under repository guidance.', 'No arbitrary SQL, table exploration, or live database mutations.']
+Only a fixed session wait snapshot is supported. The read-only account needs `SELECT` access to `V_$SESSION`; the bound resource is one database username. The endpoint is one explicit `tcp[s]://host:port/service` Easy Connect DSN. TNS aliases, connection descriptors, Thick mode, arbitrary SQL and mutations are unavailable. Source: [provider](../app/connectors/providers/oracle.py); approach: [official python-oracledb connection documentation](https://python-oracledb.readthedocs.io/en/latest/user_guide/connection_handling.html).
 
 | Field | Type / requirement | Declared ownership | Runtime binding / meaning |
 | --- | --- | --- | --- |
 | `system_name` | string; required | project_only | Project-defined connector instance name. Defaults to the connector name and remains editable. |
 | `environment_dependency` | string; required | project_only | Explicit project choice between Environment Dependent (environment mappings) and Environment Independent (shared external system).; {"allowed_values": ["dependent", "independent"]} |
 | `tool_environment` | string; required | project_only | Authorized external environment name (e.g. Shared for independent, or target tool environment).; {"required_when": "environment_dependency == 'dependent'"} |
-| `driver_mode` | string; optional/inherited | project_only | oracle.driver_mode; {"allowed_values": ["thin", "thick"]} |
-| `oracle_client_lib` | string; optional/inherited | project_only | oracle.oracle_client_lib; {"required_when": "driver_mode == 'thick'"} |
-| `connection_format` | string; optional/inherited | project_only | oracle.connection_format; {"allowed_values": ["dsn", "host_service", "tns_alias"]} |
+| `driver_mode` | string; optional/inherited | project_only | oracle.driver_mode; {"allowed_values": ["thin"]} |
+| `connection_format` | string; optional/inherited | project_only | oracle.connection_format; {"allowed_values": ["dsn"]} |
 
 | Auth profile | Declared status | Required fields |
 | --- | --- | --- |
-| `database_password` | disabled_by_policy | `database_username`, `password_secret_ref` |
+| `database_password` | active | `database_username`, `password_secret_ref` |
 
 ### qTest Test Management
 
@@ -459,7 +458,7 @@ The provider inserts the saved authorized index and quotes the search phrase. It
 
 ### Other evidence tools
 
-The additional `read_<connector>_evidence` tools take no model-supplied arguments. Their resource, endpoint and bounds come from resolved configuration. Oracle's fixed diagnostic SQL is implemented in the provider and currently blocked upstream; there is no supported arbitrary Oracle query input. For application database diagnostics, use the separate [read-only PostgreSQL examples](data-model.md#read-only-sample-queries).
+The additional `read_<connector>_evidence` tools take no model-supplied arguments. Their resource, endpoint and bounds come from resolved configuration. Oracle's fixed diagnostic SQL runs through the same saved project binding and credential checks; there is no supported arbitrary Oracle query input. For application database diagnostics, use the separate [read-only PostgreSQL examples](data-model.md#read-only-sample-queries).
 
 ## OKF and connector evidence
 

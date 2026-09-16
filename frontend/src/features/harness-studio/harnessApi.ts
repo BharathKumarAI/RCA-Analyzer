@@ -1,3 +1,4 @@
+import type { RunConnectorSelections } from '../../types/api';
 import { authHeaders } from '../../services/api';
 import type { CatalogItem, GraphEdge, GraphNode, Permissions, Workspace } from './types/workspace.generated';
 
@@ -149,7 +150,7 @@ export async function streamStudioRun(
   prompt: string,
   onEvent: (event: StudioRunEvent) => void,
   signal?: AbortSignal,
-  options?: { chatId?: string; attachmentIds?: string[]; incidentId?: string; idempotencyKey?: string },
+  options?: { chatId?: string; attachmentIds?: string[]; incidentId?: string; idempotencyKey?: string; connectorSelections?: RunConnectorSelections },
 ): Promise<Record<string, unknown>> {
   const headers = authHeaders({ Accept: 'text/event-stream, application/json' }, 'POST');
   headers.set('Content-Type', 'application/json');
@@ -159,9 +160,13 @@ export async function streamStudioRun(
     credentials: 'same-origin',
     headers,
     signal,
-    body: JSON.stringify({ capability, prompt, ...(options?.chatId ? { chat_id: options.chatId } : {}), ...(options?.attachmentIds ? { attachment_ids: options.attachmentIds } : {}), ...(options?.incidentId ? { incident_id: options.incidentId } : {}) }),
+    body: JSON.stringify({ capability, prompt, ...(options?.chatId ? { chat_id: options.chatId } : {}), ...(options?.attachmentIds ? { attachment_ids: options.attachmentIds } : {}), ...(options?.incidentId ? { incident_id: options.incidentId } : {}), ...(options?.connectorSelections ? { connector_selections: options.connectorSelections } : {}) }),
   });
-  if (!response.ok) throw new Error(`Run failed (${response.status})`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = typeof payload?.detail === 'string' ? payload.detail : payload?.detail?.message;
+    throw new Error(detail || `Run failed (${response.status})`);
+  }
 
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('text/event-stream') || !response.body) {

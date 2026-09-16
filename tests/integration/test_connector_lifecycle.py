@@ -26,7 +26,7 @@ def test_connector_templates_listing_and_detail():
             assert "log_search" in by_id
             assert "oracle" in by_id
             assert by_id["itsm"]["auth_method"] == "Basic API Token"
-            assert by_id["oracle"]["is_enabled_by_policy"] is False
+            assert by_id["oracle"]["is_enabled_by_policy"] is True
 
             # Detail lookup
             detail = client.get("/api/v1/connectors/templates/itsm", headers=headers)
@@ -274,7 +274,7 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
             )
             assert invalid_environment_save.status_code == 422
 
-            # 2. Rejection of Oracle candidate by policy
+            # 2. Oracle requires an explicit connection and resource scope
             oracle_val = client.post(
                 "/api/v1/connectors/validate",
                 headers=headers,
@@ -291,7 +291,8 @@ def test_project_connector_instance_lifecycle_and_enablement_gate(monkeypatch):
             )
             assert oracle_val.status_code == 200
             assert oracle_val.json()["valid"] is False
-            assert any("disabled by policy" in e for e in oracle_val.json()["errors"])
+            assert any("Oracle endpoint" in e for e in oracle_val.json()["errors"])
+            assert any("resource scope is required" in e for e in oracle_val.json()["errors"])
 
             # 3. Save project connector instance
             save_inst = client.post(

@@ -1,6 +1,10 @@
 """Integration tests for Live Triage Board and Ticket Investigation Workspace API."""
 
+import json
 from fastapi.testclient import TestClient
+from sqlalchemy import update, insert
+from app.persistence.store import runs
+from app.persistence.triage import governed_actions
 from app.api.application import create_app
 from app.api.routes.triage import get_triage_store
 from tests.triage_support import create_triage_case
@@ -74,27 +78,13 @@ def test_live_triage_board_api_flow(tmp_path):
             headers=headers,
             json={},
         )
-        assert res_exec.status_code == 200, res_exec.text
-        assert res_exec.json()["status"] == "ok"
-        assert "result" in res_exec.json()
-
-        # 6. Promote Result to Evidence
+        assert res_exec.status_code == 422, res_exec.text
+        # Legacy arbitrary query parameters cannot bypass governed tools or fabricate evidence.
         res_promo = client.post(
             f"/api/v1/triage/tool-proposals/{prop_id}/promote-evidence",
-            headers=headers,
-            json={"summary": "Promoted test evidence", "confidence": 0.95},
+            headers=headers, json={"summary": "Unexecuted proposal", "confidence": 0.95},
         )
-        assert res_promo.status_code == 200, res_promo.text
-        ev_id = res_promo.json()["evidence_id"]
-
-        # 7. Update Evidence Status
-        res_ev = client.post(
-            f"/api/v1/triage/evidence/{ev_id}/status",
-            headers=headers,
-            json={"status": "REJECTED"},
-        )
-        assert res_ev.status_code == 200, res_ev.text
-        assert res_ev.json()["new_status"] == "REJECTED"
+        assert res_promo.status_code == 400
 
         # 8. Approve Governed Action
         if ws["governed_actions"]:
@@ -180,4 +170,79 @@ def test_live_triage_board_api_flow(tmp_path):
         assert "fmea" in rca_data
         assert "fault_tree" in rca_data
         assert "auto_ensemble" in rca_data
+        assert rca_data["available_methods"] == []
+        assert rca_data["five_whys"]["steps"] == []
+        assert rca_data["context_budget"] is None
+        assert board["connectors_health"] == []
+        assert board["performance_metrics"]["rca_accuracy_rate"] is None
+        assert ws["related_tickets"] == []
+        assert ws["sla"]["risk_state"] == "UNKNOWN"
+        for suffix in ("acknowledge", "comments"):
+            missing_write = client.post(f"/api/v1/triage/tickets/OTHER-1/{suffix}", headers=headers,
+                                        json={"comment": "Orphan comment"} if suffix == "comments" else None)
+            assert missing_write.status_code == 404
 
+
+
+
+def test_import_recorded_investigation_is_real_scoped_and_idempotent(tmp_path):
+    settings, token = settings_for(tmp_path, mode="live")
+    with TestClient(create_app(settings, connectors=connectors(), model_factory=model_factory)) as client:
+        headers = token("admin")
+        run = client.post("/api/v1/runs", headers=headers, json={
+            "prompt": "Investigate SAMSON-101", "incident_id": "SAMSON-101", "capability": "incident_triage"})
+        assert run.status_code == 200, run.text
+        run_id = run.json()["run_id"]
+        async def add_recorded_follow_up():
+            result = run.json()["result"]
+            result["follow_up_questions"] = ["Review SAMSON-101 for additional evidence"]
+            async with client.app.state.store.engine.begin() as connection:
+                await connection.execute(update(runs).where(runs.c.run_id == run_id).values(result_json=json.dumps(result)))
+        client.portal.call(add_recorded_follow_up)
+        imported = client.post(f"/api/v1/triage/runs/{run_id}/import", headers=headers)
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["ticket_id"] == "SAMSON-101"
+        assert client.post(f"/api/v1/triage/runs/{run_id}/import", headers=headers).json() == imported.json()
+        board = client.get("/api/v1/triage/live-board", headers=headers).json()
+        assert board["total_tickets"] == 1
+        workspace = client.get("/api/v1/triage/tickets/SAMSON-101", headers=headers).json()
+        assert len(workspace["evidence"]) == run.json()["evidence_count"]
+        assert all(item["payload_json"]["run_id"] == run_id for item in workspace["evidence"])
+        assert len([event for event in workspace["events"] if event["event_type"] == "investigation.imported"]) == 1
+        assert client.post("/api/v1/triage/runs/run_missing/import", headers=headers).status_code == 404
+
+        proposal = workspace["tool_proposals"][0]
+        path = f"/api/v1/triage/tool-proposals/{proposal['proposal_id']}/execute"
+        executed = client.post(path, headers=headers, json={})
+        assert executed.status_code == 200, executed.text
+        assert executed.json()["result"]["run_id"] != run_id
+        assert executed.json()["result"]["count"] > 0
+        assert client.post(path, headers=headers, json={}).json() == executed.json()
+        promoted = client.post(f"/api/v1/triage/tool-proposals/{proposal['proposal_id']}/promote-evidence",
+                               headers=headers, json={"summary": "Recorded follow-up evidence"})
+        assert promoted.status_code == 200, promoted.text
+        assert promoted.json()["confidence"] == 0
+        assert promoted.json()["payload_json"]["run_id"] == executed.json()["result"]["run_id"]
+        assert promoted.json()["query_ref"] == executed.json()["result"]["run_id"]
+        assert client.post(f"/api/v1/triage/tool-proposals/{proposal['proposal_id']}/promote-evidence",
+                           headers=headers, json={"summary": "Recorded follow-up evidence"}).json() == promoted.json()
+        assert client.post(path, headers=headers, json={"parameters": {"sql": "DELETE FROM table"}}).status_code == 422
+        revised = client.post(f"/api/v1/triage/tool-proposals/{proposal['proposal_id']}/revision",
+            headers=headers, json={"current_query": "Inspect additional evidence", "parameters": {"connector_selections": "invalid"}})
+        assert revised.status_code == 200 and revised.json()["latest_result"] is None
+        assert client.post(path, headers=headers, json={}).status_code == 422
+        assert client.post(f"/api/v1/triage/tool-proposals/{proposal['proposal_id']}/promote-evidence",
+                           headers=headers, json={"summary": "Stale evidence"}).status_code == 400
+
+        async def add_local_action():
+            async with client.app.state.store.engine.begin() as connection:
+                await connection.execute(insert(governed_actions).values(action_id="local-action",
+                    tenant_id=settings.tenant_id, project_id=settings.project_id, ticket_id="SAMSON-101",
+                    investigation_id=workspace["investigation"]["investigation_id"], action_type="POST_JIRA_COMMENT",
+                    title="Suggested comment", target="SAMSON-101", created_at=run.json()["created_at"]))
+        client.portal.call(add_local_action)
+        approved = client.post("/api/v1/triage/actions/local-action/approve", headers=headers)
+        assert approved.status_code == 200
+        assert approved.json()["executed_at"] is None
+        refreshed = client.get("/api/v1/triage/tickets/SAMSON-101", headers=headers).json()
+        assert refreshed["governed_actions"][0]["status"] == "APPROVED"

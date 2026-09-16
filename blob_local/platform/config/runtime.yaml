@@ -1,5 +1,5 @@
 # Non-secret server settings. RCA_* environment values override these.
-mode: demo
+mode: live
 max_concurrent_runs: 4
 max_parallel_models: 4
 parallel_evidence: true

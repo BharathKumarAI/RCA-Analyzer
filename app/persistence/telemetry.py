@@ -6,7 +6,7 @@ import json
 import math
 import statistics
 
-from sqlalchemy import cast, func, select
+from sqlalchemy import and_, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.persistence.feedback import feedback
@@ -18,6 +18,7 @@ from app.persistence.triage import (
     triage_tickets,
 )
 from app.runtime.run_contract import TERMINAL_STATUSES
+from app.runtime.sla_engine import compute_ticket_sla_state
 
 RUN_LIMIT = 1000
 EVENT_LIMIT = 20000
@@ -26,16 +27,45 @@ TOKEN_FIELDS = {"input_tokens": "input_count", "output_tokens": "output_count",
                 "thinking_tokens": "thinking_count", "total_tokens": "total_count",
                 "cached_input_tokens": "cached_input_count"}
 
-SLA_TARGET_SECONDS = {
-    "P1": 3600.0,       # 1 hour
-    "P2": 14400.0,      # 4 hours
-    "P3": 86400.0,      # 24 hours
-    "P4": 259200.0,     # 72 hours
-}
+def metrics_window(start=None, end=None, window=None):
+    """Explicit dates select whole UTC days; presets select exact rolling time."""
+    now = datetime.now(timezone.utc)
+    days = {"24h": 1, "7d": 7, "30d": 30, "90d": 90}[window or "30d"]
+    if start is not None or end is not None:
+        finish = end or now.date()
+        try:
+            return start or finish - timedelta(days=days - 1), finish
+        except OverflowError:
+            raise ValueError("Date range is outside supported bounds") from None
+    return now - timedelta(days=days), now
+
+
+def time_bounds(start, end):
+    """Normalize calendar dates or aware timestamps to a half-open UTC range."""
+    try:
+        begin = start if isinstance(start, datetime) else datetime.combine(start, time.min, timezone.utc)
+        finish = end if isinstance(end, datetime) else datetime.combine(end + timedelta(days=1), time.min, timezone.utc)
+    except OverflowError:
+        raise ValueError("Date range is outside supported bounds") from None
+    if begin.tzinfo is None or finish.tzinfo is None:
+        raise ValueError("Metric timestamps must include a timezone")
+    begin, finish = begin.astimezone(timezone.utc), finish.astimezone(timezone.utc)
+    if not timedelta(0) < finish - begin <= timedelta(days=366):
+        raise ValueError("Choose a time range greater than zero and no more than 366 days")
+    return begin.timestamp(), finish.timestamp()
 
 
 def number(value):
     return value if type(value) in {float, int} and 0 <= value <= 2**63 - 1 and math.isfinite(value) else None
+
+
+def retained_trace_gaps(events):
+    """Detect pruned per-run traces even below the aggregate event-read limit."""
+    first = {}
+    for event in events:
+        run_id, sequence = event["run_id"], event["sequence"]
+        first[run_id] = min(first.get(run_id, sequence), sequence)
+    return sum(sequence > 1 for sequence in first.values())
 
 
 def durations(values):
@@ -130,11 +160,9 @@ class Measurements:
         }
 
 
-async def telemetry(engine, principal, start, end, *, capability=None, stage=None, mode="live"):
-    start_at = datetime.combine(start, time.min, timezone.utc).timestamp()
-    end_at = datetime.combine(end + timedelta(days=1), time.min, timezone.utc).timestamp()
-    if end < start or (end - start).days > 365:
-        raise ValueError("Choose an inclusive date range of 1 to 366 days")
+async def telemetry(engine, principal, start, end, *, capability=None, stage=None, mode="live", sla_targets=None):
+    start_at, end_at = time_bounds(start, end)
+    now_ts = datetime.now(timezone.utc).timestamp()
     def contract_field(name):
         if engine.dialect.name == "postgresql":
             return cast(runs.c.contract_json, JSONB)[name].astext
@@ -163,54 +191,65 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
             feedback.c.run_id.in_(records),
         ))).scalars().all() if records else []
 
-        # SRE Incident & Triage Telemetry (with graceful fallback if tables are not initialized)
-        try:
-            ticket_query = select(triage_tickets).where(
+        # Triage tables are initialized and verified during application startup.
+        ticket_query = select(triage_tickets).where(
+            triage_tickets.c.tenant_id == principal.tenant_id,
+            triage_tickets.c.project_id == principal.project_id,
+            triage_tickets.c.created_at >= start_at,
+            triage_tickets.c.created_at < end_at,
+        )
+        ticket_rows = (await connection.execute(ticket_query)).mappings().all()
+
+        active_tickets_query = select(triage_tickets).where(
+            triage_tickets.c.tenant_id == principal.tenant_id,
+            triage_tickets.c.project_id == principal.project_id,
+            triage_tickets.c.work_state != "RESOLVED",
+        )
+        active_ticket_rows = (await connection.execute(active_tickets_query)).mappings().all()
+
+        stays_query = select(triage_queue_stays).where(
+            triage_queue_stays.c.tenant_id == principal.tenant_id,
+            triage_queue_stays.c.project_id == principal.project_id,
+            triage_queue_stays.c.ticket_id.in_(select(triage_tickets.c.ticket_id).where(
                 triage_tickets.c.tenant_id == principal.tenant_id,
                 triage_tickets.c.project_id == principal.project_id,
-                triage_tickets.c.created_at >= start_at,
-                triage_tickets.c.created_at < end_at,
-            )
-            ticket_rows = (await connection.execute(ticket_query)).mappings().all()
+                or_(and_(triage_tickets.c.created_at >= start_at, triage_tickets.c.created_at < end_at),
+                    triage_tickets.c.work_state != "RESOLVED"),
+            )),
+        ).order_by(triage_queue_stays.c.entered_at, triage_queue_stays.c.stay_id)
+        stay_rows = (await connection.execute(stays_query)).mappings().all()
 
-            active_tickets_query = select(triage_tickets).where(
-                triage_tickets.c.tenant_id == principal.tenant_id,
-                triage_tickets.c.project_id == principal.project_id,
-                triage_tickets.c.work_state != "RESOLVED",
-            )
-            active_ticket_rows = (await connection.execute(active_tickets_query)).mappings().all()
-
-            stays_query = select(triage_queue_stays).where(
-                triage_queue_stays.c.tenant_id == principal.tenant_id,
-                triage_queue_stays.c.project_id == principal.project_id,
-                triage_queue_stays.c.entered_at >= start_at,
-                triage_queue_stays.c.entered_at < end_at,
-            )
-            stay_rows = (await connection.execute(stays_query)).mappings().all()
-
-            findings_query = select(investigation_findings).where(
-                investigation_findings.c.tenant_id == principal.tenant_id,
-                investigation_findings.c.project_id == principal.project_id,
-                investigation_findings.c.created_at >= start_at,
-                investigation_findings.c.created_at < end_at,
-            )
-            finding_rows = (await connection.execute(findings_query)).mappings().all()
-        except Exception:
-            ticket_rows = []
-            active_ticket_rows = []
-            stay_rows = []
-            finding_rows = []
+        findings_query = select(investigation_findings).where(
+            investigation_findings.c.tenant_id == principal.tenant_id,
+            investigation_findings.c.project_id == principal.project_id,
+            investigation_findings.c.created_at >= start_at,
+            investigation_findings.c.created_at < end_at,
+        )
+        finding_rows = (await connection.execute(findings_query)).mappings().all()
     event_truncated = len(events) > EVENT_LIMIT
     events = events[:EVENT_LIMIT]
+    pruned_traces = retained_trace_gaps(events)
+    event_truncated = event_truncated or bool(pruned_traces)
     total = Measurements()
     daily, stages, models, capabilities = (defaultdict(Measurements) for _ in range(4))
     daily_sre = defaultdict(lambda: {"tickets": 0, "resolved_tickets": 0})
+    source_resolutions = {}
+    for ticket in ticket_rows:
+        fields = ticket.get("custom_fields") or {}
+        if not isinstance(fields, dict):
+            continue
+        created, resolved = number(fields.get("source_created_at")), number(fields.get("source_resolved_at"))
+        if created is not None and resolved is not None and created <= resolved <= now_ts:
+            source_resolutions[ticket["ticket_id"]] = (created, resolved)
     for ticket in ticket_rows:
         c_day = datetime.fromtimestamp(ticket["created_at"], timezone.utc).date().isoformat()
         daily_sre[c_day]["tickets"] += 1
-        if ticket["work_state"] == "RESOLVED" and ticket["updated_at"] >= ticket["created_at"]:
-            r_day = datetime.fromtimestamp(ticket["updated_at"], timezone.utc).date().isoformat()
+        resolution = source_resolutions.get(ticket["ticket_id"])
+        if resolution and start_at <= resolution[1] < end_at:
+            r_day = datetime.fromtimestamp(resolution[1], timezone.utc).date().isoformat()
             daily_sre[r_day]["resolved_tickets"] += 1
+    for day in daily_sre:
+        daily[day]  # Incident-only days still belong in the measured series.
     if not stage:
         for row in records.values():
             total.add_run(row)
@@ -265,38 +304,35 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
     if unfinished or legacy_runs or event_truncated or matched > RUN_LIMIT:
         summary["estimated_cost_usd"] = None
 
-    # Calculate MTTT (Mean Time to Triage)
+    stays_by_ticket = defaultdict(list)
+    for stay in stay_rows:
+        stays_by_ticket[stay["ticket_id"]].append(dict(stay))
+    # Local intake-to-first-queue-exit, independent of reason labels or later returns.
     initial_completed_stays = [
-        s for s in stay_rows
-        if s["exited_at"] is not None and s.get("reason", "").lower().startswith("initial")
+        stays_by_ticket[ticket["ticket_id"]][0] for ticket in ticket_rows
+        if stays_by_ticket[ticket["ticket_id"]]
+        and stays_by_ticket[ticket["ticket_id"]][0]["exited_at"] is not None
     ]
     mttt_durations = [
-        max(0.0, (s["exited_at"] - s["entered_at"]) * 1000.0)
+        (s["exited_at"] - s["entered_at"]) * 1000.0
         for s in initial_completed_stays
+        if 0 <= s["entered_at"] <= s["exited_at"] <= now_ts
     ]
-    if not mttt_durations:
-        for t in ticket_rows:
-            if t["work_state"] != "NEW" and t["updated_at"] >= t["created_at"]:
-                mttt_durations.append(max(0.0, (t["updated_at"] - t["created_at"]) * 1000.0))
     mttt_result = durations(mttt_durations)
 
-    # Calculate MTTR (Mean Time to Resolution)
-    resolved_in_period = [
-        t for t in ticket_rows
-        if t["work_state"] == "RESOLVED" and t["updated_at"] >= t["created_at"]
-    ]
+    # Source incident timestamps are the only basis for resolution latency.
+    resolved_in_period = [t for t in ticket_rows if t["work_state"] == "RESOLVED"]
     mttr_durations = [
-        max(0.0, (t["updated_at"] - t["created_at"]) * 1000.0)
-        for t in resolved_in_period
+        (resolved - created) * 1000.0 for created, resolved in source_resolutions.values()
     ]
     mttr_result = durations(mttr_durations)
 
     # Calculate SLA Compliance & Ongoing Breaches
-    now_ts = datetime.now(timezone.utc).timestamp()
     evaluated_ticket_ids = set()
     sla_compliant_count = 0
     ongoing_breaches = 0
     total_evaluated_sla = 0
+    active_sla_evaluated = 0
 
     all_eval_tickets = list(ticket_rows) + [t for t in active_ticket_rows if t["ticket_id"] not in {r["ticket_id"] for r in ticket_rows}]
     for t in all_eval_tickets:
@@ -304,19 +340,20 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
         if tid in evaluated_ticket_ids:
             continue
         evaluated_ticket_ids.add(tid)
-        target = SLA_TARGET_SECONDS.get(t.get("priority", "P2"), 14400.0)
+        stays = stays_by_ticket[tid]
+        if not stays:
+            continue
+        sla = compute_ticket_sla_state(dict(t), stays, now=now_ts, sla_targets=sla_targets)
+        if sla["risk_state"] == "UNKNOWN":
+            continue
         if t["work_state"] == "RESOLVED":
-            dur = max(0.0, t["updated_at"] - t["created_at"])
-            if dur <= target:
+            if sla["risk_state"] != "BREACHED":
                 sla_compliant_count += 1
             total_evaluated_sla += 1
         else:
-            age = max(0.0, now_ts - t["created_at"])
-            if age > target:
+            active_sla_evaluated += 1
+            if sla["risk_state"] == "BREACHED":
                 ongoing_breaches += 1
-            else:
-                sla_compliant_count += 1
-            total_evaluated_sla += 1
 
     sla_compliance_rate = (
         round(sla_compliant_count / total_evaluated_sla, 4) if total_evaluated_sla > 0 else None
@@ -354,7 +391,12 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
         "tickets_resolved": len(resolved_in_period),
         "tickets_active": len(active_ticket_rows),
         "sla_compliance_rate": sla_compliance_rate,
-        "ongoing_breaches": ongoing_breaches,
+        "ongoing_breaches": ongoing_breaches if sla_targets else None,
+        "sla_evaluated_tickets": total_evaluated_sla,
+        "sla_active_evaluated_tickets": active_sla_evaluated,
+        "sla_configured": bool(sla_targets),
+        "mttt_samples": len(mttt_durations),
+        "mttr_samples": len(mttr_durations),
         "priority_breakdown": priorities,
         "analyst_validation": {
             "confirmed": confirmed_findings,
@@ -369,7 +411,8 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
         },
     }
 
-    return {"filters": {"start": start.isoformat(), "end": end.isoformat(), "capability": capability, "stage": stage, "mode": mode},
+    return {"filters": {"start": start.isoformat(), "end": end.isoformat(), "start_at": start_at,
+            "end_at": end_at, "end_exclusive": True, "capability": capability, "stage": stage, "mode": mode},
         "summary": summary, "sre_metrics": sre_metrics, "daily": groups(daily, "date"), "by_stage": groups(stages, "stage"),
         "by_model": groups(models, "model"), "by_capability": groups(capabilities, "capability"),
         "agents": nodes(False), "tools": nodes(True),
@@ -378,9 +421,14 @@ async def telemetry(engine, principal, start, end, *, capability=None, stage=Non
         "coverage": {"matched_runs": matched, "analyzed_runs": len(records), "events_analyzed": len(events),
             "run_limit": RUN_LIMIT, "event_limit": EVENT_LIMIT, "truncated": event_truncated or matched > RUN_LIMIT,
             "legacy_runs": len(legacy_runs), "unfinished_model_calls": unfinished,
+            "runs_with_truncated_trace": pruned_traces,
             "notes": ["Token totals include only provider-reported values; unknown usage is not zero usage.",
                       "Costs use administrator prices frozen at run creation; they are estimates, not provider invoices.",
                       "Cache hits and misses require an explicit provider cache-token count; no count means unknown.",
                       "Dates group runs by their UTC start day. Stage filters affect model usage; agent and tool timings cover the selected runs.",
                       "Feedback is the latest rating by each investigation author, scoped to the selected runs; it is not an accuracy score.",
+                      "MTTT measures the first completed local queue interval per ticket; later returns and reason labels do not change that interval.",
+                      "MTTR requires validated source creation and resolution timestamps; local edits and run completion do not establish incident resolution.",
+                      "SLA uses full recorded queue consumption and the same configured targets as the triage board. Compliance covers locally resolved tickets; ongoing breaches cover current active tickets. Tickets without queue records are excluded.",
+                      "Incident measures cover the date cohort and current backlog; capability, stage and model mode filters apply only to investigation runs.",
                       "Legacy runs have no per-call model telemetry and remain excluded from token and cost totals."]}}

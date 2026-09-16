@@ -20,7 +20,7 @@ DEPLOYMENT_AUDIT_PATH = ROOT / "data" / "deployment-settings.audit.jsonl"
 
 class DeploymentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    mode: Literal["demo", "live"] = "demo"
+    mode: Literal["demo", "live"] = "live"
     database_configuration: bool = False
     database_url_ref: str = ""
     session_database_url_ref: str = ""

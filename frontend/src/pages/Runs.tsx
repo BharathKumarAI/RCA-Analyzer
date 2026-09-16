@@ -36,16 +36,18 @@ import {
   type RunTraceEvent,
   type RunTraceResponse,
 } from '../services/api';
+import { importRunToTriage } from '../services/triage';
 import '../styles/investigations.css';
 
 interface RunsProps {
+  canEdit?: boolean;
   runs: Run[];
   onNewInvestigation: () => void;
   onRunUpdated?: (run: Run) => void;
   initialRunId?: string | null;
 }
 
-const ACTIVE_STATUSES: Run['status'][] = ['RUNNING'];
+const ACTIVE_STATUSES: Run['status'][] = ['RUNNING', 'QUEUED'];
 
 const statusLabel = (status: Run['status']): string => {
   switch (status) {
@@ -871,7 +873,7 @@ function RawContractTab({ run }: { run: Run }) {
 // ---------------------------------------------------------------------------
 // MAIN COMPONENT: Runs
 // ---------------------------------------------------------------------------
-export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: RunsProps) {
+export function Runs({ canEdit = false, runs, onNewInvestigation, onRunUpdated, initialRunId }: RunsProps) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<string>('all');
   const [capabilityFilter, setCapabilityFilter] = useState<string>('all');
@@ -882,6 +884,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedRunId, setCopiedRunId] = useState(false);
+  const [importedTicket, setImportedTicket] = useState<{ runId: string; ticketId: string } | null>(null);
 
   // Sync selectedId when initialRunId changes
   useEffect(() => {
@@ -908,7 +911,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
   const totalEvidence = runs.reduce((acc, r) => acc + (r.evidence_count || 0), 0);
 
   // Completion rate strictly defined on loaded batch denominator
-  const completionRate = total > 0 ? Math.round((completed / total) * 100) : 100;
+  const completionRate = total > 0 ? Math.round((completed / total) * 100) : null;
 
   // Filter & Sort Logic
   const query = search.trim().toLowerCase();
@@ -954,6 +957,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
 
   // Actions
   async function update(run: Run, shouldCancel = false) {
+    if (shouldCancel && !canEdit) return;
     setBusy(run.id);
     setError(null);
     try {
@@ -965,6 +969,20 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
       setBusy(null);
     }
   }
+
+  const handleImportToTriage = async () => {
+    if (!canEdit || !selected || busy) return;
+    setBusy(selected.id);
+    setError(null);
+    try {
+      const saved = await importRunToTriage(selected.id);
+      setImportedTicket({ runId: selected.id, ticketId: saved.ticket_id });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not add this investigation to triage.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const handleCopyRunId = async () => {
     if (!selected) return;
@@ -1032,7 +1050,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
               <span className={`dot ${running > 0 ? 'pulse' : ''}`} /> <b>{running}</b> Active
             </span>
             <span className="hero-stat-chip">
-              <CheckCircle2 size={12} color="var(--acc3)" /> <b>{completed}</b> Completed ({completionRate}%)
+              <CheckCircle2 size={12} color="var(--acc3)" /> <b>{completed}</b> Completed ({completionRate === null ? '—' : `${completionRate}%`})
             </span>
             <span className="hero-stat-chip">
               <ShieldCheck size={12} /> <b>{totalEvidence}</b> Evidence Items
@@ -1080,7 +1098,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
             <CheckCircle2 size={14} color="var(--acc3)" />
           </div>
           <div className="metric-value">
-            {completed} <small style={{ fontSize: '13px', fontWeight: 500, color: 'var(--muted)' }}>({completionRate}%)</small>
+            {completed} <small style={{ fontSize: '13px', fontWeight: 500, color: 'var(--muted)' }}>({completionRate === null ? '—' : `${completionRate}%`})</small>
           </div>
           <div className="metric-meta">{failed} failed · {partial} partial</div>
         </div>
@@ -1399,6 +1417,11 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
                 </div>
 
                 <div className="detail-actions-strip">
+                  {canEdit && selected.mode === 'live' && ['COMPLETED', 'PARTIAL'].includes(selected.status) && (
+                    <button type="button" className="btn btn-secondary" disabled={busy !== null} onClick={() => void handleImportToTriage()}>
+                      <Plus size={13} /> Add to triage
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-secondary"
@@ -1410,7 +1433,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
                     <span>Refresh</span>
                   </button>
 
-                  {selected.status === 'RUNNING' && (
+                  {canEdit && selected.status === 'RUNNING' && (
                     <button
                       type="button"
                       className="btn btn-secondary btn-cancel-run"
@@ -1425,6 +1448,7 @@ export function Runs({ runs, onNewInvestigation, onRunUpdated, initialRunId }: R
                 </div>
               </div>
 
+              {importedTicket?.runId === selected.id && <p role="status">{importedTicket.ticketId} is saved on the triage board.</p>}
               {/* Detail Meta Bar */}
               <div className="detail-meta-bar">
                 <div className="meta-tile">

@@ -19,7 +19,7 @@ The request path is **FastAPI → authenticated project scope → capability and
 
 ## Chat integration with the existing framework
 
-**Proposed integration.** Preserve FastAPI authentication → server-resolved project scope/settings → capability resolution → SQLAlchemy run/session persistence → native ADK root workflow. CopilotKit may supply React interactions and AG-UI transport after compatibility verification; it does not replace authorization, the execution runner or storage.
+**Implemented transport; optional adapter remains a proposal.** The application uses FastAPI authentication → server-resolved project scope/settings → capability resolution → SQLAlchemy run/session persistence → native ADK root workflow. CopilotKit may supply React interactions and AG-UI transport after compatibility verification; it does not replace authorization, the execution runner or storage.
 
 ```mermaid
 flowchart TD
@@ -51,6 +51,12 @@ The adapter must satisfy these requirements:
 - Render allowlisted typed evidence/result/activity components. Agent text cannot inject HTML/JavaScript or directly invoke protected connectors from the browser.
 - Scope clarification responses to the requesting conversation/turn and validate them before execution. Human input cannot bypass independent configuration approval or enable unsupported source writes.
 - Bound history/context and preserve provenance; never silently copy context between projects. Reconnect reads saved state rather than starting another run.
+
+Research checked on 2026-09-16: the [official CopilotKit ADK overview](https://docs.copilotkit.ai/google-adk) describes AG-UI state and activity integration, but its linked ADK quickstart returned HTTP 404. Retain the existing persisted SSE transport until an adapter can demonstrate lower complexity and preserve the authorization, cancellation and persistence contracts above. [ADK sessions](https://adk.dev/sessions/session/) document persistent conversation/event storage; that capability does not supply this application's absent durable worker.
+
+The runner preserves explicit connector selectors in its immutable request, rejects incompatible historical context, and checks an existing idempotent result before rejecting a retry for capacity. Active stream replays use the configured polling interval and terminal delivery waits for recorded cleanup events. Sources: [runner](../app/runtime/runner.py), [conversation context](../app/persistence/store.py), [submission stream](../app/api/routes/runs.py), [runtime regressions](../tests/harness/test_run_controls.py), [stream regressions](../tests/unit/test_run_events.py).
+
+Chat and Harness Studio expose saved instance/environment choices for the selected capability. Required ambiguous sources need an explicit choice; optional sources may remain under automatic server resolution. The client sends only opaque record selectors, and the runner still validates current project membership, environment bindings, credential references and allowed actions. Chat also retrieves older conversations, messages and runs through bounded API pages with stale-response guards. Sources: [source selectors](../frontend/src/components/RunConnectorSelectors.tsx), [chat workspace](../frontend/src/pages/Chat.tsx), [chat service](../frontend/src/services/chat.ts), [Harness Studio](../frontend/src/features/harness-studio/playground/Playground.tsx).
 
 The current submission stream owns in-process execution and cancels unfinished work during cleanup. Preserve that contract or explicitly redesign it before claiming continued execution after disconnect. Durable queueing, scheduling and restart recovery remain outside this release. See [streaming lifecycle](#streaming-reconnection-and-cancellation) and [delivery gates](development.md#chat-and-metrics-delivery-plan).
 

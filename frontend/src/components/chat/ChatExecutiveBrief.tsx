@@ -1,17 +1,12 @@
 import { useState, useMemo } from 'react';
 import {
-  AlertCircle,
-  BookOpen,
   Briefcase,
   CheckCircle2,
   ChevronDown,
   HelpCircle,
   Info,
-  Layers,
   ListChecks,
   Server,
-  ShieldCheck,
-  TrendingDown,
 } from 'lucide-react';
 import { AnswerMarkdown } from '../AnswerMarkdown';
 import type { Run } from '../../types/api';
@@ -20,6 +15,7 @@ import type { RunEvidence } from '../../services/api';
 interface ChatExecutiveBriefProps {
   run: Run;
   evidence?: RunEvidence[];
+  onInspectSources?: () => void;
 }
 
 interface JargonDefinition {
@@ -86,12 +82,12 @@ const COMMON_JARGON: Record<string, JargonDefinition> = {
   },
 };
 
-export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefProps) {
+export function ChatExecutiveBrief({ run, evidence = [], onInspectSources }: ChatExecutiveBriefProps) {
   const result = run.result;
   const [openJargon, setOpenJargon] = useState<string | null>(null);
 
   // Parse layman-friendly summary
-  const summaryText = result?.summary || String(run.raw?.reason || 'Investigation in progress.');
+  const summaryText = result?.summary || String(run.raw?.reason || (['RUNNING', 'QUEUED'].includes(run.status) ? 'Investigation in progress.' : 'No answer was saved for this investigation.'));
 
   // Find matching jargon terms present in the run's summary and findings
   const matchedJargon = useMemo(() => {
@@ -101,63 +97,14 @@ export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefPro
       .map(([, def]) => def);
   }, [summaryText, result]);
 
-  // Determine severity tier
-  const severity = useMemo(() => {
-    const text = summaryText.toLowerCase();
-    if (text.includes('p1') || text.includes('critical') || text.includes('starvation') || text.includes('outage')) {
-      return { level: 'Critical Impact', class: 'severity-critical', desc: 'Customer transactions or core workflows interrupted.' };
-    }
-    if (text.includes('p2') || text.includes('high') || text.includes('degradation') || text.includes('timeout')) {
-      return { level: 'Moderate Impact', class: 'severity-moderate', desc: 'Noticeable slowdown or intermittent errors observed.' };
-    }
-    return { level: 'Low / Informational', class: 'severity-low', desc: 'Minor degradation or routine diagnostics.' };
-  }, [summaryText]);
-
-  // Systems analyzed breakdown
-  const systemsAudited = useMemo(() => {
-    const connectorCounts: Record<string, number> = {};
+  const sourceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
     for (const item of evidence) {
-      const conn = item.source?.connector || 'system';
-      connectorCounts[conn] = (connectorCounts[conn] || 0) + 1;
+      const source = item.source.connector || item.source.system || 'Unspecified source';
+      counts.set(source, (counts.get(source) || 0) + 1);
     }
-
-    const items = [];
-    if (connectorCounts['jira'] || run.capability === 'incident_triage') {
-      items.push({
-        icon: '🎫',
-        name: 'Incident Ticket System (Jira)',
-        detail: 'Audited incident tickets, reported symptoms, and timeline notes.',
-        status: 'Checked',
-      });
-    }
-    if (connectorCounts['splunk'] || run.capability === 'log_correlation') {
-      items.push({
-        icon: '📊',
-        name: 'System Logs (Splunk)',
-        detail: 'Scanned server error logs during the incident window for error spikes.',
-        status: 'Checked',
-      });
-    }
-    if (connectorCounts['file_parser'] || evidence.some(e => e.source?.connector === 'file_parser')) {
-      items.push({
-        icon: '📄',
-        name: 'Runbooks & Attachments',
-        detail: 'Cross-referenced verified standard operating procedures for the fix.',
-        status: 'Checked',
-      });
-    }
-
-    if (!items.length) {
-      items.push({
-        icon: '🔍',
-        name: 'Project Observability Sources',
-        detail: 'Audited connected telemetry and platform records.',
-        status: 'Checked',
-      });
-    }
-
-    return items;
-  }, [evidence, run.capability]);
+    return Array.from(counts);
+  }, [evidence]);
 
   return (
     <div className="chat-executive-brief">
@@ -165,41 +112,38 @@ export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefPro
       <div className="chat-brief-hero">
         <div className="chat-brief-hero-badge">
           <Briefcase size={14} />
-          <span>Non-Technical Executive Overview</span>
+          <span>Investigation overview</span>
         </div>
-        <h3>Plain-English Incident Breakdown</h3>
-        <p>A non-technical explanation of what occurred, why it happened, and how to recover.</p>
+        <h3>Investigation brief</h3>
+        <p>Saved findings, suggested next steps, and collected sources.</p>
       </div>
 
       {/* 2. Business Impact & Status Matrix */}
       <div className="chat-brief-impact-card">
         <div className="chat-brief-impact-header">
-          <div className={`chat-impact-pill ${severity.class}`}>
-            <AlertCircle size={13} />
-            <span>{severity.level}</span>
-          </div>
+          <span className="chat-impact-pill">{run.status.replaceAll('_', ' ').toLowerCase()}</span>
           <span className="chat-impact-status">
             {result?.outcome === 'FINDINGS' ? (
               <span className="text-emerald font-semibold">
                 <CheckCircle2 size={13} style={{ display: 'inline', marginRight: 4 }} />
-                Root cause identified
+                Findings available
               </span>
             ) : (
               <span className="text-amber font-semibold">
                 <Info size={13} style={{ display: 'inline', marginRight: 4 }} />
-                Under active review
+                {result ? result.outcome.replaceAll('_', ' ').toLowerCase() : 'No saved findings'}
               </span>
             )}
           </span>
         </div>
-        <p className="chat-impact-description">{severity.desc}</p>
+        <p className="chat-impact-description">Findings are investigation outputs. Review their sources and uncertainties before acting.</p>
       </div>
 
       {/* 3. The Plain-English Explanation */}
       <div className="chat-brief-section">
         <div className="chat-brief-section-title">
           <Info size={15} />
-          <h4>What Happened</h4>
+          <h4>Summary</h4>
         </div>
         <div className="chat-brief-narrative">
           <AnswerMarkdown text={summaryText} />
@@ -211,7 +155,7 @@ export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefPro
         <div className="chat-brief-section">
           <div className="chat-brief-section-title">
             <ListChecks size={15} />
-            <h4>Recommended Action Plan</h4>
+            <h4>Suggested next steps</h4>
           </div>
           <div className="chat-brief-actions-list">
             {result.recommended_actions.map((action, index) => (
@@ -226,29 +170,23 @@ export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefPro
         </div>
       )}
 
-      {/* 5. Systems Audited in Simple Terms */}
+      {!!result?.uncertainties.length && (
+        <div className="chat-brief-section">
+          <h4>Still uncertain</h4>
+          {result.uncertainties.map((uncertainty, index) => <AnswerMarkdown key={index} text={uncertainty} />)}
+        </div>
+      )}
       <div className="chat-brief-section">
         <div className="chat-brief-section-title">
           <Server size={15} />
-          <h4>Systems Audited</h4>
+          <h4>Collected sources</h4>
         </div>
-        <div className="chat-brief-systems-grid">
-          {systemsAudited.map((sys, idx) => (
-            <div key={idx} className="chat-brief-system-card">
-              <span className="chat-brief-system-icon" aria-hidden="true">
-                {sys.icon}
-              </span>
-              <div className="chat-brief-system-body">
-                <strong>{sys.name}</strong>
-                <p>{sys.detail}</p>
-              </div>
-              <span className="chat-brief-system-status">
-                <ShieldCheck size={12} />
-                {sys.status}
-              </span>
-            </div>
-          ))}
-        </div>
+        {sourceCounts.length ? (
+          <>
+            <ul>{sourceCounts.map(([source, count]) => <li key={source}>{source}: {count} saved evidence {count === 1 ? 'item' : 'items'}</li>)}</ul>
+            {onInspectSources && <button type="button" className="chat-text-button" onClick={onInspectSources}>Review sources</button>}
+          </>
+        ) : <p>No collected sources are available.</p>}
       </div>
 
       {/* 6. Interactive Jargon Buster */}
@@ -269,6 +207,7 @@ export function ChatExecutiveBrief({ run, evidence = [] }: ChatExecutiveBriefPro
                   <button
                     type="button"
                     className="chat-jargon-toggle"
+                    aria-expanded={isOpen}
                     onClick={() => setOpenJargon(isOpen ? null : item.term)}
                   >
                     <strong>{item.term}</strong>

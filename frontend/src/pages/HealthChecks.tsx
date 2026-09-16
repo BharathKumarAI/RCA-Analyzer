@@ -547,7 +547,7 @@ export const HealthChecks: React.FC = () => {
           <div className="backend-notice-callout">
             <Info size={16} color="var(--acc-amber)" style={{ flexShrink: 0, marginTop: 1 }} />
             <div>
-              <b>Demo Mode Operational Contract:</b> Deployment is operating in offline simulation (<code>RCA_MODE=demo</code>). In accordance with security architecture, external network socket probing and live credential resolution are inactive. Live read connectors (Jira and Splunk) execute through offline fixtures; database queries and write access remain disabled.
+              <b>Demo Mode Operational Contract:</b> Deployment is operating in offline simulation (<code>RCA_MODE=demo</code>). In accordance with security architecture, external network socket probing and live credential resolution are inactive. Runs are recorded as simulated without model execution, connector evidence, or diagnostic findings. Source systems remain read only.
             </div>
           </div>
         )}

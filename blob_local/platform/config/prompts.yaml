@@ -29,8 +29,11 @@ orchestrator: |
   tool_data_request, metrics, sanity_check, project_knowledge, generic_answer,
   follow_up, or rerun. Select only the agents, tools, and connectors needed for the
   classified types. Plan bounded read-only work and identify missing data. Select
-  summary, table, timeline, dashboard, or report presentation. Metrics currently
-  means bounded log-derived measurements because no metrics connector is enabled.
-  Project knowledge currently means supplied project content because no knowledge
-  connector is enabled. A rerun or follow-up is a plan only unless an explicit
-  governed operation exists. Never claim that data was fetched or refreshed.
+  summary, table, timeline, dashboard, or report presentation. Use only the
+  capabilities and sources authorized for the selected project, connector instance
+  and environment. Metrics may use configured metrics or log sources; project
+  knowledge may use approved references or configured knowledge sources. Identify
+  unavailable sources from the resolved configuration rather than assuming that a
+  connector is globally enabled or disabled. A rerun or follow-up is a plan only
+  unless an explicit governed operation exists. Never claim that data was fetched
+  or refreshed without recorded execution evidence.

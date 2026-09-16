@@ -1,31 +1,30 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles,
   RotateCw,
-  Share2,
   Download,
   AlertTriangle,
-  CheckCircle2,
-  Layers,
-  Cpu,
-  Database,
-  ArrowRight,
-  GitBranch,
-  ShieldCheck,
-  Zap,
-  Clock,
-  ExternalLink,
 } from 'lucide-react';
-import { fetchLiveBoard, fetchTicketRca } from '../services/triage';
-import type { RcaMethodologyData, LiveBoardResponse } from '../types/triage';
+import { fetchLiveBoard, fetchTicketRca, analyzeTicketRca } from '../services/triage';
+import type { RcaMethodologyData, RcaMethod } from '../types/triage';
 
-export const RCAWorkbench: React.FC = () => {
+import { ApiError } from '../services/api';
+import { RcaAnalysisPanel } from '../components/RcaAnalysisPanel';
+
+export const RCAWorkbench: React.FC<{ canEdit?: boolean; onOpenRun?: (runId: string) => void | Promise<void> }> = ({ canEdit = false, onOpenRun }) => {
   const [ticketsList, setTicketsList] = useState<{ id: string; summary: string }[]>([]);
   const [selectedTicketId, setSelectedTicketId] = useState<string>('');
-  const [activeMethod, setActiveMethod] = useState<'five_whys' | 'fishbone' | 'kepner_tregoe' | 'fmea' | 'fault_tree' | 'auto_ensemble'>('five_whys');
+  const [activeMethod, setActiveMethod] = useState<RcaMethod>('five_whys');
   const [rcaData, setRcaData] = useState<RcaMethodologyData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<{ message: string; runId?: string; retryable: boolean } | null>(null);
+  const pendingAttempt = useRef<{ ticketId: string; method: RcaMethod; key: string } | null>(null);
+  const analysisRunning = useRef(false);
+  const requestVersion = useRef(0);
+  useEffect(() => () => { requestVersion.current++; }, []);
 
   // Load available tickets for dropdown
   useEffect(() => {
@@ -51,15 +50,19 @@ export const RCAWorkbench: React.FC = () => {
 
   const loadRca = useCallback(async (ticketId: string) => {
     if (!ticketId) return;
+    const version = ++requestVersion.current;
+    setRcaData(null);
+    setAnalysisError(null);
+    pendingAttempt.current = null;
     try {
       setLoading(true);
       setError(null);
       const data = await fetchTicketRca(ticketId);
-      setRcaData(data);
+      if (version === requestVersion.current) setRcaData(data);
     } catch (err: any) {
-      setError(err?.message || 'Failed to load RCA investigation data');
+      if (version === requestVersion.current) setError(err?.message || 'Failed to load RCA investigation data');
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   }, []);
 
@@ -68,6 +71,44 @@ export const RCAWorkbench: React.FC = () => {
       loadRca(selectedTicketId);
     }
   }, [selectedTicketId, loadRca]);
+
+  const handleAnalyze = async (retry = false) => {
+    if (!canEdit || !selectedTicketId || !rcaData || rcaData.ticket_id !== selectedTicketId || analysisRunning.current) return;
+    const attempt = retry ? pendingAttempt.current : { ticketId: selectedTicketId, method: activeMethod, key: crypto.randomUUID() };
+    if (!attempt || attempt.ticketId !== selectedTicketId || attempt.method !== activeMethod) return;
+    pendingAttempt.current = attempt;
+    analysisRunning.current = true;
+    const version = requestVersion.current;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const analysis = await analyzeTicketRca(attempt.ticketId, attempt.method, attempt.key);
+      if (version !== requestVersion.current) return;
+      setRcaData(current => current ? {
+        ...current,
+        available_methods: Array.from(new Set([...(current.available_methods || []), attempt.method])),
+        analyses: { ...current.analyses, [attempt.method]: analysis },
+      } : current);
+      pendingAttempt.current = null;
+    } catch (reason) {
+      if (version !== requestVersion.current) return;
+      const detail = reason instanceof ApiError && reason.details && typeof reason.details === 'object' && 'detail' in reason.details
+        ? (reason.details as { detail: unknown }).detail : null;
+      const saved = detail && typeof detail === 'object' ? detail as { message?: unknown; run_id?: unknown; status?: unknown } : null;
+      const retryable = reason instanceof ApiError && (reason.status === 0 || reason.status >= 500);
+      setAnalysisError({
+        message: typeof saved?.message === 'string' ? saved.message : reason instanceof Error ? reason.message : 'Analysis failed.',
+        runId: typeof saved?.run_id === 'string' ? saved.run_id : undefined,
+        retryable,
+      });
+      if (!retryable) pendingAttempt.current = null;
+    } finally {
+      analysisRunning.current = false;
+      if (version === requestVersion.current) setAnalyzing(false);
+    }
+  };
+  const selectedAnalysis = rcaData?.analyses?.[activeMethod];
+  const legacyAvailable = !selectedAnalysis && rcaData?.available_methods?.includes(activeMethod) !== false;
 
   const handleExportReport = () => {
     if (!rcaData) return;
@@ -152,7 +193,7 @@ export const RCAWorkbench: React.FC = () => {
               Root Cause Analysis Workbench
             </h1>
             <p style={{ fontSize: '13px', color: 'var(--ink-secondary)', margin: '2px 0 0 0' }}>
-              Deductive reasoning and multi-methodology causal isolation powered by ADK root workflow and live telemetry.
+              Saved investigation findings and available structured analyses.
             </p>
           </div>
         </div>
@@ -165,7 +206,9 @@ export const RCAWorkbench: React.FC = () => {
             </label>
             <select
               value={selectedTicketId}
-              onChange={(e) => setSelectedTicketId(e.target.value)}
+              aria-label="Incident"
+              disabled={analyzing}
+              onChange={(e) => { requestVersion.current++; setSelectedTicketId(e.target.value); }}
               style={{
                 padding: '6px 12px',
                 borderRadius: '6px',
@@ -187,16 +230,19 @@ export const RCAWorkbench: React.FC = () => {
           </div>
 
           <button
-            onClick={() => loadRca(selectedTicketId)}
-            disabled={loading}
+            onClick={() => void handleAnalyze()}
+            disabled={!canEdit || loading || analyzing || !rcaData}
             className="btn btn-primary"
             style={{ padding: '6px 14px', fontSize: '12px', gap: '6px' }}
           >
-            <RotateCw size={13} className={loading ? 'spin' : ''} />
-            <span>Re-analyze</span>
+            <RotateCw size={13} className={analyzing ? 'spin' : ''} />
+            <span>{analyzing ? 'Analyzing…' : 'Re-analyze'}</span>
           </button>
 
+          <button type="button" className="btn btn-secondary" disabled={loading || analyzing || !selectedTicketId} onClick={() => void loadRca(selectedTicketId)}>Refresh</button>
+
           <button
+            disabled={!rcaData}
             onClick={handleExportReport}
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px', gap: '6px' }}
@@ -229,7 +275,8 @@ export const RCAWorkbench: React.FC = () => {
           return (
             <button
               key={m.id}
-              onClick={() => setActiveMethod(m.id as any)}
+              disabled={analyzing}
+              onClick={() => { setActiveMethod(m.id as RcaMethod); setAnalysisError(null); pendingAttempt.current = null; }}
               style={{
                 padding: '7px 14px',
                 fontSize: '12px',
@@ -249,11 +296,20 @@ export const RCAWorkbench: React.FC = () => {
         })}
       </div>
 
+      {analysisError && <div className="notice-banner" role="alert">
+        <p>{analysisError.message}</p>
+        {analysisError.runId && onOpenRun && <button type="button" className="btn btn-secondary" onClick={async () => {
+          try { await onOpenRun(analysisError.runId!); }
+          catch (reason) { setAnalysisError(current => current && { ...current, message: reason instanceof Error ? reason.message : 'Unable to open the recorded run.' }); }
+        }}>Inspect recorded run</button>}
+        {canEdit && analysisError.retryable && <button type="button" className="btn btn-secondary" disabled={analyzing} onClick={() => void handleAnalyze(true)}>Retry same analysis</button>}
+      </div>}
+      {analyzing && <p role="status">Running the selected method against the saved incident scope. Findings will appear when the run finishes.</p>}
       {/* Main Analysis View */}
       {loading ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--ink-secondary)' }}>
           <RotateCw className="spin" size={24} style={{ margin: '0 auto 12px auto', display: 'block' }} />
-          <p>Running multi-methodology RCA causal deduction...</p>
+          <p>Loading saved investigation results...</p>
         </div>
       ) : error ? (
         <div className="notice-banner" role="alert">
@@ -277,7 +333,7 @@ export const RCAWorkbench: React.FC = () => {
             No Incident Tickets Available
           </h2>
           <p style={{ fontSize: '13px', maxWidth: '440px', margin: '0 auto', lineHeight: 1.5 }}>
-            No incident tickets were found in this project's triage queue. Pick or create an incident to run multi-methodology causal deduction.
+            No tickets are saved on this project's triage board. Open a completed investigation and choose Add to triage.
           </p>
         </div>
       ) : !rcaData ? (
@@ -286,8 +342,11 @@ export const RCAWorkbench: React.FC = () => {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {!selectedAnalysis && (!rcaData[activeMethod] || rcaData.available_methods?.includes(activeMethod) === false) && <p role="status">No saved analysis is available for this method.{canEdit ? ' Select Re-analyze to investigate the saved incident with this method.' : ''}</p>}
+          {selectedAnalysis && <RcaAnalysisPanel key={selectedAnalysis.run_id} analysis={selectedAnalysis} onOpenRun={onOpenRun} />}
+          {!!rcaData.findings?.length && <section><h3>Saved investigation findings</h3><ul>{rcaData.findings.map(finding => <li key={finding.finding_id}>{finding.statement} ({finding.status.toLowerCase()})</li>)}</ul></section>}
           {/* Active Methodology Visualizer */}
-          {activeMethod === 'five_whys' && rcaData.five_whys && (
+          {activeMethod === 'five_whys' && legacyAvailable && rcaData.five_whys && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div
                 className="platform-card"
@@ -365,7 +424,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {activeMethod === 'fishbone' && rcaData.fishbone && (
+          {activeMethod === 'fishbone' && legacyAvailable && rcaData.fishbone && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
               {rcaData.fishbone.categories.map((cat, idx) => (
                 <div
@@ -410,7 +469,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {activeMethod === 'kepner_tregoe' && rcaData.kepner_tregoe && (
+          {activeMethod === 'kepner_tregoe' && legacyAvailable && rcaData.kepner_tregoe && (
             <div className="platform-card" style={{ padding: '0', borderRadius: '8px', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
                 <thead>
@@ -437,7 +496,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {activeMethod === 'fmea' && rcaData.fmea && (
+          {activeMethod === 'fmea' && legacyAvailable && rcaData.fmea && (
             <div className="platform-card" style={{ padding: '0', borderRadius: '8px', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
                 <thead>
@@ -470,7 +529,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {activeMethod === 'fault_tree' && rcaData.fault_tree && (
+          {activeMethod === 'fault_tree' && legacyAvailable && rcaData.fault_tree && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div
                 className="platform-card"
@@ -498,7 +557,7 @@ export const RCAWorkbench: React.FC = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
-                {rcaData.fault_tree.root_gate.children?.map((branch, bIdx) => (
+                {rcaData.fault_tree.root_gate?.children?.map((branch, bIdx) => (
                   <div
                     key={bIdx}
                     className="platform-card"
@@ -549,7 +608,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {activeMethod === 'auto_ensemble' && rcaData.auto_ensemble && (
+          {activeMethod === 'auto_ensemble' && legacyAvailable && rcaData.auto_ensemble && (
             <div
               className="platform-card"
               style={{
@@ -600,7 +659,7 @@ export const RCAWorkbench: React.FC = () => {
             </div>
           )}
 
-          {/* Context Budget Guardrail Simulator Card */}
+          {/* Recorded context budget */}
           {rcaData.context_budget && (
             <div
               className="platform-card"

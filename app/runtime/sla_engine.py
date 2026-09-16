@@ -8,15 +8,8 @@ risk states, and deterministic ranking order with explanatory summaries.
 from __future__ import annotations
 
 import time
+import math
 from typing import Any, Dict, List, Optional
-
-# Default SLA Targets per Priority (in seconds)
-DEFAULT_SLA_TARGETS: Dict[str, float] = {
-    "P1": 1800.0,   # 30 minutes
-    "P2": 7200.0,   # 2 hours
-    "P3": 28800.0,  # 8 hours
-    "P4": 86400.0,  # 24 hours
-}
 
 PRIORITY_RANK = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
 
@@ -44,10 +37,12 @@ def compute_ticket_sla_state(
 ) -> Dict[str, Any]:
     """Compute exact queue time and SLA consumption for a single ticket."""
     current_time = now if now is not None else time.time()
-    targets = sla_targets or DEFAULT_SLA_TARGETS
+    targets = sla_targets or {}
 
     priority = str(ticket.get("priority", "P2")).upper()
-    sla_target = targets.get(priority, 7200.0)
+    sla_target = targets.get(priority)
+    if type(sla_target) not in {int, float} or not math.isfinite(sla_target) or sla_target <= 0:
+        sla_target = None
 
     # Clocks
     ticket_created = float(ticket.get("created_at", current_time))
@@ -77,10 +72,12 @@ def compute_ticket_sla_state(
         else 0.0
     )
 
-    sla_remaining = sla_target - cumulative_consumed
-    sla_utilization = min(2.0, cumulative_consumed / sla_target) if sla_target > 0 else 1.0
+    sla_remaining = sla_target - cumulative_consumed if sla_target is not None else None
+    sla_utilization = min(2.0, cumulative_consumed / sla_target) if sla_target is not None else None
 
-    if sla_remaining <= 0:
+    if sla_remaining is None:
+        risk_state = "UNKNOWN"
+    elif sla_remaining <= 0:
         risk_state = "BREACHED"
     elif sla_remaining <= 0.25 * sla_target:
         risk_state = "AT_RISK"
@@ -104,9 +101,11 @@ def compute_ticket_sla_state(
         explanation_parts.append(f"in triage queue for {format_duration(current_stay_duration)}")
 
     consumed_fmt = format_duration(cumulative_consumed)
-    target_fmt = format_duration(sla_target)
+    target_fmt = format_duration(sla_target) if sla_target is not None else "Not configured"
 
-    if risk_state == "BREACHED":
+    if risk_state == "UNKNOWN":
+        explanation_parts.append("SLA target is not configured")
+    elif risk_state == "BREACHED":
         explanation_parts.append(f"breached by {format_duration(abs(sla_remaining))}; {consumed_fmt}/{target_fmt} consumed")
     elif risk_state == "AT_RISK":
         explanation_parts.append(f"SLA risk: {format_duration(sla_remaining)} remaining ({consumed_fmt}/{target_fmt} consumed)")
@@ -129,8 +128,8 @@ def compute_ticket_sla_state(
         "sla_consumed_seconds": cumulative_consumed,
         "sla_consumed_formatted": consumed_fmt,
         "sla_remaining_seconds": sla_remaining,
-        "sla_remaining_formatted": format_duration(sla_remaining),
-        "sla_utilization": round(sla_utilization, 3),
+        "sla_remaining_formatted": format_duration(sla_remaining) if sla_remaining is not None else "Not configured",
+        "sla_utilization": round(sla_utilization, 3) if sla_utilization is not None else None,
         "risk_state": risk_state,
         "ticket_age_seconds": ticket_age_s,
         "ticket_age_formatted": format_duration(ticket_age_s),
@@ -163,7 +162,7 @@ def rank_focus_queue(
         # Rule 2: At-Risk SLA
         is_at_risk = 0 if sla["risk_state"] == "AT_RISK" else 1
         # SLA remaining seconds (for breached, more negative comes first)
-        rem_sec = sla["sla_remaining_seconds"]
+        rem_sec = sla["sla_remaining_seconds"] if sla["sla_remaining_seconds"] is not None else float("inf")
         # Rule 3: Priority rank (1, 2, 3, 4)
         prio_rank = sla["priority_rank"]
         # Rule 4: Returned or Unassigned
@@ -184,3 +183,14 @@ def rank_focus_queue(
         )
 
     return sorted(tickets_with_sla, key=sort_key)
+
+
+async def resolve_sla_targets(parameter_store, principal):
+    """Read project policy from the existing database parameter hierarchy."""
+    rows = await parameter_store.resolve(principal.tenant_id, principal.project_id)
+    value = next((row["effective_value"] for row in rows
+                  if row["tool"] == "triage" and row["variable_name"] == "sla_targets_seconds" and row["enabled"]), None)
+    if not isinstance(value, dict):
+        return {}
+    return {str(priority).upper(): seconds for priority, seconds in value.items()
+            if type(seconds) in {int, float} and math.isfinite(seconds) and seconds > 0}

@@ -21,7 +21,7 @@ Read [AGENTS.md](../AGENTS.md) before making changes. Keep changes focused, comp
 
 ## Chat and metrics delivery plan
 
-**Proposed work: extend existing modules.** Follow the [product contract](project.md#chat-and-metrics-development-contract) and [integration architecture](architecture.md#chat-integration-with-the-existing-framework). Trace callers before shared changes; preserve unrelated edits.
+**Delivery contract: extend existing modules.** Follow the [product contract](project.md#chat-and-metrics-development-contract) and [integration architecture](architecture.md#chat-integration-with-the-existing-framework). Trace callers before shared changes; preserve unrelated edits.
 
 | Phase | Work | Exit evidence |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ Read [AGENTS.md](../AGENTS.md) before making changes. Keep changes focused, comp
 
 Starting points: [Chat](../frontend/src/pages/Chat.tsx), [chat API](../app/api/routes/chats.py), [run API](../app/api/routes/runs.py), [runner](../app/runtime/runner.py), [Metrics](../frontend/src/pages/Metrics.tsx), [telemetry service](../frontend/src/services/telemetry.ts), [project telemetry](../app/persistence/telemetry.py), [platform aggregation](../app/persistence/platform_metrics.py). Reuse existing tests/dependencies; add migrations only for identified missing measurements.
 
-Verify upstream APIs before adapter installation. The linked CopilotKit ADK quickstart returned 404 during the reference review; its overview does not establish exact setup or package compatibility. No external harness or adapter integration is delivered by this documentation change.
+Verify upstream APIs before adapter installation. The linked CopilotKit ADK quickstart returned 404 during the reference review; its overview does not establish exact setup or package compatibility. The delivered workspace uses the existing native ADK runner and persisted event stream; no optional external runtime or chat adapter is installed.
 
 ## Metric definitions and acceptance
 
@@ -56,11 +56,24 @@ For each metric record source fields/events, unit, population, numerator/denomin
 
 Existing [telemetry](../app/persistence/telemetry.py) bounds run/event reads and reports coverage. Preserve this in [platform aggregation](../app/persistence/platform_metrics.py); never present a bounded sample as complete totals. Prefer database aggregation where practical, validate indexes/query plans, and bound custom ranges/exports.
 
-**Current window gap:** [metrics routes](../app/api/routes/metrics.py) use date boundaries: `24h` selects yesterday through today inclusively via telemetry, not a rolling 24 hours. Implement UTC timestamp boundaries or relabel honestly. Define half-open intervals, bucket sizes, explicit-date precedence, current backlog versus historical cohorts, and unsupported filter behavior. The platform route currently lacks capability/stage filters; hide those controls or implement them end to end.
+**Time-window contract:** [metrics routes](../app/api/routes/metrics.py) and [telemetry](../app/persistence/telemetry.py) share UTC half-open timestamp boundaries. Presets are rolling windows; explicit date ranges include their final calendar day. Responses disclose `start_at` and exclusive `end_at`. The [frontend service](../frontend/src/services/telemetry.ts) sends explicit dates only for custom ranges. Platform capability/stage filters remain unsupported and are not displayed. [Regression tests](../tests/integration/test_metrics_api.py) cover boundaries and authorization.
 
 Acceptance covers missing/empty data, legacy runs, unfinished calls, missing prices, truncation, UTC boundaries, reopened incidents, retries, revoked membership, project switching, denied platform access and export consistency. Refresh requests must not overlap or overwrite newer scope selections. Provide keyboard-accessible charts with table alternatives, focus, contrast, responsive layout and reduced motion. Exports include authorized scope/coverage and safely encoded CSV cells.
 
 Run [required verification](#verification): `make lint`, `make test`, `make smoke`; for frontend implementation also `npm run lint`, `npm test`, `npm run build` in `frontend/`. Report current results rather than historical test counts. Offline evaluation is not diagnostic accuracy. Update these five guides with delivered behavior and remaining gaps.
+
+## Production-integrity regression coverage
+
+| Area | Implemented checks |
+| --- | --- |
+| Run lifecycle | [Selectors, capacity replay and cancellation](../tests/harness/test_run_controls.py); [recorded event replay and cleanup](../tests/unit/test_run_events.py); [history scope](../tests/unit/test_runtime_governance.py) |
+| Workspace data | [Live investigation intake, duplicate import, follow-up execution, evidence and local approvals](../tests/integration/test_triage_board_api.py); [methodology runs, citations, review roles and retries](../tests/integration/test_triage_methodology_api.py); [queue transitions and configured SLA](../tests/unit/test_triage_engine.py) |
+| Metrics | [Platform authorization and UTC windows](../tests/integration/test_metrics_api.py); missing usage and trace retention remain explicit coverage limits |
+| Providers | [Oracle bounds and read-only configuration](../tests/unit/test_oracle_connector.py); [project resolution](../tests/integration/test_connector_runtime_resolution.py) |
+| Frontend | [Rendered investigation integrity](../tests/frontend_investigation_integrity.mjs); [saved connector selections](../tests/frontend_connector_selections.mjs); full existing frontend test scripts |
+| Deployment | [Live defaults and readiness timeout](../tests/unit/test_deployment_readiness.py); [relocatable content](../tests/unit/test_content_layout.py); CI lint, tests, smoke and image build |
+
+Keep isolated test providers under tests and explicit development utilities. They must not be imported by production execution or bundled as fallback records. Demo mode is an explicit non-diagnostic `SIMULATED` outcome; new deployments default to live. Run all required checks below after integration, and record actual target validation separately.
 
 ## Engineering contract
 

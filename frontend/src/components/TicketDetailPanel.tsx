@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X,
   Clock,
@@ -43,12 +43,14 @@ import {
 } from '../services/triage';
 
 interface TicketDetailPanelProps {
+  canEdit?: boolean;
   ticketId: string;
   onClose: () => void;
   onTicketUpdated?: () => void;
 }
 
 export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
+  canEdit = false,
   ticketId,
   onClose,
   onTicketUpdated,
@@ -72,14 +74,22 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
   const [postingComment, setPostingComment] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  const requestVersion = useRef(0);
+
   const loadData = useCallback(async () => {
+    const version = ++requestVersion.current;
+    setWorkspace(null);
+    setSelectedProposalId(null);
+    setQueryText('');
+    setToolResult(null);
     try {
       setLoading(true);
       setError(null);
       const [ws, cmts] = await Promise.all([
         fetchTicketWorkspace(ticketId),
-        fetchTicketComments(ticketId).catch(() => []),
+        fetchTicketComments(ticketId),
       ]);
+      if (version !== requestVersion.current) return;
       setWorkspace(ws);
       setComments(cmts);
       if (ws.tool_proposals.length > 0) {
@@ -88,14 +98,15 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
         setToolResult(ws.tool_proposals[0].latest_result);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to load ticket workspace');
+      if (version === requestVersion.current) setError(err?.message || 'Failed to load ticket workspace');
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   }, [ticketId]);
 
   useEffect(() => {
     loadData();
+    return () => { requestVersion.current++; };
   }, [loadData]);
 
   // Handle ESC key to close drawer
@@ -114,6 +125,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
   };
 
   const handleExecuteQuery = async () => {
+    if (!canEdit) return;
     if (!selectedProposalId) return;
     try {
       setExecutingTool(true);
@@ -122,22 +134,23 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
       setToolResult(res.result);
       await loadData();
     } catch (err: any) {
-      alert(err?.message || 'Tool execution failed');
+      setError(err?.message || 'Tool execution failed');
     } finally {
       setExecutingTool(false);
     }
   };
 
   const handlePromoteEvidence = async () => {
+    if (!canEdit) return;
     if (!selectedProposalId) return;
     try {
       setPromotingEvidence(true);
-      const summary = `Executed query result on ${ticketId}: ${toolResult?.interpretation || 'Observed telemetry anomaly.'}`;
-      await promoteProposalEvidence(selectedProposalId, summary, 0.92);
+      const summary = `Saved follow-up result on ${ticketId}: ${toolResult?.interpretation || 'Saved diagnostic result'}`;
+      await promoteProposalEvidence(selectedProposalId, summary, 0);
       await loadData();
       setActiveTab('evidence');
     } catch (err: any) {
-      alert(err?.message || 'Failed to promote evidence');
+      setError(err?.message || 'Failed to promote evidence');
     } finally {
       setPromotingEvidence(false);
     }
@@ -145,7 +158,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
+    if (!canEdit || !newComment.trim()) return;
     try {
       setPostingComment(true);
       const c = await addTicketComment(ticketId, newComment.trim(), isInternal);
@@ -153,18 +166,19 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
       setNewComment('');
       onTicketUpdated?.();
     } catch (err: any) {
-      alert(err?.message || 'Failed to post comment');
+      setError(err?.message || 'Failed to post comment');
     } finally {
       setPostingComment(false);
     }
   };
 
   const handleEvidenceAction = async (evidenceId: string, status: 'ACCEPTED' | 'REJECTED') => {
+    if (!canEdit) return;
     try {
       await updateEvidenceStatus(evidenceId, status);
       await loadData();
     } catch (err: any) {
-      alert(err?.message || 'Failed to update evidence status');
+      setError(err?.message || 'Failed to update evidence status');
     }
   };
 
@@ -235,7 +249,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 {ticketId}
               </span>
               <span className={`badge ${ticket?.priority === 'P1' ? 'badge-rose' : 'badge-amber'}`}>
-                {ticket?.priority || 'P2'}
+                {ticket?.priority || 'Not recorded'}
               </span>
               <span className="badge badge-neutral" style={{ textTransform: 'uppercase' }}>
                 {ticket?.work_state || 'TRIAGE'}
@@ -277,7 +291,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12px', color: 'var(--ink-secondary)' }}>
               <span>Service: <strong style={{ color: 'var(--ink-primary)' }}>{ticket?.service || '—'}</strong></span>
               <span>•</span>
-              <span>Assigned Team: <strong style={{ color: 'var(--ink-primary)' }}>{ticket?.current_team || 'Triage Team'}</strong></span>
+              <span>Assigned Team: <strong style={{ color: 'var(--ink-primary)' }}>{ticket?.current_team || 'Unassigned'}</strong></span>
               <span>•</span>
               <span>Assignee: <strong style={{ color: 'var(--ink-primary)' }}>{ticket?.assignee || 'Unassigned'}</strong></span>
             </div>
@@ -353,13 +367,13 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                     </span>
                   </div>
                   <span className="badge badge-magenta" style={{ fontSize: '11px' }}>
-                    {Math.round((inv?.auto_triage_summary?.confidence || 0.89) * 100)}% Confidence
+                    {(inv?.auto_triage_summary?.confidence ?? 0) > 0 ? `${Math.round((inv?.auto_triage_summary.confidence ?? 0) * 100)}% confidence` : 'Confidence unassessed'}
                   </span>
                 </div>
                 <p style={{ fontSize: '13px', color: 'var(--ink-secondary)', lineHeight: 1.5, margin: 0 }}>
-                  {inv?.auto_triage_summary?.executive_rca ||
+                  {inv?.auto_triage_summary?.summary || inv?.auto_triage_summary?.executive_rca ||
                     workspace?.findings[0]?.statement ||
-                    'High contention and database lock wait timeout during batch transaction processing.'}
+                    'No investigation summary has been saved.'}
                 </p>
               </div>
 
@@ -370,7 +384,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                     Failure Boundary
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink-primary)', marginTop: '6px' }}>
-                    {inv?.auto_triage_summary?.failure_boundary || `Component: ${ticket?.service || 'Service'}`}
+                    {inv?.auto_triage_summary?.failure_boundary || 'No failure boundary recorded'}
                   </div>
                 </div>
 
@@ -379,7 +393,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                     Recommended Action
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent-teal)', marginTop: '6px' }}>
-                    {inv?.auto_triage_summary?.recommendation || 'Patch connection checkout logic with auto-closing try-with-resources'}
+                    {inv?.auto_triage_summary?.recommended_actions?.join('\n') || inv?.auto_triage_summary?.recommendation || 'No recommended action recorded'}
                   </div>
                 </div>
               </div>
@@ -389,11 +403,8 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 <h3 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--ink-primary)', margin: 0 }}>
                   Evaluated Hypotheses
                 </h3>
-                {(inv?.auto_triage_summary?.hypotheses || [
-                  { title: 'HikariCP connection pool exhaustion due to row deadlocks', status: 'CONFIRMED', confidence: 0.94, details: 'Verified via V$SESSION queries with 18 blocking transactions.' },
-                  { title: 'Physical network packet loss on ingress gateway', status: 'DISPROVED', confidence: 0.05, details: 'VPC network metrics show zero packet loss.' },
-                  { title: 'JVM Garbage Collection Pause > 30s', status: 'DISPROVED', confidence: 0.08, details: 'GC pause times are normal (< 24ms p99).' },
-                ]).map((hyp: any, idx: number) => {
+                {!inv?.auto_triage_summary?.hypotheses?.length && <p>No hypotheses have been saved.</p>}
+                {(inv?.auto_triage_summary?.hypotheses || []).map((hyp: any, idx: number) => {
                   const isConfirmed = hyp.status === 'CONFIRMED';
                   return (
                     <div
@@ -424,7 +435,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 })}
               </div>
 
-              {/* Jira Two-Way Sync Banner */}
+              {/* Local investigation notes */}
               <div
                 style={{
                   padding: '14px 16px',
@@ -440,11 +451,11 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <ShieldCheck size={16} color="var(--accent-blue)" />
                   <span style={{ color: 'var(--ink-primary)', fontWeight: 600 }}>
-                    Jira Cloud REST API v3 Two-Way Synchronized
+                    Saved investigation workspace; source systems are read only
                   </span>
                 </div>
                 <span style={{ color: 'var(--ink-secondary)', fontSize: '11px' }}>
-                  Project: {ticket?.project_id || 'DEFAULT'}
+                  Project: {ticket?.project_id || '—'}
                 </span>
               </div>
             </div>
@@ -494,7 +505,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--ink-secondary)' }}>
-                    QUERY EDITOR
+                    INVESTIGATION PROMPT
                   </span>
                   <button
                     onClick={() => handleCopy(queryText, 'query')}
@@ -502,11 +513,13 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                     style={{ padding: '2px 8px', fontSize: '11px', gap: '4px' }}
                   >
                     {copiedId === 'query' ? <Check size={11} /> : <Copy size={11} />}
-                    {copiedId === 'query' ? 'Copied' : 'Copy Query'}
+                    {copiedId === 'query' ? 'Copied' : 'Copy prompt'}
                   </button>
                 </div>
 
                 <textarea
+                  aria-label="Follow-up investigation prompt"
+                  maxLength={16000}
                   value={queryText}
                   onChange={(e) => setQueryText(e.target.value)}
                   rows={4}
@@ -526,12 +539,12 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                   <button
                     onClick={handleExecuteQuery}
-                    disabled={executingTool}
+                    disabled={!canEdit || (executingTool || !selectedProposalId || !queryText.trim())}
                     className="btn btn-primary"
                     style={{ padding: '6px 14px', fontSize: '12px', gap: '6px' }}
                   >
                     {executingTool ? <RotateCw className="spin" size={12} /> : <Play size={12} />}
-                    {executingTool ? 'Executing Query...' : 'Execute Query'}
+                    {executingTool ? 'Investigating…' : 'Run investigation'}
                   </button>
                 </div>
               </div>
@@ -559,7 +572,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
 
                     <button
                       onClick={handlePromoteEvidence}
-                      disabled={promotingEvidence}
+                      disabled={!canEdit || (promotingEvidence)}
                       className="btn btn-secondary"
                       style={{ padding: '4px 10px', fontSize: '11.5px', gap: '4px' }}
                     >
@@ -587,9 +600,9 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                             gap: '8px',
                           }}
                         >
-                          <span style={{ color: 'var(--ink-tertiary)' }}>{item.time || '10:24:11'}</span>
+                          <span style={{ color: 'var(--ink-tertiary)' }}>{item.time || 'Time not recorded'}</span>
                           <span style={{ color: item.level === 'ERROR' ? 'var(--accent-rose)' : 'var(--accent-amber)', fontWeight: 700 }}>
-                            {item.level || 'INFO'}
+                            {item.level || 'Level not recorded'}
                           </span>
                           <span style={{ color: 'var(--ink-primary)' }}>{item.message}</span>
                         </div>
@@ -607,7 +620,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                 <textarea
                   value={newComment}
                   onChange={(e) => setNewComment(e.target.value)}
-                  placeholder="Add an internal investigation note or update to sync to Jira..."
+                  placeholder="Add a note to this investigation workspace..."
                   rows={3}
                   style={{
                     padding: '12px',
@@ -633,7 +646,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
 
                   <button
                     type="submit"
-                    disabled={postingComment || !newComment.trim()}
+                    disabled={!canEdit || (postingComment || !newComment.trim())}
                     className="btn btn-primary"
                     style={{ padding: '6px 14px', fontSize: '12px', gap: '6px' }}
                   >
@@ -688,7 +701,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {workspace?.evidence.length === 0 ? (
                 <div style={{ padding: '32px', textAlign: 'center', color: 'var(--ink-secondary)', fontSize: '12.5px' }}>
-                  No evidence promoted yet. Run interactive tools to capture and promote verified telemetry findings.
+                  No evidence has been saved. Run a follow-up investigation, review its sources, and save relevant evidence.
                 </div>
               ) : (
                 workspace?.evidence.map((ev) => {
@@ -715,7 +728,7 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                             {ev.status}
                           </span>
                           <span style={{ fontSize: '11px', color: 'var(--ink-secondary)' }}>
-                            {Math.round(ev.confidence * 100)}% Confidence
+                            {ev.confidence > 0 ? `${Math.round(ev.confidence * 100)}% confidence` : 'Confidence unassessed'}
                           </span>
                         </div>
 
@@ -723,14 +736,14 @@ export const TicketDetailPanel: React.FC<TicketDetailPanelProps> = ({
                           <button
                             onClick={() => handleEvidenceAction(ev.evidence_id, 'ACCEPTED')}
                             className="btn btn-secondary"
-                            style={{ padding: '2px 8px', fontSize: '11px', color: 'var(--accent-teal)' }}
+                            style={{ padding: '2px 8px', fontSize: '11px', color: 'var(--accent-teal)' }} disabled={!canEdit}
                           >
                             Accept
                           </button>
                           <button
                             onClick={() => handleEvidenceAction(ev.evidence_id, 'REJECTED')}
                             className="btn btn-secondary"
-                            style={{ padding: '2px 8px', fontSize: '11px', color: 'var(--accent-rose)' }}
+                            style={{ padding: '2px 8px', fontSize: '11px', color: 'var(--accent-rose)' }} disabled={!canEdit}
                           >
                             Reject
                           </button>

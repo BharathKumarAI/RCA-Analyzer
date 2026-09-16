@@ -51,6 +51,7 @@ import {
   fetchPrincipal,
   fetchAgents,
   fetchRuns,
+  fetchRun,
   fetchTools,
   fetchAuditLogs,
   fetchNotifications,
@@ -187,7 +188,7 @@ const WorkspaceApp: React.FC = () => {
   };
 
   // Core Data
-  const [health, setHealth] = useState<SystemHealth>({ status: 'error', latency_ms: 0, tenant_id: '', project_id: '', mode: 'demo', active_runs: 0, total_runs: 0, mttr_minutes: 0, tool_success_rate: 0, active_agents_count: 0 });
+  const [health, setHealth] = useState<SystemHealth>({ status: 'error', latency_ms: 0, tenant_id: '', project_id: '', mode: 'demo', active_runs: 0, total_runs: 0 });
   const [healthUpdatedAt, setHealthUpdatedAt] = useState<Date | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [telemetryRefreshing, setTelemetryRefreshing] = useState(false);
@@ -515,6 +516,7 @@ const WorkspaceApp: React.FC = () => {
     <button className="btn btn-secondary" onClick={() => { void logoutSession().then(() => clearScopedData()).catch(error => setUiError(error instanceof Error ? error.message : 'Sign-out failed. Please try again.')); }}>Sign out</button>
   </main></div>;
 
+  const canEditTriage = principal.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER', 'PROJECT_ANALYST'].includes(role));
   const isPlatformAdmin = Boolean(principal?.roles.includes('PLATFORM_ADMIN'));
   const isAuthorizedAdmin = Boolean(
     principal?.roles.some(role => ['PLATFORM_ADMIN', 'PROJECT_OWNER', 'PROJECT_MANAGER'].includes(role))
@@ -637,7 +639,7 @@ const WorkspaceApp: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'runs' && (
-            <Runs initialRunId={initialRunId} runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
+            <Runs canEdit={canEditTriage} initialRunId={initialRunId} runs={runs} onNewInvestigation={() => openInvestigation()} onRunUpdated={updated => setRuns(prev => prev.map(run => run.id === updated.id ? updated : run))} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'capabilities' && (
@@ -717,15 +719,15 @@ const WorkspaceApp: React.FC = () => {
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'triage-board' && (
-            <TriageBoard />
+            <TriageBoard canEdit={canEditTriage} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'tickets' && (
-            <ProjectTickets />
+            <ProjectTickets canEdit={canEditTriage} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'rca-workbench' && (
-            <RCAWorkbench />
+            <RCAWorkbench canEdit={canEditTriage} onOpenRun={async id => { const run = await fetchRun(id); setRuns(previous => [run, ...previous.filter(item => item.id !== id)]); setInitialRunId(id); handleSelectPage('runs'); }} />
           )}
 
           {(!invalidProjectRoute && (!routeProjectKey || !principal || routeProjectKey === principal.project_id)) && activePage === 'feedback' && (

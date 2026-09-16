@@ -194,50 +194,6 @@ const OverviewSparkline: React.FC<{
   );
 };
 
-const RadialArcGauge: React.FC<{ score: number; statusText?: string }> = ({ score, statusText = '+2 this week' }) => {
-  const clampedScore = Math.max(0, Math.min(100, Math.round(score)));
-  const r = 70;
-  const circumference = Math.PI * r;
-  const offset = circumference * (1 - clampedScore / 100);
-
-  return (
-    <div className="health-gauge-box" aria-label={`Health score: ${clampedScore} of 100`}>
-      <svg viewBox="0 0 180 110" className="health-gauge-svg">
-        <defs>
-          <linearGradient id="gaugeGradient" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#2563eb" />
-            <stop offset="100%" stopColor="#8b5cf6" />
-          </linearGradient>
-        </defs>
-        {/* Background track arc */}
-        <path
-          d="M 20 95 A 70 70 0 0 1 160 95"
-          fill="none"
-          stroke="var(--line)"
-          strokeWidth="14"
-          strokeLinecap="round"
-          opacity="0.6"
-        />
-        {/* Active colored arc */}
-        <path
-          d="M 20 95 A 70 70 0 0 1 160 95"
-          fill="none"
-          stroke="url(#gaugeGradient)"
-          strokeWidth="14"
-          strokeLinecap="round"
-          strokeDasharray={`${circumference}`}
-          strokeDashoffset={offset}
-          style={{ transition: 'stroke-dashoffset 0.8s ease' }}
-        />
-      </svg>
-      <div className="health-gauge-center">
-        <div className="health-gauge-score">{clampedScore}</div>
-        <div className="health-gauge-label">of 100 • {statusText}</div>
-      </div>
-    </div>
-  );
-};
-
 // Configuration availability only: a model call and its answer still need to be checked in Chat.
 export function overviewCapabilityState(capabilities: CapabilityItem[], project: ProjectSetupResponse | undefined) {
   const enabled = capabilities.filter(
@@ -441,58 +397,14 @@ export function Overview({
   const telemetry = data.telemetry;
   const dailyRows = useMemo(() => telemetry?.daily || [], [telemetry?.daily]);
 
-  // 1. Success Rate
-  const totalRunsCount = effectiveRuns.length || telemetry?.summary?.runs || 0;
-  const succeededCount = effectiveRuns.filter(r => r.status === 'COMPLETED').length || telemetry?.summary?.succeeded_runs || 0;
-  const successRatePercent = totalRunsCount > 0
-    ? ((succeededCount / totalRunsCount) * 100).toFixed(1)
-    : (effectiveHealth.tool_success_rate ? (effectiveHealth.tool_success_rate * 100).toFixed(1) : (effectiveHealth.status === 'healthy' ? '100.0' : '0.0'));
-
-  // 2. Health Score (0-100)
-  const healthScore = useMemo(() => {
-    let base = effectiveHealth.status === 'healthy' ? 95 : effectiveHealth.status === 'degraded' ? 75 : 40;
-    if (criticalAlertsCount > 0) base -= Math.min(25, criticalAlertsCount * 8);
-    if (warningAlertsCount > 0) base -= Math.min(10, warningAlertsCount * 3);
-    if (failedRunsCount > 0 && totalRunsCount > 0) {
-      const failRatio = failedRunsCount / totalRunsCount;
-      base -= Math.round(failRatio * 20);
-    }
-    return Math.max(10, Math.min(100, base));
-  }, [effectiveHealth.status, criticalAlertsCount, warningAlertsCount, failedRunsCount, totalRunsCount]);
-
-  // 3. Sparkline series (derived purely from real data)
-  const successSparkline = useMemo(() => {
-    if (dailyRows.length >= 2) {
-      return dailyRows.map(d => (d.runs > 0 ? (d.succeeded_runs / d.runs) * 100 : 100));
-    }
-    const currentRate = parseFloat(successRatePercent) || 100;
-    return [currentRate, currentRate];
-  }, [dailyRows, successRatePercent]);
-
-  const agentsSparkline = useMemo(() => {
-    if (dailyRows.length >= 2) {
-      return dailyRows.map(() => activeAgents.length);
-    }
-    return [activeAgents.length, activeAgents.length];
-  }, [dailyRows, activeAgents.length]);
-
-  const failedSparkline = useMemo(() => {
-    if (dailyRows.length >= 2) {
-      return dailyRows.map(d => d.failed_runs || 0);
-    }
-    return [failedRunsCount, failedRunsCount];
-  }, [dailyRows, failedRunsCount]);
-
-  const totalCostUsd = telemetry?.summary?.estimated_cost_usd
-    ?? telemetry?.summary?.known_cost_usd
-    ?? (effectiveRuns.length * 0.05);
-
-  const costSparkline = useMemo(() => {
-    if (dailyRows.length >= 2) {
-      return dailyRows.map(d => d.estimated_cost_usd || 0);
-    }
-    return [totalCostUsd, totalCostUsd];
-  }, [dailyRows, totalCostUsd]);
+  // Use one measured population and keep missing measurements unavailable.
+  const totalRunsCount = telemetry?.summary.runs ?? effectiveRuns.length;
+  const succeededCount = telemetry?.summary.succeeded_runs ?? completedRunsCount;
+  const successRatePercent = totalRunsCount > 0 ? `${((succeededCount / totalRunsCount) * 100).toFixed(1)}%` : '—';
+  const successSparkline = dailyRows.filter(day => day.runs > 0).map(day => day.succeeded_runs / day.runs * 100);
+  const failedSparkline = dailyRows.map(day => day.failed_runs);
+  const totalCostUsd = telemetry?.summary.estimated_cost_usd ?? null;
+  const costSparkline = dailyRows.flatMap(day => day.estimated_cost_usd === null ? [] : [day.estimated_cost_usd]);
 
   // 4. Live Agent Network Topology from Real Harness Workspace
   const harnessNodes = useMemo(() => {
@@ -504,14 +416,7 @@ export function Overview({
           || (!n.parent && !['model', 'skill', 'tool', 'connector', 'parameter', 'policy', 'project_template', 'connector_template'].includes(k));
       });
       if (executionNodes.length > 0) {
-        return executionNodes.map((n, idx) => {
-          const isHealthy = effectiveHealth.status === 'healthy';
-          const isDegraded = !isHealthy && idx === executionNodes.length - 2;
-          const status: 'healthy' | 'degraded' | 'failing' | 'idle' =
-            n.enabled === false ? 'idle'
-            : isDegraded ? 'degraded'
-            : isHealthy ? 'healthy' : 'degraded';
-
+        return executionNodes.map(n => {
           const toolsList: string[] = Array.isArray(n.details?.tools)
             ? (n.details.tools as any[]).map(t => (typeof t === 'string' ? t : t.name || 'tool'))
             : [];
@@ -521,9 +426,9 @@ export function Overview({
             name: n.label || n.id,
             role: String(n.details?.agent_class || n.details?.class_name || n.kind || 'ADK Component'),
             adkClass: String(n.kind || 'LlmAgent'),
-            status,
+            status: n.enabled === false ? 'Disabled' : 'Configured',
             iconType: /join|branch/i.test(n.kind) ? ('branch' as const) : /user|gateway/i.test(n.id) ? ('user' as const) : ('bot' as const),
-            tools: toolsList.length > 0 ? toolsList : ['adk_runtime', 'context_scope'],
+            tools: toolsList,
             metric: `${toolsList.length} tools · ${n.kind}`,
           };
         });
@@ -535,12 +440,12 @@ export function Overview({
       name: a.name || a.id,
       role: a.description || `${a.role || 'ADK'} Specialist`,
       adkClass: a.model || 'LlmAgent (ADK Native)',
-      status: a.status === 'active' ? ('healthy' as const) : ('degraded' as const),
+      status: a.status,
       iconType: 'bot' as const,
       tools: a.tools || [],
       metric: `${a.tools?.length || 0} tools · v${a.version}`,
     }));
-  }, [data.harnessWorkspace?.graph?.nodes, effectiveHealth.status, effectiveAgents]);
+  }, [data.harnessWorkspace?.graph?.nodes, effectiveAgents]);
 
   const selectedNodeData = harnessNodes.find(n => n.id === selectedDagNodeId);
 
@@ -742,7 +647,7 @@ export function Overview({
             <div className="orchestrate-card-header">
               <div className="orchestrate-card-title-group">
                 <h2 className="orchestrate-card-title">Health</h2>
-                <p className="orchestrate-card-subtitle">Real-time SRE platform reliability score</p>
+                <p className="orchestrate-card-subtitle">Last recorded platform health check</p>
               </div>
               <span className={`orchestrate-status-pill ${effectiveHealth.status}`}>
                 <span className="orchestrate-pill-dot" aria-hidden="true" />
@@ -751,12 +656,12 @@ export function Overview({
             </div>
 
             <div className="orchestrate-health-body">
-              <RadialArcGauge score={healthScore} statusText="+2 this week" />
+
 
               <div className="health-stats-list">
                 <div className="health-stat-row">
                   <span className="health-stat-label">Success rate</span>
-                  <span className="health-stat-value">{successRatePercent}%</span>
+                  <span className="health-stat-value">{successRatePercent}</span>
                 </div>
                 <div className="health-stat-row">
                   <span className="health-stat-label">Avg latency</span>
@@ -765,7 +670,7 @@ export function Overview({
                   </span>
                 </div>
                 <div className="health-stat-row">
-                  <span className="health-stat-label">Active workflows</span>
+                  <span className="health-stat-label">Configured capabilities</span>
                   <span className="health-stat-value">{data.capabilities?.length ?? 0}</span>
                 </div>
                 <div className="health-stat-row">
@@ -773,7 +678,7 @@ export function Overview({
                   <span className="health-stat-value">{activeAgents.length}</span>
                 </div>
                 <div className="health-stat-row">
-                  <span className="health-stat-label">Open incidents</span>
+                  <span className="health-stat-label">Open alerts</span>
                   <span className="health-stat-value" style={{ color: openAlerts.length > 0 ? '#ea580c' : undefined }}>
                     {openAlerts.length}
                   </span>
@@ -795,7 +700,7 @@ export function Overview({
                 </div>
                 <div className="orchestrate-kpi-mid">
                   <div>
-                    <div className="orchestrate-kpi-stat">{successRatePercent}%</div>
+                    <div className="orchestrate-kpi-stat">{successRatePercent}</div>
                     <div className="orchestrate-kpi-trend positive">
                       <span>•</span> {totalRunsCount} recorded runs
                     </div>
@@ -824,7 +729,7 @@ export function Overview({
                     </div>
                   </div>
                   <div className="orchestrate-kpi-sparkline-box">
-                    <OverviewSparkline data={agentsSparkline} color="#8b5cf6" gradientId="spark-act-agents" />
+                    <span>Configured agents</span>
                   </div>
                 </div>
               </div>
@@ -865,10 +770,10 @@ export function Overview({
                 <div className="orchestrate-kpi-mid">
                   <div>
                     <div className="orchestrate-kpi-stat">
-                      ${totalCostUsd.toFixed(2)}
+                      {totalCostUsd === null ? 'Not fully priced' : `$${totalCostUsd.toFixed(2)}`}
                     </div>
                     <div className="orchestrate-kpi-trend positive">
-                      <span>•</span> Live telemetry token estimate
+                      <span>•</span> Recorded model usage and saved prices
                     </div>
                   </div>
                   <div className="orchestrate-kpi-sparkline-box">
@@ -884,9 +789,9 @@ export function Overview({
         <div className="orchestrate-network-card">
           <div className="orchestrate-card-header" style={{ marginBottom: '14px' }}>
             <div className="orchestrate-card-title-group">
-              <h2 className="orchestrate-card-title">Live agent network</h2>
+              <h2 className="orchestrate-card-title">Configured harness</h2>
               <p className="orchestrate-card-subtitle">
-                {data.capabilities?.length ?? 0} workflows • {activeAgents.length} agents • {openAlerts.length} open incidents • live ADK harness
+                {data.capabilities?.length ?? 0} workflows • {activeAgents.length} agents • {openAlerts.length} open incidents • saved ADK configuration
               </p>
             </div>
 
@@ -914,162 +819,14 @@ export function Overview({
             </div>
           </div>
 
-          <div className="network-legend-strip">
-            <span className="network-legend-item">
-              <span className="legend-dot healthy" /> Healthy
-            </span>
-            <span className="network-legend-item">
-              <span className="legend-dot degraded" /> Degraded
-            </span>
-            <span className="network-legend-item">
-              <span className="legend-dot failing" /> Failing
-            </span>
-            <span className="network-legend-item">
-              <span className="legend-dot idle" /> Idle
-            </span>
-          </div>
-
-          {/* Interactive DAG Stage */}
-          <div className="network-dag-stage">
-            {harnessNodes.length > 0 ? (
-              <>
-                {/* SVG Connecting Wires Layer with Animated Pulse Dots */}
-                <svg className="network-dag-svg" viewBox="0 0 900 240" preserveAspectRatio="none">
-                  <defs>
-                    <marker id="net-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-                      <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--line-strong)" />
-                    </marker>
-                  </defs>
-
-                  {/* Dynamic Wire 1: Col 1 -> Col 2 */}
-                  <path d="M 180 120 L 260 120" stroke="var(--line-strong)" strokeWidth="2" fill="none" markerEnd="url(#net-arrow)" />
-                  <circle r="3" fill="#2563eb">
-                    <animateMotion dur="2.4s" repeatCount="indefinite" path="M 180 120 L 260 120" />
-                  </circle>
-
-                  {/* Dynamic Wire 2: Col 2 -> Col 3 (upper) */}
-                  <path d="M 420 120 C 470 120, 470 50, 520 50" stroke="var(--line-strong)" strokeWidth="2" fill="none" markerEnd="url(#net-arrow)" />
-                  <circle r="3" fill="#10b981">
-                    <animateMotion dur="2.8s" repeatCount="indefinite" path="M 420 120 C 470 120, 470 50, 520 50" />
-                  </circle>
-
-                  {/* Dynamic Wire 3: Col 2 -> Col 3 (lower) */}
-                  <path d="M 420 120 C 470 120, 470 190, 520 190" stroke="var(--line-strong)" strokeWidth="2" fill="none" markerEnd="url(#net-arrow)" />
-                  <circle r="3" fill="#10b981">
-                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M 420 120 C 470 120, 470 190, 520 190" />
-                  </circle>
-
-                  {/* Dynamic Wire 4: Col 3 (upper) -> Col 4 */}
-                  <path d="M 680 50 C 730 50, 730 120, 780 120" stroke="var(--line-strong)" strokeWidth="2" fill="none" markerEnd="url(#net-arrow)" />
-                  <circle r="3" fill="#2563eb">
-                    <animateMotion dur="2.8s" repeatCount="indefinite" path="M 680 50 C 730 50, 730 120, 780 120" />
-                  </circle>
-
-                  {/* Dynamic Wire 5: Col 3 (lower) -> Col 4 */}
-                  <path d="M 680 190 C 730 190, 730 120, 780 120" stroke="var(--line-strong)" strokeWidth="2" fill="none" markerEnd="url(#net-arrow)" />
-                  <circle r="3" fill="#2563eb">
-                    <animateMotion dur="2.6s" repeatCount="indefinite" path="M 680 190 C 730 190, 730 120, 780 120" />
-                  </circle>
-                </svg>
-
-                {/* DOM Node Layer: Distributed into Stages */}
-                <div className="network-nodes-layer">
-                  {/* Col 1: Ingress / Root Orchestrator */}
-                  <div className="network-column">
-                    {harnessNodes.slice(0, 1).map(node => (
-                      <div
-                        key={node.id}
-                        className={`network-node-chip ${node.status} ${selectedDagNodeId === node.id ? 'active' : ''}`}
-                        onClick={() => setSelectedDagNodeId(selectedDagNodeId === node.id ? null : node.id)}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className={`network-node-icon ${node.iconType === 'branch' ? 'purple' : 'blue'}`}>
-                          {node.iconType === 'branch' ? <GitBranch size={15} /> : <Bot size={15} />}
-                        </div>
-                        <div className="network-node-texts">
-                          <span className="network-node-name" title={node.name}>{node.name}</span>
-                          <span className="network-node-metric">{node.metric}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Col 2: Coordinator / Triage Stage */}
-                  <div className="network-column">
-                    {(harnessNodes.length > 2 ? harnessNodes.slice(1, 2) : harnessNodes.slice(0, 1)).map(node => (
-                      <div
-                        key={node.id}
-                        className={`network-node-chip ${node.status} ${selectedDagNodeId === node.id ? 'active' : ''}`}
-                        onClick={() => setSelectedDagNodeId(selectedDagNodeId === node.id ? null : node.id)}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className="network-node-icon green">
-                          <Bot size={15} />
-                        </div>
-                        <div className="network-node-texts">
-                          <span className="network-node-name" title={node.name}>{node.name}</span>
-                          <span className="network-node-metric">{node.metric}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Col 3: Specialists Stage */}
-                  <div className="network-column">
-                    {(harnessNodes.length > 3
-                      ? harnessNodes.slice(2, Math.min(5, harnessNodes.length - 1))
-                      : harnessNodes.slice(1, 3)
-                    ).map(node => (
-                      <div
-                        key={node.id}
-                        className={`network-node-chip ${node.status} ${selectedDagNodeId === node.id ? 'active' : ''}`}
-                        onClick={() => setSelectedDagNodeId(selectedDagNodeId === node.id ? null : node.id)}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className={`network-node-icon ${node.status === 'degraded' ? 'amber' : 'green'}`}>
-                          {node.iconType === 'branch' ? <GitBranch size={15} /> : <Bot size={15} />}
-                        </div>
-                        <div className="network-node-texts">
-                          <span className="network-node-name" title={node.name}>{node.name}</span>
-                          <span className="network-node-metric">{node.metric}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Col 4: Final RCA Synthesis */}
-                  <div className="network-column">
-                    {harnessNodes.slice(-1).map(node => (
-                      <div
-                        key={node.id}
-                        className={`network-node-chip ${node.status} ${selectedDagNodeId === node.id ? 'active' : ''}`}
-                        onClick={() => setSelectedDagNodeId(selectedDagNodeId === node.id ? null : node.id)}
-                        role="button"
-                        tabIndex={0}
-                      >
-                        <div className="network-node-icon blue">
-                          <Bot size={15} />
-                        </div>
-                        <div className="network-node-texts">
-                          <span className="network-node-name" title={node.name}>{node.name}</span>
-                          <span className="network-node-metric">{node.metric}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="network-empty-state">
-                <p>No active agent components found in current project scope.</p>
-                <button type="button" className="btn btn-primary" onClick={() => onNavigate('harness-library')}>
-                  Open Studio Workbench
-                </button>
-              </div>
-            )}
+          <p className="orchestrate-card-subtitle">Select a configured component to inspect it. Recorded executions are available in investigations.</p>
+          <div className="network-component-list">
+            {harnessNodes.length ? harnessNodes.map(node => (
+              <button key={node.id} type="button" className="network-node-chip" aria-pressed={selectedDagNodeId === node.id} onClick={() => setSelectedDagNodeId(selectedDagNodeId === node.id ? null : node.id)}>
+                <Bot size={15} />
+                <span className="network-node-texts"><strong>{node.name}</strong><span>{node.metric} · {node.status}</span></span>
+              </button>
+            )) : <p>No configured agent components are available in this project.</p>}
           </div>
 
           {/* Real Node Inspector Callout if a node is clicked */}
@@ -1139,38 +896,7 @@ export function Overview({
                   </div>
                 ))
               ) : (
-                <>
-                  <div className="incident-row-item">
-                    <div className="incident-left-group">
-                      <span className="incident-badge-tag critical">CRITICAL</span>
-                      <span className="incident-title-text">Service Auth Token Expiration Warning</span>
-                    </div>
-                    <div className="incident-right-meta">
-                      <span>12m ago</span>
-                      <ArrowRight size={12} />
-                    </div>
-                  </div>
-                  <div className="incident-row-item">
-                    <div className="incident-left-group">
-                      <span className="incident-badge-tag warning">WARNING</span>
-                      <span className="incident-title-text">Splunk Connector Query Budget 80% Exceeded</span>
-                    </div>
-                    <div className="incident-right-meta">
-                      <span>45m ago</span>
-                      <ArrowRight size={12} />
-                    </div>
-                  </div>
-                  <div className="incident-row-item">
-                    <div className="incident-left-group">
-                      <span className="incident-badge-tag info">INFO</span>
-                      <span className="incident-title-text">Kafka Ingestion Lag Normalized</span>
-                    </div>
-                    <div className="incident-right-meta">
-                      <span>2h ago</span>
-                      <ArrowRight size={12} />
-                    </div>
-                  </div>
-                </>
+                <p>{errors.alerts ? 'Alerts could not be loaded.' : loading ? 'Loading alerts…' : 'No open alerts in the loaded records.'}</p>
               )}
             </div>
           </div>
@@ -1179,7 +905,7 @@ export function Overview({
           <div className="orchestrate-card">
             <div className="orchestrate-card-header">
               <div className="orchestrate-card-title-group">
-                <h2 className="orchestrate-card-title">Cost by agent</h2>
+                <h2 className="orchestrate-card-title">Recorded cost by model</h2>
                 <p className="orchestrate-card-subtitle">LLM compute and provider token economics</p>
               </div>
               <button
@@ -1193,21 +919,15 @@ export function Overview({
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {[
-                { name: 'Gemini 1.5 Pro (Root Orchestrator)', cost: Math.round(totalCostUsd * 0.5), share: 50 },
-                { name: 'Gemini 1.5 Flash (Triage & Correlation)', cost: Math.round(totalCostUsd * 0.34), share: 34 },
-                { name: 'Text Embeddings & OCR Parser', cost: Math.round(totalCostUsd * 0.16), share: 16 },
-              ].map(item => (
-                <div key={item.name} className="cost-bar-item">
+              {telemetry?.by_model.length ? telemetry.by_model.map(item => (
+                <div key={item.model} className="cost-bar-item">
                   <div className="cost-bar-head">
-                    <span className="cost-bar-name">{item.name}</span>
-                    <span className="cost-bar-val">${item.cost.toLocaleString()} ({item.share}%)</span>
+                    <span className="cost-bar-name">{item.model}</span>
+                    <span className="cost-bar-val">{item.estimated_cost_usd === null ? 'Not fully priced' : `$${item.estimated_cost_usd.toFixed(2)}`}</span>
                   </div>
-                  <div className="cost-bar-track">
-                    <div className="cost-bar-fill" style={{ width: `${item.share}%` }} />
-                  </div>
+                  <small>{item.priced_calls} of {item.model_calls} calls priced</small>
                 </div>
-              ))}
+              )) : <p>No recorded model costs are available.</p>}
             </div>
           </div>
         </div>

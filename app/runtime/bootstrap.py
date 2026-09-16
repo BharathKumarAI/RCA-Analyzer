@@ -47,6 +47,9 @@ def application_lifespan(settings=None, *, connectors=None, model_factory=None, 
             )
             cleanup.push_async_callback(api.state.store.aclose)
             await api.state.store.initialize()
+            from app.persistence.triage import TriageStore
+            api.state.triage_store = TriageStore(api.state.store.engine)
+            await api.state.triage_store.initialize()
             from app.persistence.run_events import RunEventStore
             api.state.run_events = RunEventStore(api.state.store.engine)
             await api.state.run_events.initialize()

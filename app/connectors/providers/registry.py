@@ -135,6 +135,7 @@ _RUNTIME_AUTH_TYPES = {
     "qtest": {"bearer_token": {"token_secret_ref"}},
     "gitlab": {"api_key_header": {"api_key_secret_ref"}},
     "kubernetes": {"k8s_service_account_token": {"token_secret_ref"}},
+    "oracle": {"database_password": {"database_username", "password_secret_ref"}},
     "kafka": {"sasl_scram_tls": {"username", "password_secret_ref"}},
     "unix": {
         "ssh_private_key": {"username", "private_key_ref", "known_hosts_ref"},
@@ -149,6 +150,7 @@ _RUNTIME_SCOPE_FIELDS = {
     "qtest": "scope",
     "gitlab": "scope",
     "kubernetes": "scope",
+    "oracle": "scope",
     "kafka": "topic",
     "unix": "path",
 }
@@ -292,9 +294,6 @@ def resolve_connector_provider(
     Resolution path:
     Project -> Instance -> Environment Binding -> Authorized Resource -> Credential Binding -> Provider -> Operation
     """
-    if system_name == "oracle":
-        raise ValueError("Oracle connector execution is blocked by policy under repository guidance.")
-
     if instance_definition is not None:
         if not isinstance(instance_definition, dict) or not instance_definition:
             raise ValueError("A saved project connector instance is required")
@@ -305,8 +304,6 @@ def resolve_connector_provider(
         if "enabled" in instance_definition and instance_definition.get("enabled") is not True:
             raise ValueError("Connector instance is not enabled")
         template_id = instance_definition.get("provider_adapter_id") or instance_definition.get("template_id", system_name)
-        if template_id == "oracle":
-            raise ValueError("Oracle connector execution is blocked by policy under repository guidance.")
         if template_id not in NATIVE_FACTORIES:
             raise ValueError(f"No native provider is registered for connector '{template_id}'")
         resolved = _resolve_instance_binding(instance_definition, environment_id)
@@ -321,6 +318,10 @@ def resolve_connector_provider(
         credentials = resolved.get("credentials", {})
         _validate_runtime_auth(template_id, resolved, credentials)
         timeout_s = float(instance_definition.get("timeout_seconds", 10))
+        limits = {
+            "max_results": int(resolved.get("max_results", 100)),
+            "max_response_bytes": int(resolved.get("max_response_bytes", 1048576)),
+        }
 
         resolved_secrets = _resolve_instance_secrets(credentials, allowed_secret_references)
         _require_runtime_values(template_id, resolved, credentials, resolved_secrets)
@@ -360,7 +361,19 @@ def resolve_connector_provider(
                 raise ValueError(f"{template_id} resource scope is required")
             factory = NATIVE_FACTORIES[template_id]
             token = resolved_secrets.get("token_secret_ref") or resolved_secrets.get("api_key_secret_ref", "")
-            return factory(endpoint=endpoint, scope=scope, token=token, timeout_s=timeout_s)
+            return factory(endpoint=endpoint, scope=scope, token=token, timeout_s=timeout_s, **limits)
+        elif template_id == "oracle":
+            scope = resolved.get("external_resource") or resolved.get("scope")
+            if not scope:
+                raise ValueError("Oracle resource scope is required")
+            return OracleConnector(
+                dsn=endpoint, scope=scope,
+                user=credentials.get("database_username", ""),
+                password=resolved_secrets.get("password_secret_ref", ""),
+                driver_mode=resolved.get("driver_mode", "thin"),
+                connection_format=resolved.get("connection_format", "dsn"),
+                timeout_s=timeout_s, **limits,
+            )
         elif template_id == "kafka":
             topic = resolved.get("topic") or resolved.get("external_resource")
             if not topic:
@@ -370,7 +383,7 @@ def resolve_connector_provider(
                 username=credentials.get("username", ""),
                 password=resolved_secrets.get("password_secret_ref", ""),
                 topic_filter=resolved.get("topic_filter"), timeout_s=timeout_s,
-                max_results=int(instance_definition.get("max_results", 100)),
+                **limits,
             )
         elif template_id == "unix":
             path = resolved.get("path") or resolved.get("external_resource")
@@ -386,6 +399,7 @@ def resolve_connector_provider(
                 private_key_passphrase=resolved_secrets.get("private_key_passphrase_ref", ""),
                 auth_method=resolved.get("auth_type"),
                 timeout_s=timeout_s,
+                **limits,
             )
 
     if active_connectors and system_name in active_connectors:

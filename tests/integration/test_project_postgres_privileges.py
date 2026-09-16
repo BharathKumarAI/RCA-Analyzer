@@ -46,7 +46,7 @@ async def test_project_creation_and_chat_messages_with_restricted_database_role(
             await connection.exec_driver_sql(f'GRANT USAGE, SELECT ON SEQUENCE governance.parameter_audit_event_id_seq TO "{role}"')
             await connection.exec_driver_sql(f'GRANT SELECT, INSERT ON runtime.chats TO "{role}"')
             for migration in ("005_configuration_save_privileges.sql", "025_chat_messages.sql", "026_project_workspaces.sql"):
-                for statement in Path("migrations", migration).read_text().split("\n-- statement\n"):
+                for statement in Path("migrations", "history", migration).read_text().split("\n-- statement\n"):
                     if "DO $$ BEGIN" in statement:
                         await connection.exec_driver_sql(statement.replace("rca_app", role))
 

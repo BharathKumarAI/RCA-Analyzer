@@ -9,6 +9,8 @@ import type {
   TicketComment,
   CalibrationFeedback,
   RcaMethodologyData,
+  RcaMethod,
+  RcaAnalysis,
 } from '../types/triage';
 
 export async function fetchLiveBoard(params?: {
@@ -64,7 +66,7 @@ export async function executeToolProposal(
 export async function promoteProposalEvidence(
   proposalId: string,
   summary: string,
-  confidence = 0.90
+  confidence = 0
 ): Promise<InvestigationEvidence> {
   return request<InvestigationEvidence>(
     `/api/v1/triage/tool-proposals/${encodeURIComponent(proposalId)}/promote-evidence`,
@@ -103,8 +105,8 @@ export async function updateFindingStatus(
 
 export async function approveGovernedAction(
   actionId: string
-): Promise<{ status: string; action_id: string; executed_at: number }> {
-  return request<{ status: string; action_id: string; executed_at: number }>(
+): Promise<{ status: string; action_id: string; executed_at: number | null }> {
+  return request<{ status: string; action_id: string; executed_at: number | null }>(
     `/api/v1/triage/actions/${encodeURIComponent(actionId)}/approve`,
     { method: 'POST' }
   );
@@ -193,3 +195,19 @@ export async function fetchTicketRca(ticketId: string): Promise<RcaMethodologyDa
   return request<RcaMethodologyData>(`/api/v1/triage/tickets/${encodeURIComponent(ticketId)}/rca`);
 }
 
+
+export async function importRunToTriage(runId: string): Promise<{ ticket_id: string }> {
+  return request(`/api/v1/triage/runs/${encodeURIComponent(runId)}/import`, { method: 'POST' });
+}
+
+export async function analyzeTicketRca(
+  ticketId: string,
+  method: RcaMethod,
+  idempotencyKey: string
+): Promise<RcaAnalysis & { method: RcaMethod }> {
+  return request(`/api/v1/triage/tickets/${encodeURIComponent(ticketId)}/rca`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: { method },
+  });
+}

@@ -119,7 +119,7 @@ Not every administrator setting uses independent review. Ordinary revision-check
 
 Sources: [provider resolution](../app/connectors/providers/registry.py), [field governance](../app/configuration/connector_governance.py), [REST clients](../app/connectors/providers/evidence.py), [infrastructure clients](../app/connectors/providers/infrastructure.py), [tool governance](../app/runtime/governance.py).
 
-Some providers retain deployment-environment configuration paths. This does not justify assuming every catalog entry already has instance-bound credentials in a target deployment. Verify the actual resolved path and known Oracle/template gaps in the [connector handbook](connectors.md#runtime-resolution).
+Some providers retain deployment-environment configuration paths. This does not justify assuming every catalog entry already has instance-bound credentials in a target deployment. Verify the actual resolved path and deployment adapter activation requirements in the [connector handbook](connectors.md#runtime-resolution).
 
 ## Files and untrusted content
 
@@ -146,12 +146,12 @@ Logs, original files and provider infrastructure still require deployment access
 ## Known security and implementation limits
 
 - The main governed run path enforces capability, provider and evidence boundaries; do not assume every newer workspace endpoint already routes through it.
-- Triage proposal execution currently returns synthetic result content, and its mutation handlers do not consistently use the main run path's explicit role/independent-review checks. Authentication alone is not an equivalent control. These endpoints need separate reconciliation before production claims.
-- Oracle remains blocked by old guards despite the desired fixed read-only diagnostic policy.
+- Triage follow-up execution uses the governed run path, current capability authorization and saved connector selections. Local workspace writes remain subject to server-side project roles. Local approval never authorizes source-system writes; custom-agent definitions retain their independent-review requirement.
+- Oracle supports fixed bounded session diagnostics with saved instance credentials and an authorized schema. Arbitrary SQL remains forbidden; source grants and connection tests still require target verification.
 - There is no durable background worker or restart recovery contract, and no automatic all-project retention loop.
 - Passing local tests verifies exercised contracts; target SSO, secrets, database grants, source permissions and restore behavior need deployment verification.
 
-Sources: [triage handlers](../app/api/routes/triage.py), [main run API](../app/api/routes/runs.py), [connector resolver](../app/connectors/providers/registry.py), [cleanup](../scripts/cleanup.py). These are documented gaps; this documentation work does not change their runtime behavior.
+Sources: [triage handlers](../app/api/routes/triage.py), [main run API](../app/api/routes/runs.py), [connector resolver](../app/connectors/providers/registry.py), [cleanup](../scripts/cleanup.py). These are operating boundaries; source changes and isolated tests do not certify a target deployment.
 
 ## OKF admission and trust
 

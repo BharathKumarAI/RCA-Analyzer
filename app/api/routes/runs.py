@@ -172,7 +172,7 @@ async def _stream_run(request: Request, principal: Principal, req: RunExecutionR
                         ):
                             yield _sse("trace", trace_event, trace_event["sequence"])
                             trace_sequence = trace_event["sequence"]
-                    if current.status in TERMINAL_STATUSES:
+                    if current.status in TERMINAL_STATUSES and task.done():
                         yield _sse("complete", current.model_dump_json(), current.revision)
                         return
 
@@ -188,7 +188,7 @@ async def _stream_run(request: Request, principal: Principal, req: RunExecutionR
                         yield _sse("error", {"detail": detail})
                         return
                     if run_id_ref.get("run_id"):
-                        await asyncio.sleep(0)
+                        await asyncio.sleep(request.app.state.settings.progress_poll_seconds)
                     else:
                         return
         finally:

@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 
-from collections import defaultdict
+from weakref import WeakValueDictionary
 
 from sqlalchemy import (
     Column,
@@ -50,7 +50,7 @@ class RunEventStore:
 
     def __init__(self, engine: AsyncEngine):
         self.engine = engine
-        self._run_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._run_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     async def initialize(self):
         """Create the SQLite table; PostgreSQL is migration-managed."""
@@ -95,7 +95,7 @@ class RunEventStore:
         now = time.time()
         # ponytail: one per-run process lock plus a DB row update; replace the
         # in-process lock only if multiple writers make this a measured bottleneck.
-        async with self._run_locks[run_id]:
+        async with self._run_locks.setdefault(run_id, asyncio.Lock()):
             async with self.engine.begin() as connection:
                 locked = await connection.execute(
                     update(runs)

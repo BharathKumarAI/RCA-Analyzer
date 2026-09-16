@@ -1,7 +1,6 @@
 """Authorized, bounded platform-level metrics across tenant projects."""
 
 from collections import defaultdict
-from datetime import datetime, time, timedelta, timezone
 import json
 
 from sqlalchemy import cast, func, select
@@ -14,8 +13,10 @@ from app.persistence.telemetry import (
     call_cost,
     durations,
     number,
+    retained_trace_gaps,
     Measurements,
     TERMINAL_MODEL_EVENTS,
+    time_bounds,
 )
 from app.persistence.triage import triage_tickets
 from app.runtime.run_contract import TERMINAL_STATUSES
@@ -25,10 +26,7 @@ PLATFORM_EVENT_LIMIT = 50000
 
 
 async def platform_metrics(engine, principal, start, end, *, mode: str = "live"):
-    start_at = datetime.combine(start, time.min, timezone.utc).timestamp()
-    end_at = datetime.combine(end + timedelta(days=1), time.min, timezone.utc).timestamp()
-    if end < start or (end - start).days > 365:
-        raise ValueError("Choose an inclusive date range of 1 to 366 days")
+    start_at, end_at = time_bounds(start, end)
 
     def contract_field(name):
         if engine.dialect.name == "postgresql":
@@ -44,19 +42,14 @@ async def platform_metrics(engine, principal, start, end, *, mode: str = "live")
     )
 
     async with engine.connect() as connection:
-        # 1. Tenant project catalog (with graceful fallback if table not yet initialized)
-        project_names = {}
-        try:
-            catalog_rows = (
-                await connection.execute(
-                    select(project_catalog.c.project_id, project_catalog.c.name).where(
-                        project_catalog.c.tenant_id == principal.tenant_id
-                    )
+        catalog_rows = (
+            await connection.execute(
+                select(project_catalog.c.project_id, project_catalog.c.name).where(
+                    project_catalog.c.tenant_id == principal.tenant_id
                 )
-            ).mappings().all()
-            project_names = {row["project_id"]: row["name"] for row in catalog_rows}
-        except Exception:
-            project_names = {}
+            )
+        ).mappings().all()
+        project_names = {row["project_id"]: row["name"] for row in catalog_rows}
 
         # 2. Count matching runs and fetch up to limit
         matched_runs = await connection.scalar(select(func.count()).select_from(runs).where(*run_scope)) or 0
@@ -89,25 +82,22 @@ async def platform_metrics(engine, principal, start, end, *, mode: str = "live")
                 )
             ).mappings().all()
 
-        # 4. Active tickets per project (with graceful fallback)
-        active_tickets_by_proj = {}
-        try:
-            active_tickets_rows = (
-                await connection.execute(
-                    select(triage_tickets.c.project_id, func.count().label("active_count"))
-                    .where(
-                        triage_tickets.c.tenant_id == principal.tenant_id,
-                        triage_tickets.c.work_state != "RESOLVED",
-                    )
-                    .group_by(triage_tickets.c.project_id)
+        active_tickets_rows = (
+            await connection.execute(
+                select(triage_tickets.c.project_id, func.count().label("active_count"))
+                .where(
+                    triage_tickets.c.tenant_id == principal.tenant_id,
+                    triage_tickets.c.work_state != "RESOLVED",
                 )
-            ).mappings().all()
-            active_tickets_by_proj = {row["project_id"]: row["active_count"] for row in active_tickets_rows}
-        except Exception:
-            active_tickets_by_proj = {}
+                .group_by(triage_tickets.c.project_id)
+            )
+        ).mappings().all()
+        active_tickets_by_proj = {row["project_id"]: row["active_count"] for row in active_tickets_rows}
 
     event_truncated = len(events) > PLATFORM_EVENT_LIMIT
     events = events[:PLATFORM_EVENT_LIMIT]
+    pruned_traces = retained_trace_gaps(events)
+    event_truncated = event_truncated or bool(pruned_traces)
 
     # Aggregate by project and tenant total
     tenant_total = Measurements()
@@ -196,6 +186,9 @@ async def platform_metrics(engine, principal, start, end, *, mode: str = "live")
         "filters": {
             "start": start.isoformat(),
             "end": end.isoformat(),
+            "start_at": start_at,
+            "end_at": end_at,
+            "end_exclusive": True,
             "mode": mode,
         },
         "totals": {
@@ -213,6 +206,7 @@ async def platform_metrics(engine, principal, start, end, *, mode: str = "live")
             "truncated": event_truncated or matched_runs > PLATFORM_RUN_LIMIT,
             "legacy_runs": len(legacy_runs),
             "unfinished_model_calls": unfinished,
+            "runs_with_truncated_trace": pruned_traces,
             "notes": [
                 "Cross-project totals strictly enforce tenant boundary.",
                 "Platform run percentiles are computed from raw observation events, never averaged across projects.",

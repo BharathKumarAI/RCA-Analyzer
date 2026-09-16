@@ -608,6 +608,13 @@ class ParameterStore:
         if tool == "itsm" and name == "custom_jql":
             if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 and c not in "\n\t\r" for c in value):
                 raise ValueError("Custom JQL must be text of at most 4096 characters")
+        if tool == "triage" and name == "sla_targets_seconds":
+            if not isinstance(value, dict) or any(
+                not isinstance(priority, str) or not re.fullmatch(r"[A-Z0-9_-]{1,16}", priority)
+                or type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds <= 0
+                for priority, seconds in value.items()
+            ):
+                raise ValueError("SLA targets must map priority codes to positive finite seconds")
         if tool == "runtime":
             if name not in RUNTIME_FIELDS:
                 raise ValueError("This setting is deployment-managed")

@@ -95,16 +95,8 @@ instruction: Investigate the supplied incident evidence and report bounded findi
           description: entry.definition.description || '',
           status: isEffective ? 'active' : ('draft' as any),
           model: entry.definition.model_profile || 'balanced-investigation',
-          temperature: 0,
-          thinking_budget: 0,
-          max_steps: 0,
           tools: entry.definition.tools || [],
-          permissions: [],
-          rag_sources: [],
           prompt: entry.definition.instruction || '',
-          accuracy: 0,
-          hallucination_rate: 0,
-          avg_latency_sec: 0,
           version: entry.definition.version || '1.0.0',
           updated_at: '',
           author: 'Platform Catalog',
@@ -271,7 +263,7 @@ instruction: Investigate the supplied incident evidence and report bounded findi
           </h1>
           <p className="hero-lede">
             Declarative ADK specialist agent configurations, dual-custody review gates, and cryptographic content-hash integrity verification.
-            Fully synced across the platform catalog and scoped project inheritance.
+            Browse the saved platform catalog and this project's effective definitions.
           </p>
           <div className="hero-meta-strip">
             <span className="hero-stat-chip highlight">
@@ -375,9 +367,9 @@ instruction: Investigate the supplied incident evidence and report bounded findi
             <Shield size={18} />
           </div>
           <div className="agents-stat-info">
-            <span className="agents-stat-label">Integrity State</span>
+            <span className="agents-stat-label">Integrity Tracking</span>
             <div className="agents-stat-value-row">
-              <span className="agents-stat-value" style={{ fontSize: 16 }}>SHA-256 Verified</span>
+              <span className="agents-stat-value" style={{ fontSize: 16 }}>Content hashes</span>
             </div>
             <span className="agents-stat-subtext" style={{ marginTop: 2 }}>
               Immutable configuration hash

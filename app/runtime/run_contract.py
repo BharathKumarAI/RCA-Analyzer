@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.identity.principals import UserPrincipal
+from app.runtime.visuals import Visual, visual_citations
 
 
 def content_hash(value: object) -> str:
@@ -92,9 +93,14 @@ class InvestigationResult(BaseModel):
         "summary"
     )
     follow_up_questions: list[str] = Field(default_factory=list, max_length=8)
+    visuals: list[Visual] = Field(default_factory=list, max_length=6)
 
     @model_validator(mode="after")
     def grounded_shape(self):
+        if len({visual.id for visual in self.visuals}) != len(self.visuals):
+            raise ValueError("Visual IDs must be unique")
+        if len(json.dumps([visual.model_dump(mode="json") for visual in self.visuals], ensure_ascii=False).encode()) > 65536:
+            raise ValueError("Visual data exceeds the 64 KiB result limit")
         if self.outcome == "FINDINGS" and (
             not self.findings or any(not f.evidence_ids for f in self.findings)
         ):
@@ -102,6 +108,13 @@ class InvestigationResult(BaseModel):
         if self.outcome == "INSUFFICIENT_EVIDENCE" and self.findings:
             raise ValueError("Insufficient evidence cannot contain confirmed findings")
         return self
+
+    def validate_evidence(self, valid_ids: set[str]) -> None:
+        citations = {evidence_id for finding in self.findings for evidence_id in finding.evidence_ids}
+        for visual in self.visuals:
+            citations.update(visual_citations(visual))
+        if not citations.issubset(valid_ids):
+            raise ValueError("Synthesis cited unknown evidence")
 
 
 RunStatus = Literal[
@@ -119,6 +132,7 @@ TERMINAL_STATUSES = {
 
 class RunResponse(BaseModel):
     chat_id: str | None = None
+    incident_id: str | None = None
     prompt: str = ""
     run_id: str
     status: RunStatus

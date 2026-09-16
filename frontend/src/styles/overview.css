@@ -2210,3 +2210,7 @@
   transition: width 0.4s ease;
 }
 
+
+.network-component-list { display: flex; flex-wrap: wrap; gap: 12px; padding-block: 16px; }
+.network-component-list .network-node-chip { position: static; min-width: 0; max-width: 100%; text-align: start; }
+.network-component-list .network-node-texts { overflow-wrap: anywhere; }

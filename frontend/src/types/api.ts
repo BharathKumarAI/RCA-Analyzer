@@ -1,5 +1,7 @@
 export type SystemRole = 'PLATFORM_ADMIN' | 'PROJECT_OWNER' | 'PROJECT_MANAGER' | 'PROJECT_ANALYST' | 'PROJECT_VIEWER' | 'GENERIC_USER';
 
+export type RunConnectorSelections = Record<string, { instance_id: string; environment_id?: string }>;
+
 export interface Principal {
   subject: string;
   roles: SystemRole[];
@@ -82,16 +84,8 @@ export interface AgentConfiguration {
   description: string;
   status: 'active' | 'pending' | 'draft' | 'deprecated';
   model: string;
-  temperature: number;
-  thinking_budget: number;
-  max_steps: number;
   tools: string[];
-  permissions: string[];
-  rag_sources: string[];
   prompt: string;
-  accuracy: number;
-  hallucination_rate: number;
-  avg_latency_sec: number;
   version: string;
   updated_at: string;
   author?: string;
@@ -423,9 +417,9 @@ export interface RuntimeConfig {
 
 export interface RunStage {
   name: string;
-  status: 'completed' | 'running' | 'queued' | 'skipped';
+  status: 'completed' | 'running' | 'queued' | 'skipped' | 'unconfirmed';
   agent: string;
-  duration_ms: number;
+  duration_ms?: number;
 }
 
 export interface Run {
@@ -610,9 +604,6 @@ export interface SystemHealth {
   mode: 'demo' | 'live';
   active_runs: number;
   total_runs: number;
-  mttr_minutes: number;
-  tool_success_rate: number;
-  active_agents_count: number;
 }
 
 export interface SystemDiagnostics {

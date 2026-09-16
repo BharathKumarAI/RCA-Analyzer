@@ -1,4 +1,6 @@
-export type Priority = 'P1' | 'P2' | 'P3' | 'P4';
+import type { Run } from './api';
+
+export type Priority = 'P1' | 'P2' | 'P3' | 'P4' | 'UNKNOWN';
 
 export type WorkState =
   | 'NEW'
@@ -9,7 +11,7 @@ export type WorkState =
   | 'WAITING'
   | 'RESOLVED';
 
-export type RiskState = 'BREACHED' | 'AT_RISK' | 'HEALTHY';
+export type RiskState = 'BREACHED' | 'AT_RISK' | 'HEALTHY' | 'UNKNOWN';
 
 export interface TriageTicket {
   ticket_id: string;
@@ -35,13 +37,13 @@ export interface SlaState {
   ticket_id: string;
   priority: Priority;
   priority_rank: number;
-  sla_target_seconds: number;
+  sla_target_seconds: number | null;
   sla_target_formatted: string;
   sla_consumed_seconds: number;
   sla_consumed_formatted: string;
-  sla_remaining_seconds: number;
+  sla_remaining_seconds: number | null;
   sla_remaining_formatted: string;
-  sla_utilization: number;
+  sla_utilization: number | null;
   risk_state: RiskState;
   ticket_age_seconds: number;
   ticket_age_formatted: string;
@@ -76,11 +78,14 @@ export interface Hypothesis {
 }
 
 export interface AutoTriageSummary {
-  hypotheses: Hypothesis[];
-  failure_boundary: string;
-  executive_rca: string;
-  confidence: number;
-  recommendation: string;
+  summary?: string;
+  recommended_actions?: string[];
+  uncertainties?: string[];
+  hypotheses?: Hypothesis[];
+  failure_boundary?: string;
+  executive_rca?: string;
+  confidence?: number;
+  recommendation?: string;
 }
 
 export interface DeltaChange {
@@ -111,7 +116,7 @@ export interface ToolProposal {
   ticket_id: string;
   tenant_id: string;
   project_id: string;
-  capability: 'splunk' | 'oracle' | 'signalfx' | 'jira' | 'unix' | 'api';
+  capability: string;
   title: string;
   rationale: string;
   generated_query: string;
@@ -193,11 +198,11 @@ export interface InvestigationEvent {
 export interface RelatedTicket {
   ticket_id: string;
   summary: string;
-  similarity: number;
+  similarity: number | null;
   root_cause: string;
-  resolution: string;
-  resolved_at: string;
-  resolved_by: string;
+  resolution: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
 }
 
 export interface TeamAnalyst {
@@ -216,14 +221,14 @@ export interface ConnectorHealthStatus {
 }
 
 export interface PerformanceMetrics {
-  mttt: string;
-  mttt_trend: string;
-  auto_triage_success_rate: string;
-  auto_triage_success_trend: string;
-  analyst_validation_rate: string;
-  analyst_validation_trend: string;
-  rca_accuracy_rate: string;
-  rca_accuracy_trend: string;
+  mttt: string | null;
+  mttt_trend: string | null;
+  auto_triage_success_rate: string | null;
+  auto_triage_success_trend: string | null;
+  analyst_validation_rate: string | null;
+  analyst_validation_trend: string | null;
+  rca_accuracy_rate: string | null;
+  rca_accuracy_trend: string | null;
 }
 
 export interface FocusQueueItem {
@@ -238,6 +243,7 @@ export interface LiveBoardResponse {
     at_risk: number;
     action_required: number;
     healthy: number;
+    unknown?: number;
   };
   work_buckets: Record<string, number>;
   focus_queue: FocusQueueItem[];
@@ -322,7 +328,19 @@ export interface RcaFaultTreeNode {
   children?: RcaFaultTreeNode[];
 }
 
+export type RcaMethod = 'five_whys' | 'fishbone' | 'kepner_tregoe' | 'fmea' | 'fault_tree' | 'auto_ensemble';
+
+export interface RcaAnalysis {
+  run_id: string;
+  status: string;
+  result: NonNullable<Run['result']>;
+  created_at: number;
+}
+
 export interface RcaMethodologyData {
+  analyses?: Partial<Record<RcaMethod, RcaAnalysis>>;
+  available_methods?: string[];
+  findings?: InvestigationFinding[];
   ticket_id: string;
   incident_title: string;
   five_whys?: {
@@ -342,7 +360,7 @@ export interface RcaMethodologyData {
     top_event: string;
     conclusion: string;
     active_cut_set: string[];
-    root_gate: RcaFaultTreeNode;
+    root_gate: RcaFaultTreeNode | null;
   };
   auto_ensemble?: {
     incident_title: string;
@@ -361,6 +379,6 @@ export interface RcaMethodologyData {
     current_prompt_tokens: number;
     max_budget_tokens: number;
     budget_utilization_pct: number;
-  };
+  } | null;
 }
 

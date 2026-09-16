@@ -615,7 +615,7 @@ export const Tools: React.FC<ToolsProps> = ({ tools: initialTools, principal }) 
           <div className="connector-stat-card-meta">
             {isDemoMode
               ? (connectorsHealth?.connectors && Object.values(connectorsHealth.connectors)[0]?.message) ||
-                'External network calls simulated offline by architectural configuration.'
+                'Demo runs are recorded as simulated without external evidence or diagnostic findings.'
               : 'Live network connectivity active for authenticated connectors.'}
           </div>
         </div>

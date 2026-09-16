@@ -29,7 +29,9 @@ All implemented connectors remain available through saved project enablement and
 
 Metric targets must come from governed configuration where available; missing SLA targets remain unavailable. Model estimates retain historical run pricing snapshots and distinguish unknown usage from zero. Sources: [pricing](../app/configuration/model_pricing.py), [telemetry](../app/persistence/telemetry.py).
 
-**Current authorization gap:** the [platform metrics route](../app/api/routes/metrics.py) checks `ADMIN_ROLES`, which [includes project owners](../app/configuration/service.py), while [platform aggregation](../app/persistence/platform_metrics.py) spans the tenant. Require explicit platform authority and test project-owner denial before release. Frontend admin checks are insufficient. This documentation identifies the gap without changing enforcement.
+**Platform metrics authority:** the [metrics route](../app/api/routes/metrics.py) requires `PLATFORM_ADMIN`. Project ownership alone cannot access tenant totals; [API regressions](../tests/integration/test_metrics_api.py) verify denial.
+
+**Triage SLA policy:** define a JSON parameter with tool `triage` and variable name `sla_targets_seconds` through the existing platform parameter API, then use permitted project overrides. Map recorded priority codes to positive finite seconds. There is no invented default target. Missing priorities remain unknown; zero, negative, boolean and nonnumeric targets are rejected. Values use the same five-level resolution hierarchy as other parameters. Sources: [parameter validation](../app/configuration/parameters.py), [policy resolution](../app/runtime/sla_engine.py), [parameter endpoints](../app/api/routes/parameters.py).
 
 ## Sources of truth
 
@@ -79,7 +81,9 @@ The project policy is to support **all implemented connectors according to proje
 
 Sources: [provider registry](../app/connectors/providers/registry.py), [typed action catalog](../app/tools/catalog.py). Direct/MCP routing uses the same governed operation boundary. An A2A registration or connection handshake does not independently grant runtime actions; see [integration probes](../app/connectors/providers/integration_probe.py).
 
-**Implementation gap:** the current provider resolver explicitly blocks Oracle under the previous repository policy, and baseline templates disable the eight additional connectors. The project guideline does not itself change stored deployment settings or runtime behavior. Reconcile the Oracle resolver, instance-bound credentials and deployment/project configuration before claiming all ten work in a deployed project. The existing Oracle provider uses fixed, bounded session-diagnostic SQL, not model-supplied SQL. Sources: [resolver](../app/connectors/providers/registry.py), [Oracle provider](../app/connectors/providers/oracle.py), [connector templates](../blob_local/platform/config/connectors.yaml).
+Oracle resolves the saved instance credential reference, selected environment and authorized database username through the same project path as the other providers. Its published template supports `database_password` authentication and an explicit `tcp[s]://host:port/service` Easy Connect DSN in Thin mode; execution uses a fixed, bounded session-diagnostic query with bind variables. Arbitrary SQL, TNS aliases and Thick mode are not supported. Sources: [resolver](../app/connectors/providers/registry.py), [Oracle provider](../app/connectors/providers/oracle.py), [template](../blob_local/platform/config/connector_templates/oracle.yaml).
+
+The eight additional adapters remain disabled in the baseline **deployment configuration** until an operator configures and permits them. This is separate from template availability and project enablement: enabling an adapter does not create a saved project connection or authorize a capability. Existing database-managed deployments must publish/apply the updated configuration through the managed workflow; editing seed files does not change active records. Confirm a fresh scoped connection test and an authorized run before declaring a source live-ready. Sources: [deployment baseline](../blob_local/platform/config/connectors.yaml), [save/test/enable gates](../app/api/routes/connectors_api.py), [database configuration](../app/configuration/database_bundle.py).
 
 Read-only evidence remains the boundary: no Jira mutations, arbitrary SQL, shell commands, or source-system writes. Kafka currently reads partition metadata; Unix reads a configured file over SFTP. Sources: [infrastructure providers](../app/connectors/providers/infrastructure.py), [Oracle](../app/connectors/providers/oracle.py).
 
@@ -120,7 +124,7 @@ Detailed retained contracts: [database](reference/data-access-and-operations.md#
 
 ## Workflow: connect a project source
 
-**Outcome:** a saved connection that an authorized capability can resolve for the intended project and environment. Configuration steps below describe the required policy and resolution path; the connector gaps above still apply.
+**Outcome:** a saved connection that an authorized capability can resolve for the intended project and environment. Configuration steps below describe the required policy and resolution path; deployment opt-in and a tested project binding are both required.
 
 | Step | Operator action | Runtime significance |
 | --- | --- | --- |

@@ -11,6 +11,28 @@ from app.identity.principals import Role, UserPrincipal
 from app.runtime.runner import ExecutionRunner
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("adapter,endpoint,auth,credentials,scope", [
+    ("confluence", "https://docs.example", "bearer_token", {"token_secret_ref": "env://BOUNDED_SECRET"}, "123"),
+    ("gitlab", "https://git.example", "api_key_header", {"api_key_secret_ref": "env://BOUNDED_SECRET"}, "123"),
+    ("qtest", "https://test.example", "bearer_token", {"token_secret_ref": "env://BOUNDED_SECRET"}, "123"),
+    ("signalfx", "https://metrics.example", "api_key_header", {"api_key_secret_ref": "env://BOUNDED_SECRET"}, "123"),
+    ("kubernetes", "https://cluster.example", "k8s_service_account_token", {"token_secret_ref": "env://BOUNDED_SECRET"}, "payments"),
+    ("kafka", "broker.example:9093", "sasl_scram_tls", {"username": "reader", "password_secret_ref": "env://BOUNDED_SECRET"}, "payments"),
+    ("unix", "sftp://logs.example", "ssh_password", {"username": "reader", "password_secret_ref": "env://BOUNDED_SECRET", "known_hosts_ref": "env://BOUNDED_SECRET"}, "/var/log/payments.log"),
+])
+async def test_all_evidence_providers_preserve_saved_limits(monkeypatch, adapter, endpoint, auth, credentials, scope):
+    monkeypatch.setenv("BOUNDED_SECRET", "test-credential")
+    provider = resolve_connector_provider(adapter, instance_definition={
+        "template_id": adapter, "endpoint": endpoint, "external_resource": scope,
+        "auth_type": auth, "credentials": credentials, "max_results": 7, "max_response_bytes": 2048,
+    })
+    try:
+        assert (provider.max_results, provider.max_response_bytes) == (7, 2048)
+    finally:
+        await provider.aclose()
+
+
 def test_resolve_connector_provider_from_candidate(monkeypatch):
     monkeypatch.setenv("RESOLVED_JIRA_TOKEN", "token-12345")
     monkeypatch.setenv("RESOLVED_SPLUNK_TOKEN", "splunk-67890")
@@ -56,8 +78,8 @@ def test_resolve_connector_provider_from_candidate(monkeypatch):
     assert splunk_client.max_window_seconds == 3600
     assert splunk_client.max_response_bytes == 2048
 
-    # 3. Oracle policy block
-    with pytest.raises(ValueError, match="Oracle connector execution is blocked by policy"):
+    # 3. Oracle cannot resolve an incomplete instance
+    with pytest.raises(ValueError, match="endpoint is required"):
         resolve_connector_provider("oracle", instance_definition={"template_id": "oracle"})
 
 

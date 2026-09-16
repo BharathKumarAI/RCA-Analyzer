@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import {
   AlertTriangle,
   BookOpen,
@@ -7,7 +6,6 @@ import {
   ExternalLink,
   Layers,
   ListFilter,
-  Server,
   ShieldAlert,
   Sparkles,
   TrendingUp,
@@ -25,56 +23,6 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
   const result = run.result;
   const presentation = result?.presentation || 'summary';
   const capability = run.capability;
-
-  // Extract blast radius / affected services if mentioned in findings or summary
-  const affectedServices = useMemo(() => {
-    if (!result) return [];
-    const text = `${result.summary} ${result.findings.map(f => f.summary).join(' ')}`;
-    const matched = new Set<string>();
-    const knownServices = [
-      'Payment Gateway',
-      'Checkout API',
-      'PostgreSQL',
-      'HikariCP Pool',
-      'Redis Cache',
-      'Worker Queue',
-      'Auth Service',
-      'Ingress Controller',
-      'Kafka Stream',
-      'Splunk Cluster',
-      'Jira ITSM',
-    ];
-    for (const svc of knownServices) {
-      if (new RegExp(`\\b${svc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)) {
-        matched.add(svc);
-      }
-    }
-    return Array.from(matched);
-  }, [result]);
-
-  // Extract timeline entries from findings or summary
-  const timelineEntries = useMemo(() => {
-    if (!result) return [];
-    const entries: Array<{ time?: string; title: string; detail: string; evidenceIds: string[] }> = [];
-
-    // Parse time patterns like "14:02 UTC", "2026-09-15 14:00", etc.
-    result.findings.forEach((finding, idx) => {
-      const timeMatch = finding.summary.match(/\b(\d{1,2}:\d{2}(?::\d{2})?\s*(?:UTC|GMT|EST|PST)?)\b/i);
-      const timeStr = timeMatch ? timeMatch[1] : undefined;
-      const parts = finding.summary.split(/[:–—]/);
-      const title = parts.length > 1 && parts[0].length < 40 ? parts[0].trim() : `Event #${idx + 1}`;
-      const detail = parts.length > 1 && parts[0].length < 40 ? parts.slice(1).join(':').trim() : finding.summary;
-
-      entries.push({
-        time: timeStr,
-        title,
-        detail,
-        evidenceIds: finding.evidence_ids || [],
-      });
-    });
-
-    return entries;
-  }, [result]);
 
   if (!result) return null;
 
@@ -108,27 +56,17 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
           {result.outcome === 'FINDINGS' ? (
             <span className="chat-outcome-badge outcome-confirmed">
               <CheckCircle2 size={12} />
-              Root cause isolated
+              Findings available
             </span>
           ) : (
             <span className="chat-outcome-badge outcome-insufficient">
               <AlertTriangle size={12} />
-              Needs further telemetry
+              {result.outcome.replaceAll('_', ' ').toLowerCase()}
             </span>
           )}
         </div>
 
-        {affectedServices.length > 0 && (
-          <div className="chat-visual-services">
-            <Server size={12} className="chat-service-icon" />
-            <span className="chat-service-label">Impacted:</span>
-            {affectedServices.slice(0, 3).map((svc, i) => (
-              <span key={i} className="chat-service-pill">
-                {svc}
-              </span>
-            ))}
-          </div>
-        )}
+
       </div>
 
       {/* 1. Dashboard View */}
@@ -138,60 +76,60 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
             <div className="chat-metric-box">
               <span className="chat-metric-label">Diagnosis Status</span>
               <div className="chat-metric-value text-emerald">
-                {result.outcome === 'FINDINGS' ? 'Identified' : 'Evaluating'}
+                {result.outcome.replaceAll('_', ' ').toLowerCase()}
               </div>
               <span className="chat-metric-sub">
-                {result.findings.length} confirmed evidentiary findings
+                {result.findings.length} recorded findings
               </span>
             </div>
 
             <div className="chat-metric-box">
               <span className="chat-metric-label">Evidence Grounding</span>
               <div className="chat-metric-value text-violet">
-                {run.evidence_count || result.findings.reduce((acc, f) => acc + f.evidence_ids.length, 0)} Sources
+                {run.evidence_count ?? '—'} Sources
               </div>
-              <span className="chat-metric-sub">Across Jira, Splunk & files</span>
+              <span className="chat-metric-sub">Saved evidence items</span>
             </div>
 
             <div className="chat-metric-box">
-              <span className="chat-metric-label">Mitigation Steps</span>
+              <span className="chat-metric-label">Suggested actions</span>
               <div className="chat-metric-value text-amber">
-                {result.recommended_actions.length} Actionable
+                {result.recommended_actions.length} suggestions
               </div>
-              <span className="chat-metric-sub">Validated against runbooks</span>
+              <span className="chat-metric-sub">Review before acting</span>
             </div>
           </div>
         </div>
       )}
 
       {/* 2. Timeline View */}
-      {presentation === 'timeline' && timelineEntries.length > 0 && (
+      {presentation === 'timeline' && result.findings.length > 0 && (
         <div className="chat-visual-timeline-container">
           <h4 className="chat-visual-section-heading">
             <Clock3 size={14} />
-            Incident Event Sequence
+            Findings in saved order
           </h4>
           <div className="chat-visual-timeline">
-            {timelineEntries.map((entry, idx) => (
+            {result.findings.map((entry, idx) => (
               <div key={idx} className="chat-timeline-row">
                 <div className="chat-timeline-marker">
                   <div className="chat-timeline-dot" />
-                  {idx < timelineEntries.length - 1 && <div className="chat-timeline-line" />}
+                  {idx < result.findings.length - 1 && <div className="chat-timeline-line" />}
                 </div>
                 <div className="chat-timeline-card">
                   <div className="chat-timeline-header">
-                    <span className="chat-timeline-title">{entry.title}</span>
-                    {entry.time && <span className="chat-timeline-time-tag">{entry.time}</span>}
+                    <span className="chat-timeline-title">Finding {idx + 1}</span>
                   </div>
-                  <p className="chat-timeline-detail">{entry.detail}</p>
-                  {entry.evidenceIds.length > 0 && (
+                  <p className="chat-timeline-detail">{entry.summary}</p>
+                  {entry.evidence_ids.length > 0 && (
                     <button
                       type="button"
                       className="chat-timeline-source-btn"
-                      onClick={() => onInspectSources?.(entry.evidenceIds[0])}
+                      disabled={!onInspectSources}
+                      onClick={() => onInspectSources?.(entry.evidence_ids[0])}
                     >
                       <BookOpen size={11} />
-                      <span>{entry.evidenceIds.length === 1 ? '1 source' : `${entry.evidenceIds.length} sources`}</span>
+                      <span>{entry.evidence_ids.length === 1 ? '1 source' : `${entry.evidence_ids.length} sources`}</span>
                     </button>
                   )}
                 </div>
@@ -228,6 +166,7 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
                       <button
                         type="button"
                         className="chat-table-source-btn"
+                        disabled={!onInspectSources || !f.evidence_ids.length}
                         onClick={() => onInspectSources?.(f.evidence_ids[0])}
                       >
                         <BookOpen size={11} />
@@ -249,7 +188,7 @@ export function ChatVisualCard({ run, onInspectSources, onOpenRun }: ChatVisualC
             <Layers size={16} />
             <div>
               <strong>Structured Incident Investigation Report</strong>
-              <p>Generated by RCA assist with strict multi-source verification.</p>
+              <p>Saved investigation findings and supporting evidence.</p>
             </div>
             {onOpenRun && (
               <button

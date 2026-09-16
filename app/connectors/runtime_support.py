@@ -23,7 +23,7 @@ def connector_runtime_support(adapter: str) -> list[dict[str, str]]:
         "gitlab": [{"name": "Deployment evidence", "status": "supported", "detail": "Reads deployment records from one authorized project ID."}],
         "kubernetes": [{"name": "Infrastructure health", "status": "supported", "detail": "Reads pod status in one authorized namespace. Cluster mutations and remote execution are unavailable."}],
         "unix": [{"name": "Log evidence", "status": "supported", "detail": "Reads a bounded tail of the authorized log path over SFTP. Shell commands cannot execute."}],
-        "kafka": [{"name": "Topic evidence", "status": "supported", "detail": "Reads bounded records from the authorized topic. Message production is unavailable."}],
-        "oracle": [{"name": "Database access", "status": "unavailable", "detail": "Queries, schema inspection and execution are blocked by release policy."}],
+        "kafka": [{"name": "Topic evidence", "status": "limited", "detail": "Reads bounded partition metadata for one authorized topic. Message consumption, production and consumer-group lag are unavailable."}],
+        "oracle": [{"name": "Session diagnostics", "status": "supported", "detail": "Reads a fixed, bounded session wait snapshot for one authorized database username using Thin mode and a read-only account. Arbitrary SQL and database mutations are unavailable."}],
     }
     return [*details.get(adapter, []), *common]

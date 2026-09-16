@@ -77,7 +77,7 @@ def main():
             host="postgres", port=5432
         ).render_as_string(hide_password=False),
         "RCA_DATABASE_CONFIGURATION": "true",
-        "RCA_MODE": values.get("RCA_MODE") or "demo",
+        "RCA_MODE": values.get("RCA_MODE") or "live",
         "RCA_TENANT_ID": values.get("RCA_TENANT_ID") or "acme",
         "RCA_PROJECT_ID": values.get("RCA_PROJECT_ID") or "payments-prod",
         "RCA_PROJECT_NAME": values.get("RCA_PROJECT_NAME") or "Payments (local)",

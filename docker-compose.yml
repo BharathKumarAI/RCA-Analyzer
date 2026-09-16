@@ -25,6 +25,7 @@ services:
     env_file:
       - .env.runtime
     environment:
+      RCA_MODE: ${RCA_MODE:-live}
       RCA_DATABASE_URL: ${RCA_DOCKER_DATABASE_URL:?Run make db-deploy first}
       RCA_SESSION_DATABASE_URL: ${RCA_DOCKER_DATABASE_URL:?Run make db-deploy first}
       RCA_DATABASE_CONFIGURATION: "true"
@@ -40,9 +41,10 @@ services:
       - agent_config_blobs:/app/blob_local/agent-configurations
       - optimization_blobs:/app/blob_local/optimizations
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=4)"]
       interval: 15s
       timeout: 5s
+      start_period: 30s
       retries: 3
 
 volumes:

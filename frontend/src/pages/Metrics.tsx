@@ -269,8 +269,8 @@ export const Metrics: React.FC<MetricsProps> = ({
     setError(null);
 
     const filters: TelemetryFilters = {
-      start: startDate,
-      end: endDate,
+      start: windowOption === 'custom' ? startDate : undefined,
+      end: windowOption === 'custom' ? endDate : undefined,
       mode,
       capability: selectedCapability || undefined,
       window: windowOption !== 'custom' ? windowOption : undefined,
@@ -280,8 +280,8 @@ export const Metrics: React.FC<MetricsProps> = ({
       if (!projectWorkspace && canAdminister) {
         // Platform view
         const data = await fetchPlatformMetrics({
-          start: startDate,
-          end: endDate,
+          start: windowOption === 'custom' ? startDate : undefined,
+          end: windowOption === 'custom' ? endDate : undefined,
           mode,
           window: windowOption !== 'custom' ? windowOption : undefined,
         });
@@ -312,15 +312,20 @@ export const Metrics: React.FC<MetricsProps> = ({
   // Trigger load when parameters change
   useEffect(() => {
     loadData();
+    return () => { requestVersionRef.current++; };
   }, [loadData]);
 
   // Auto-refresh interval
   useEffect(() => {
     if (autoRefreshSecs <= 0) return;
-    const interval = setInterval(() => {
-      loadData(true);
-    }, autoRefreshSecs * 1000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      await loadData(true);
+      if (!cancelled) timer = setTimeout(refresh, autoRefreshSecs * 1000);
+    };
+    timer = setTimeout(refresh, autoRefreshSecs * 1000);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [autoRefreshSecs, loadData]);
 
   const summary = telemetry?.summary;
@@ -332,7 +337,7 @@ export const Metrics: React.FC<MetricsProps> = ({
 
   const getMetricValue = useCallback((row: Measurements & { tickets?: number; resolved_tickets?: number }, m: ChartMetric): number | null => {
     if (m === 'runs') return row.runs;
-    if (m === 'tickets') return row.tickets ?? 0;
+    if (m === 'tickets') return row.tickets ?? null;
     if (m === 'tokens') return row.reported_token_fields?.total_tokens > 0 ? row.total_tokens : null;
     if (m === 'latency') return row.run_latency.mean_duration_ms;
     if (m === 'cost') return row.estimated_cost_usd;
@@ -346,6 +351,8 @@ export const Metrics: React.FC<MetricsProps> = ({
       raw: r,
     }));
   }, [dailyRows, chartMetric, getMetricValue]);
+
+  const hasMissingChartData = chartSeries.some(point => point.value === null);
 
   const maxChartValue = useMemo(() => {
     const valid = chartSeries.map(s => s.value || 0);
@@ -388,10 +395,7 @@ export const Metrics: React.FC<MetricsProps> = ({
   };
 
   // Sparkline data extraction
-  const runsSparkline = useMemo(() => dailyRows.map(r => r.runs), [dailyRows]);
-  const ticketsSparkline = useMemo(() => dailyRows.map(r => r.tickets ?? 0), [dailyRows]);
-  const latencySparkline = useMemo(() => dailyRows.map(r => r.run_latency.mean_duration_ms || 0), [dailyRows]);
-  const costSparkline = useMemo(() => dailyRows.map(r => r.estimated_cost_usd || 0), [dailyRows]);
+  const costSparkline = useMemo(() => dailyRows.some(row => row.estimated_cost_usd === null) ? [] : dailyRows.map(row => row.estimated_cost_usd as number), [dailyRows]);
 
   // Chart Metric formatting helpers
   const formatMetricAxis = (val: number): string => {
@@ -645,7 +649,6 @@ export const Metrics: React.FC<MetricsProps> = ({
                   <Clock size={13} className="metrics-kpi-label-icon" />
                 </span>
                 <span className="metrics-kpi-value">{formatDuration(sre.mttt.mean_duration_ms)}</span>
-                <MiniSparkline data={latencySparkline} color="#06b6d4" gradientId="spark-mttt" />
                 <span className="metrics-kpi-meta">
                   95% in {formatDuration(sre.mttt.p95_duration_ms)}
                 </span>
@@ -657,7 +660,6 @@ export const Metrics: React.FC<MetricsProps> = ({
                   <CheckCircle2 size={13} className="metrics-kpi-label-icon" />
                 </span>
                 <span className="metrics-kpi-value">{formatDuration(sre.mttr.mean_duration_ms)}</span>
-                <MiniSparkline data={ticketsSparkline} color="#10b981" gradientId="spark-mttr" />
                 <span className="metrics-kpi-meta">
                   {sre.tickets_resolved} resolved in period
                 </span>
@@ -669,12 +671,11 @@ export const Metrics: React.FC<MetricsProps> = ({
                   <ShieldCheck size={13} className="metrics-kpi-label-icon" />
                 </span>
                 <span className="metrics-kpi-value">{formatPercent(sre.sla_compliance_rate)}</span>
-                <MiniSparkline data={runsSparkline} color={sre.ongoing_breaches > 0 ? '#ef4444' : '#10b981'} gradientId="spark-sla" />
                 <span className="metrics-kpi-meta">
-                  {sre.ongoing_breaches > 0 ? (
+                  {(sre.ongoing_breaches ?? 0) > 0 ? (
                     <span className="metrics-badge badge-danger">{sre.ongoing_breaches} ongoing breaches</span>
                   ) : (
-                    <span className="metrics-badge badge-success">0 active breaches</span>
+                    <span className="metrics-badge badge-neutral">{sre.ongoing_breaches === null ? 'SLA targets not configured' : '0 active breaches'}</span>
                   )}
                 </span>
               </div>
@@ -685,7 +686,6 @@ export const Metrics: React.FC<MetricsProps> = ({
                   <Zap size={13} className="metrics-kpi-label-icon" />
                 </span>
                 <span className="metrics-kpi-value">{formatPercent(sre.auto_triage.success_rate)}</span>
-                <MiniSparkline data={runsSparkline} color="#ec4899" gradientId="spark-autotriage" />
                 <span className="metrics-kpi-meta">
                   {sre.auto_triage.succeeded} of {sre.auto_triage.runs} runs completed
                 </span>
@@ -697,7 +697,6 @@ export const Metrics: React.FC<MetricsProps> = ({
                   <TrendingUp size={13} className="metrics-kpi-label-icon" />
                 </span>
                 <span className="metrics-kpi-value">{formatPercent(sre.analyst_validation.agreement_rate)}</span>
-                <MiniSparkline data={ticketsSparkline} color="#8b5cf6" gradientId="spark-analyst" />
                 <span className="metrics-kpi-meta">
                   {sre.analyst_validation.confirmed} confirmed · {sre.analyst_validation.rejected} rejected
                 </span>
@@ -812,7 +811,7 @@ export const Metrics: React.FC<MetricsProps> = ({
               ) : (
                 <>
                   {/* Aggregated Quick-Stats Strip */}
-                  <div className="metrics-chart-summary-strip">
+                  {!hasMissingChartData && chartMetric !== 'latency' && <div className="metrics-chart-summary-strip">
                     <div className="metrics-chart-summary-item">
                       <span className="metrics-chart-summary-label">Window Total</span>
                       <span className="metrics-chart-summary-val">{formatMetricAxis(totalChartSum)}</span>
@@ -829,8 +828,10 @@ export const Metrics: React.FC<MetricsProps> = ({
                     )}
                   </div>
 
+                  }
+                  {hasMissingChartData && <p>Some daily measurements are unavailable. Review recorded values in the table below.</p>}
                   {/* SVG Chart Area */}
-                  <div className="metrics-svg-chart-wrap">
+                  {!hasMissingChartData && <div className="metrics-svg-chart-wrap">
                     {(() => {
                       const svgWidth = 860;
                       const svgHeight = 220;
@@ -1061,6 +1062,14 @@ export const Metrics: React.FC<MetricsProps> = ({
                     })()}
                   </div>
 
+                  }
+                  <details className="metrics-table-wrap" open={hasMissingChartData}>
+                    <summary>Daily measurements</summary>
+                    <table className="metrics-table">
+                      <thead><tr><th scope="col">Date (UTC)</th><th scope="col">{chartMetric}</th></tr></thead>
+                      <tbody>{chartSeries.map(point => <tr key={point.date}><th scope="row"><button type="button" className="btn btn-secondary" onClick={() => setSelectedDay(point.date)}>{point.date}</button></th><td>{point.value === null ? 'Not measured' : formatMetricAxis(point.value)}</td></tr>)}</tbody>
+                    </table>
+                  </details>
                   {/* Granular Day Inspection Box */}
                   <div className="metrics-chart-inspection" aria-live="polite">
                     {inspectedDayRow ? (
@@ -1184,7 +1193,6 @@ export const Metrics: React.FC<MetricsProps> = ({
                     {prioritySegments.map(seg => {
                       const count = seg.value;
                       const share = sre.tickets_total > 0 ? (count / sre.tickets_total) * 100 : 0;
-                      const targetStr = seg.id === 'P1' ? '1h' : seg.id === 'P2' ? '4h' : seg.id === 'P3' ? '24h' : '72h';
                       const isSelected = activePriorityFilter === seg.id;
 
                       return (
@@ -1194,13 +1202,11 @@ export const Metrics: React.FC<MetricsProps> = ({
                           onClick={() => setActivePriorityFilter(isSelected ? null : seg.id)}
                           role="button"
                           tabIndex={0}
+                          onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setActivePriorityFilter(isSelected ? null : seg.id); } }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center' }}>
                             <span className="metrics-legend-color-dot" style={{ backgroundColor: seg.color }} />
                             <strong>{seg.label}</strong>
-                            <span style={{ marginLeft: '6px', fontSize: '11px', color: 'var(--muted)' }}>
-                              ({targetStr} SLA)
-                            </span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span>{count}</span>
@@ -1212,38 +1218,14 @@ export const Metrics: React.FC<MetricsProps> = ({
                   </div>
                 </div>
 
-                {/* SLA Target Threshold Progress Meters */}
-                <div className="metrics-sla-progress-list">
-                  <h3 style={{ fontSize: '13px', margin: '8px 0 4px', fontWeight: 600 }}>SLA Target Compliance</h3>
-                  {[
-                    { priority: 'P1 Critical', target: '1h', maxHours: 1, color: '#ef4444' },
-                    { priority: 'P2 High', target: '4h', maxHours: 4, color: '#f59e0b' },
-                    { priority: 'P3 Medium', target: '24h', maxHours: 24, color: '#3b82f6' },
-                    { priority: 'P4 Low', target: '72h', maxHours: 72, color: '#10b981' },
-                  ].map(sla => (
-                    <div key={sla.priority} className="metrics-sla-row">
-                      <div className="metrics-sla-row-head">
-                        <span><strong>{sla.priority}</strong> (Target: {sla.target})</span>
-                        <span className="metrics-badge badge-success">Target Active</span>
-                      </div>
-                      <div className="metrics-sla-bar-track">
-                        <div
-                          className="metrics-sla-bar-fill"
-                          style={{
-                            width: `${Math.min(100, Math.max(15, (sre.sla_compliance_rate || 0.85) * 100))}%`,
-                            backgroundColor: sla.color,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <p>SLA compliance uses configured project targets. Missing targets remain unmeasured.</p>
+
               </section>
 
               <section className="metrics-section">
                 <h2>Queue & Resolution Velocity</h2>
                 <p style={{ margin: '0 0 16px', fontSize: '12px', color: 'var(--muted)' }}>
-                  Durations observed across queue stays and ticket resolutions.
+                  Triage measures the first completed local queue interval. Resolution requires recorded source incident start and resolution timestamps.
                 </p>
                 <div className="metrics-table-wrap">
                   <table className="metrics-table">
@@ -1276,10 +1258,10 @@ export const Metrics: React.FC<MetricsProps> = ({
                         <th>Active Backlog</th>
                         <td colSpan={2}>{sre.tickets_active} unresolved tickets</td>
                         <td>
-                          {sre.ongoing_breaches > 0 ? (
+                          {(sre.ongoing_breaches ?? 0) > 0 ? (
                             <span className="metrics-badge badge-danger">{sre.ongoing_breaches} breached</span>
                           ) : (
-                            <span className="metrics-badge badge-success">On track</span>
+                            <span className="metrics-badge badge-neutral">{sre.ongoing_breaches === null ? 'SLA targets not configured' : 'No recorded breaches'}</span>
                           )}
                         </td>
                       </tr>
@@ -1299,7 +1281,7 @@ export const Metrics: React.FC<MetricsProps> = ({
                     <div
                       className="metrics-sla-bar-fill"
                       style={{
-                        width: `${Math.min(100, Math.max(5, (sre.auto_triage.success_rate || 0) * 100))}%`,
+                        width: `${Math.min(100, Math.max(0, (sre.auto_triage.success_rate ?? 0) * 100))}%`,
                         background: 'linear-gradient(90deg, #10b981, #06b6d4)',
                       }}
                     />
@@ -1348,7 +1330,7 @@ export const Metrics: React.FC<MetricsProps> = ({
               </section>
 
               <section className="metrics-section">
-                <h2>Agent Timing by Stage (P50 vs P95)</h2>
+                <h2>Agent timing by stage (mean and P95)</h2>
                 <p style={{ margin: '0 0 16px', fontSize: '12px', color: 'var(--muted)' }}>
                   Horizontal duration comparison measured per orchestrator and specialist stage.
                 </p>
@@ -1364,8 +1346,8 @@ export const Metrics: React.FC<MetricsProps> = ({
                       const maxMs = 60000; // 60s reference max
                       const meanMs = agent.mean_duration_ms ?? 0;
                       const p95Ms = agent.p95_duration_ms ?? 0;
-                      const meanRatio = Math.min(100, Math.max(3, (meanMs / maxMs) * 100));
-                      const p95Ratio = Math.min(100, Math.max(5, (p95Ms / maxMs) * 100));
+                      const meanRatio = Math.min(100, Math.max(0, (meanMs / maxMs) * 100));
+                      const p95Ratio = Math.min(100, Math.max(0, (p95Ms / maxMs) * 100));
 
                       return (
                         <div key={agent.name} className="metrics-stage-row">

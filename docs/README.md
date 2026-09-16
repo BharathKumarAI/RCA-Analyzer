@@ -40,7 +40,7 @@ Reading path: [product](project.md) → [pages](project.md#project-page-map) →
 
 ## Five primary guides
 
-Chat and metrics development: [product requirements](project.md#chat-and-metrics-development-contract) → [Pi/OpenWorker references and optional CopilotKit integration](architecture.md#chat-integration-with-the-existing-framework) → [configuration and authorization](configuration.md#chat-and-metrics-integration-policy) → [delivery plan](development.md#chat-and-metrics-delivery-plan) and [metric definitions](development.md#metric-definitions-and-acceptance) → [rollout](operations.md#chat-and-metrics-integration-rollout). These sections separate existing source behavior, implementation gaps and proposed work.
+Chat and metrics development: [product requirements](project.md#chat-and-metrics-development-contract) → [Pi/OpenWorker references and optional CopilotKit integration](architecture.md#chat-integration-with-the-existing-framework) → [configuration and authorization](configuration.md#chat-and-metrics-integration-policy) → [delivery plan](development.md#chat-and-metrics-delivery-plan) and [metric definitions](development.md#metric-definitions-and-acceptance) → [rollout](operations.md#chat-and-metrics-integration-rollout). These sections separate implemented contracts, optional adapter proposals and required target deployment checks.
 
 | Guide | Coverage |
 | --- | --- |
@@ -70,7 +70,7 @@ Chat and metrics development: [product requirements](project.md#chat-and-metrics
 | How does knowledge affect an answer? | [Author and review](knowledge.md#knowledge-from-authoring-to-an-answer) → [keyword retrieval](knowledge.md#exact-knowledge-retrieval-rules) → [storage/evidence](knowledge.md#knowledge-storage-and-ownership) → [troubleshooting](knowledge.md#knowledge-troubleshooting) |
 | How does OKF fit the ecosystem? | [Exchange boundary](knowledge.md#position-in-the-rca-ecosystem) → [mapping](knowledge.md#okf-content-model-and-mapping) → [import/export](knowledge.md#proposed-import-and-export-contract) → [ADK](knowledge.md#okf-retrieval-and-adk-contract) → [improvement](knowledge.md#okf-and-self-improvement) |
 | How do I investigate a failed run? | [Status](architecture.md#4-synthesis-and-terminal-state) → [trace](architecture.md#streaming-reconnection-and-cancellation) → [queries](data-model.md#read-only-sample-queries) → [runbook](operations.md#runbook-diagnose-a-failed-or-incomplete-investigation) |
-| Does the triage board use the live harness? | [Current boundary](project.md#triage-workspace-implementation-boundary) → [separate tables](data-model.md#triage-records-are-a-separate-path) → [security gaps](security.md#known-security-and-implementation-limits) |
+| How does the triage board use the live harness? | [Current boundary](project.md#triage-workspace-implementation-boundary) → [separate tables](data-model.md#triage-records-are-a-separate-path) → [security gaps](security.md#known-security-and-implementation-limits) |
 
 ## Reading implementation claims
 

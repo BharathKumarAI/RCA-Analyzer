@@ -7,6 +7,7 @@ traceable evidence, findings, governed actions, and auditable investigation even
 from __future__ import annotations
 
 import time
+from datetime import datetime
 import uuid
 from typing import Any, Dict, List, Optional
 from sqlalchemy.dialects.postgresql import JSONB
@@ -25,9 +26,11 @@ from sqlalchemy import (
     update,
     desc,
     and_,
+    func,
     or_,
 )
 from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.exc import IntegrityError
 from app.persistence.database import scoped_engine, initialize_tables
 
 metadata = MetaData(schema="platform")
@@ -407,6 +410,28 @@ class TriageStore:
             await conn.execute(insert(investigation_events).values(event_data))
         return event_data
 
+    async def _transition_queue(self, connection, tenant_id, project_id, ticket_id, work_state, now,
+                                reason="Local workspace stage transition", previous_team=None):
+        await connection.execute(select(triage_tickets.c.ticket_id).where(
+            triage_tickets.c.tenant_id == tenant_id, triage_tickets.c.project_id == project_id,
+            triage_tickets.c.ticket_id == ticket_id).with_for_update())
+        active = (await connection.execute(select(triage_queue_stays).where(
+            triage_queue_stays.c.tenant_id == tenant_id, triage_queue_stays.c.project_id == project_id,
+            triage_queue_stays.c.ticket_id == ticket_id, triage_queue_stays.c.exited_at.is_(None)))).mappings().all()
+        if work_state in {"APP_TEAM", "WAITING", "RESOLVED"}:
+            for stay in active:
+                await connection.execute(update(triage_queue_stays).where(
+                    triage_queue_stays.c.stay_id == stay["stay_id"]).values(
+                    exited_at=now, accountable_duration=max(0, now - stay["entered_at"])))
+            return None
+        if active:
+            return active[0]["stay_id"]
+        stay_id = "stay-" + uuid.uuid4().hex
+        await connection.execute(insert(triage_queue_stays).values(
+            tenant_id=tenant_id, project_id=project_id, ticket_id=ticket_id, stay_id=stay_id,
+            entered_at=now, created_at=now, reason=reason, previous_team=previous_team))
+        return stay_id
+
     async def acknowledge_ticket(
         self,
         tenant_id: str,
@@ -414,8 +439,11 @@ class TriageStore:
         ticket_id: str,
         actor_id: str,
     ) -> Dict[str, Any]:
+        if not await self.get_ticket(tenant_id, project_id, ticket_id):
+            raise ValueError("Ticket not found")
         now = time.time()
         async with self.engine.begin() as conn:
+            await self._transition_queue(conn, tenant_id, project_id, ticket_id, "IN_TRIAGE", now)
             await conn.execute(
                 update(triage_tickets)
                 .where(
@@ -470,6 +498,7 @@ class TriageStore:
         now = time.time()
         values: Dict[str, Any] = {
             "current_query": current_query,
+            "latest_result": None,
             "status": "EDITED",
             "updated_at": now,
         }
@@ -521,6 +550,8 @@ class TriageStore:
         proposal_id: str,
         result: Dict[str, Any],
         actor_id: str,
+        *, expected_query: str | None = None,
+        expected_parameters: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         now = time.time()
         async with self.engine.begin() as conn:
@@ -533,12 +564,17 @@ class TriageStore:
                             tool_proposals.c.project_id == project_id,
                             tool_proposals.c.proposal_id == proposal_id,
                         )
-                    )
+                    ).with_for_update()
                 )
             ).mappings().first()
             if not prop:
                 raise ValueError("Proposal not found")
 
+            if ((expected_query is not None and prop["current_query"] != expected_query)
+                    or (expected_parameters is not None and (prop["parameters"] or {}) != expected_parameters)):
+                raise ValueError("Proposal changed during execution; the recorded run remains available")
+            if (prop["latest_result"] or {}).get("run_id") == result.get("run_id") and result.get("run_id"):
+                return {"status": "ok", "execution_count": prop["execution_count"], "result": prop["latest_result"]}
             exec_count = prop["execution_count"] + 1
             await conn.execute(
                 update(tool_proposals)
@@ -577,7 +613,7 @@ class TriageStore:
         proposal_id: str,
         summary: str,
         actor_id: str,
-        confidence: float = 0.90,
+        confidence: float = 0.0,
     ) -> Dict[str, Any]:
         async with self.engine.begin() as conn:
             prop = (
@@ -588,13 +624,19 @@ class TriageStore:
                             tool_proposals.c.project_id == project_id,
                             tool_proposals.c.proposal_id == proposal_id,
                         )
-                    )
+                    ).with_for_update()
                 )
             ).mappings().first()
-            if not prop or not prop["latest_result"]:
+            if not prop or not prop["latest_result"] or not prop["latest_result"].get("run_id") or not prop["latest_result"].get("items"):
                 raise ValueError("Proposal or execution result not found")
 
-            evidence_id = f"evd-{uuid.uuid4().hex[:12]}"
+            evidence_id = "evd-" + uuid.uuid5(uuid.NAMESPACE_URL,
+                str((tenant_id, project_id, proposal_id, prop["latest_result"]["run_id"]))).hex
+            existing = (await conn.execute(select(investigation_evidence).where(
+                investigation_evidence.c.tenant_id == tenant_id, investigation_evidence.c.project_id == project_id,
+                investigation_evidence.c.evidence_id == evidence_id))).mappings().first()
+            if existing:
+                return dict(existing)
             now = time.time()
             evidence_data = {
                 "evidence_id": evidence_id,
@@ -603,7 +645,7 @@ class TriageStore:
                 "tenant_id": tenant_id,
                 "project_id": project_id,
                 "source": prop["capability"],
-                "query_ref": prop["current_query"],
+                "query_ref": prop["latest_result"]["run_id"],
                 "summary": summary,
                 "payload_json": prop["latest_result"],
                 "status": "ACCEPTED",
@@ -726,7 +768,6 @@ class TriageStore:
         action_id: str,
         actor_id: str,
     ) -> Dict[str, Any]:
-        now = time.time()
         async with self.engine.begin() as conn:
             act = (
                 await conn.execute(
@@ -752,9 +793,9 @@ class TriageStore:
                     )
                 )
                 .values(
-                    status="EXECUTED",
+                    status="APPROVED",
                     approved_by=actor_id,
-                    executed_at=now,
+                    executed_at=None,
                 )
             )
 
@@ -763,13 +804,13 @@ class TriageStore:
             project_id,
             act["ticket_id"],
             act["investigation_id"],
-            "action.approved_and_executed",
+            "action.approved",
             "USER",
             actor_id,
-            f"{actor_id} approved and executed {act['action_type']}: {act['title']} -> {act['target']}.",
+            f"{actor_id} recorded local approval for {act['action_type']}: {act['title']} -> {act['target']}.",
             {"action_id": action_id},
         )
-        return {"status": "ok", "action_id": action_id, "executed_at": now}
+        return {"status": "ok", "action_id": action_id, "executed_at": None}
 
     async def escalate_ticket(
         self,
@@ -780,32 +821,11 @@ class TriageStore:
         actor_id: str,
         reason: str = "Triage findings validated; transferring to application engineering.",
     ) -> Dict[str, Any]:
+        if not await self.get_ticket(tenant_id, project_id, ticket_id):
+            raise ValueError("Ticket not found")
         now = time.time()
         async with self.engine.begin() as conn:
-            # Close active queue stay
-            active_stay = (
-                await conn.execute(
-                    select(triage_queue_stays).where(
-                        and_(
-                            triage_queue_stays.c.tenant_id == tenant_id,
-                            triage_queue_stays.c.project_id == project_id,
-                            triage_queue_stays.c.ticket_id == ticket_id,
-                            triage_queue_stays.c.exited_at.is_(None),
-                        )
-                    )
-                )
-            ).mappings().first()
-
-            if active_stay:
-                duration = now - active_stay["entered_at"]
-                await conn.execute(
-                    update(triage_queue_stays)
-                    .where(triage_queue_stays.c.stay_id == active_stay["stay_id"])
-                    .values(
-                        exited_at=now,
-                        accountable_duration=duration,
-                    )
-                )
+            await self._transition_queue(conn, tenant_id, project_id, ticket_id, "APP_TEAM", now)
 
             # Update ticket state
             await conn.execute(
@@ -820,7 +840,6 @@ class TriageStore:
                 .values(
                     current_team=target_team,
                     work_state="APP_TEAM",
-                    status="In Progress",
                     updated_at=now,
                 )
             )
@@ -847,23 +866,12 @@ class TriageStore:
         actor_id: str,
         reason: str = "Additional telemetry required by service team.",
     ) -> Dict[str, Any]:
+        if not await self.get_ticket(tenant_id, project_id, ticket_id):
+            raise ValueError("Ticket not found")
         now = time.time()
-        stay_id = f"stay-{uuid.uuid4().hex[:12]}"
-        stay_data = {
-            "stay_id": stay_id,
-            "ticket_id": ticket_id,
-            "tenant_id": tenant_id,
-            "project_id": project_id,
-            "entered_at": now,
-            "exited_at": None,
-            "accountable_duration": 0.0,
-            "reason": reason,
-            "previous_team": from_team,
-            "created_at": now,
-        }
-
         async with self.engine.begin() as conn:
-            await conn.execute(insert(triage_queue_stays).values(stay_data))
+            stay_id = await self._transition_queue(conn, tenant_id, project_id, ticket_id, "RETURNED", now,
+                                                  reason=reason, previous_team=from_team)
             await conn.execute(
                 update(triage_tickets)
                 .where(
@@ -876,7 +884,6 @@ class TriageStore:
                 .values(
                     current_team="Triage Team",
                     work_state="RETURNED",
-                    status="Open",
                     updated_at=now,
                 )
             )
@@ -912,8 +919,8 @@ class TriageStore:
             ticket_id,
             None,
             "ticket.returned_to_triage",
-            "SYSTEM",
-            from_team,
+            "USER",
+            actor_id,
             f"Ticket returned from {from_team} to Triage Team: {reason}",
             {"previous_team": from_team},
         )
@@ -930,6 +937,8 @@ class TriageStore:
         actor: str = "Analyst",
     ) -> Dict[str, Any]:
         """Update ticket work_state, assigned team, or assignee."""
+        if not await self.get_ticket(tenant_id, project_id, ticket_id):
+            raise ValueError("Ticket not found")
         now = time.time()
         values: Dict[str, Any] = {"work_state": work_state, "updated_at": now}
         if assigned_team:
@@ -938,6 +947,7 @@ class TriageStore:
             values["assignee"] = assignee
 
         async with self.engine.begin() as conn:
+            await self._transition_queue(conn, tenant_id, project_id, ticket_id, work_state, now)
             await conn.execute(
                 update(triage_tickets)
                 .where(
@@ -961,7 +971,7 @@ class TriageStore:
             f"Stage updated to {work_state}{f' (assigned: {assigned_team})' if assigned_team else ''} by {actor}",
             {"work_state": work_state, "assigned_team": assigned_team},
         )
-        return await self.get_ticket(tenant_id, project_id, ticket_id) or {"ticket_id": ticket_id, **values}
+        return await self.get_ticket(tenant_id, project_id, ticket_id)
 
     async def add_ticket_comment(
         self,
@@ -973,6 +983,8 @@ class TriageStore:
         is_internal: bool = False,
     ) -> Dict[str, Any]:
         """Add and persist an analyst comment/note to a ticket investigation."""
+        if not await self.get_ticket(tenant_id, project_id, ticket_id):
+            raise ValueError("Ticket not found")
         now = time.time()
         event_id = f"cmt_{uuid.uuid4().hex[:12]}"
         payload = {
@@ -1128,7 +1140,7 @@ class TriageStore:
         project_id: str,
         ticket_id: str,
     ) -> Dict[str, Any]:
-        """Generate grounded multi-methodology RCA structures for a ticket."""
+        """Return persisted methodology results and compatible empty legacy structures."""
         ticket = await self.get_ticket(tenant_id, project_id, ticket_id)
         if not ticket:
             return {}
@@ -1136,204 +1148,166 @@ class TriageStore:
         inv = await self.get_investigation(tenant_id, project_id, ticket_id)
         findings = await self.get_findings(tenant_id, project_id, inv["investigation_id"]) if inv else []
 
-        service = ticket.get("service") or "application-service"
-        summary = ticket.get("summary") or "Incident"
-        primary_finding = findings[0]["statement"] if findings else f"High contention and timeout in {service}"
-
+        latest = select(
+            investigation_events.c.payload, investigation_events.c.occurred_at,
+            func.row_number().over(
+                partition_by=investigation_events.c.payload["method"].as_string(),
+                order_by=(investigation_events.c.occurred_at.desc(), investigation_events.c.event_id.desc()),
+            ).label("position"),
+        ).where(
+            investigation_events.c.tenant_id == tenant_id, investigation_events.c.project_id == project_id,
+            investigation_events.c.ticket_id == ticket_id,
+            investigation_events.c.event_type == "investigation.methodology",
+        ).subquery()
+        async with self.engine.connect() as connection:
+            rows = (await connection.execute(select(latest.c.payload, latest.c.occurred_at).where(
+                latest.c.position == 1))).mappings().all()
+        analyses = {row["payload"]["method"]: {
+            "run_id": row["payload"]["run_id"], "status": row["payload"]["status"],
+            "result": row["payload"]["result"], "created_at": row["occurred_at"],
+        } for row in rows}
         return {
-            "ticket_id": ticket_id,
-            "incident_title": f"[{ticket_id}] {summary}",
-            "five_whys": {
-                "steps": [
-                    {
-                        "level": 1,
-                        "question": f"Why is {service} failing to process requests?",
-                        "answer": "Connection timeouts and response drop rate spiked above 45%.",
-                        "evidence": "SignalFx APM p99 latency spiked to 14,200ms",
-                    },
-                    {
-                        "level": 2,
-                        "question": "Why did response drop rate spike and latencies reach 14s?",
-                        "answer": "Downstream database connection pool exhausted with zero available active connections.",
-                        "evidence": "Oracle HikariCP active=30/30, idle=0, pending_threads=84",
-                    },
-                    {
-                        "level": 3,
-                        "question": "Why did the connection pool exhaust completely?",
-                        "answer": "Row-level deadlocks occurred during high concurrent batch updates.",
-                        "evidence": "V$SESSION query revealed 18 blocking locks on account ledger tables",
-                    },
-                    {
-                        "level": 4,
-                        "question": "Why were row-level locks held without timely release?",
-                        "answer": "Missing auto-closing exception blocks held transaction open indefinitely on error.",
-                        "evidence": "Git commit diff showed unclosed transaction cursor in recent release",
-                    },
-                    {
-                        "level": 5,
-                        "question": "Why was the unclosed transaction allowed into production (Root Cause)?",
-                        "answer": "Database rollback integration test was skipped during emergency hotfix pipeline.",
-                        "evidence": "CI/CD build log #4092: 'DB_ROLLBACK_SUITE=skip' flag active",
-                    },
-                ],
-                "root_cause_summary": primary_finding,
-            },
-            "fishbone": {
-                "categories": [
-                    {
-                        "name": "Environment & Infrastructure",
-                        "factors": ["DC-EAST-1 load balancer proxy keepalive mismatch", "TCP connection teardown delays"],
-                        "confidence": 0.82,
-                    },
-                    {
-                        "name": "Code & Configuration",
-                        "factors": ["Missing try-with-resources in error handling block", "Connection checkout timeout set to 60s instead of 10s"],
-                        "confidence": 0.94,
-                    },
-                    {
-                        "name": "Data & Persistence",
-                        "factors": ["Row lock contention on BAN account records", "Lack of composite index on transaction_id + status"],
-                        "confidence": 0.88,
-                    },
-                    {
-                        "name": "Third-Party & Dependencies",
-                        "factors": ["External payment gateway webhook latency exceeded SLA", "Upstream retry storm"],
-                        "confidence": 0.74,
-                    },
-                    {
-                        "name": "Process & CI/CD",
-                        "factors": ["Integration testing suite bypassed during expedite", "Automated soak test not enforced"],
-                        "confidence": 0.91,
-                    },
-                ],
-            },
-            "kepner_tregoe": {
-                "dimensions": [
-                    {
-                        "dimension": "WHAT",
-                        "is_fact": f"Socket timeout and pool exhaustion on {service}",
-                        "is_not_fact": "Memory leak, CPU thrashing, or OOM crash",
-                        "distinction": "CPU is < 35%; issue strictly localized to thread/connection queues",
-                        "probable_cause": "Blocked thread execution waiting on lock acquisition",
-                    },
-                    {
-                        "dimension": "WHERE",
-                        "is_fact": "PROD Cluster Pods 02 and 03 (US-EAST)",
-                        "is_not_fact": "STAGING or PROD US-WEST clusters",
-                        "distinction": "US-EAST handles batch billing ingest jobs with high concurrent writes",
-                        "probable_cause": "Batch workload concurrency triggers deadlock race condition",
-                    },
-                    {
-                        "dimension": "WHEN",
-                        "is_fact": "Started at 09:14 AM immediately after batch schedule trigger",
-                        "is_not_fact": "Continuous error rate or weekend off-peak hours",
-                        "distinction": "Correlates directly with scheduled 09:15 AM billing run",
-                        "probable_cause": "Batch transaction overlap on identical partition keys",
-                    },
-                    {
-                        "dimension": "EXTENT",
-                        "is_fact": "18 accounts currently blocked; 84 threads pending",
-                        "is_not_fact": "All customer accounts or total system outage",
-                        "distinction": "Isolated to high-volume enterprise billing accounts",
-                        "probable_cause": "Specific table partition lock escalation",
-                    },
-                ],
-            },
-            "fmea": {
-                "modes": [
-                    {
-                        "failure_mode": "HikariCP Connection Pool Starvation",
-                        "effect": "HTTP 504 Gateway Timeouts on client checkout",
-                        "severity": 9,
-                        "cause": "Long-held transactions without socket read timeouts",
-                        "occurrence": 7,
-                        "detection": 4,
-                        "rpn": 252,
-                        "recommended_mitigation": "Configure maximumLifetime=30000ms and connectionTimeout=5000ms",
-                    },
-                    {
-                        "failure_mode": "Row-level Deadlock in Ledger Table",
-                        "effect": "Transaction rollback storm and repeated retries",
-                        "severity": 8,
-                        "cause": "Non-deterministic update sequence across threads",
-                        "occurrence": 6,
-                        "detection": 5,
-                        "rpn": 240,
-                        "recommended_mitigation": "Order table locks deterministically by account_id ASC",
-                    },
-                    {
-                        "failure_mode": "Upstream Ingress Gateway Retries",
-                        "effect": "Amplified traffic load during degraded backend state",
-                        "severity": 6,
-                        "cause": "Exponential backoff with zero jitter in API client",
-                        "occurrence": 8,
-                        "detection": 3,
-                        "rpn": 144,
-                        "recommended_mitigation": "Enforce full jitter retry algorithm on ingress client",
-                    },
-                ],
-            },
-            "fault_tree": {
-                "top_event": f"Critical SLA Outage on {service}",
-                "conclusion": "Dual Boolean condition verified: Active pool deadlock AND ingress retry amplification",
-                "active_cut_set": ["Row Lock Deadlock", "Connection Pool Starvation", "Ingress Retry Storm"],
-                "root_gate": {
-                    "operator": "OR",
-                    "status": "VERIFIED_TRUE",
-                    "children": [
-                        {
-                            "event": "Database Tier Failure",
-                            "operator": "AND",
-                            "status": "VERIFIED_TRUE",
-                            "description": "Exhaustion of database thread capacity",
-                            "children": [
-                                {
-                                    "event": "Active connection pool saturation (HikariCP 30/30)",
-                                    "probability": "0.98",
-                                    "status": "VERIFIED_TRUE",
-                                    "evidence": "Oracle HikariCP metrics",
-                                },
-                                {
-                                    "event": "Row-level exclusive table lock not released",
-                                    "probability": "0.94",
-                                    "status": "VERIFIED_TRUE",
-                                    "evidence": "V$SESSION blocking query output",
-                                },
-                            ],
-                        },
-                        {
-                            "event": "Infrastructure Network Degrade",
-                            "operator": "AND",
-                            "status": "FALSE",
-                            "description": "Physical switch or host connectivity drop",
-                            "children": [
-                                {
-                                    "event": "Packet loss on AWS VPC direct connect",
-                                    "probability": "0.02",
-                                    "status": "FALSE",
-                                    "evidence": "CloudWatch network packet loss < 0.001%",
-                                },
-                            ],
-                        },
-                    ],
-                },
-            },
-            "auto_ensemble": {
-                "incident_title": f"Composite SRE Synthesis: {ticket_id}",
-                "executive_summary": {
-                    "isolated_root_cause": primary_finding,
-                    "environmental_delta": "Scheduled batch job concurrency triggered unhandled lock escalation in recent build #4092",
-                    "critical_mitigation": "Apply HikariCP connectionTimeout=5000ms and patch deterministic account_id lock sequencing",
-                    "max_rpn": 252,
-                },
-            },
-            "context_budget": {
-                "system_instructions_tokens": 4200,
-                "domain_tools_schema_tokens": 3150,
-                "telemetry_evidence_tokens": 12840,
-                "previous_turn_history_tokens": 8420,
-                "current_prompt_tokens": 28610,
-                "max_budget_tokens": 128000,
-                "budget_utilization_pct": 22.3,
-            },
+            "ticket_id": ticket_id, "incident_title": ticket["summary"],
+            "available_methods": sorted(analyses), "analyses": analyses,
+            "five_whys": {"steps": [], "root_cause_summary": None},
+            "fishbone": {"categories": []}, "kepner_tregoe": {"dimensions": []},
+            "fmea": {"modes": []}, "fault_tree": {"top_event": None, "conclusion": None, "active_cut_set": [], "root_gate": None},
+            "auto_ensemble": {"incident_title": ticket["summary"], "executive_summary": {
+                "isolated_root_cause": None, "environmental_delta": None,
+                "critical_mitigation": None, "max_rpn": None}},
+            "context_budget": None,
+            "findings": findings,
         }
+
+    async def record_methodology_analysis(self, tenant_id, project_id, ticket_id, method, run, actor_id):
+        """Publish a completed native result to the ticket once, using its run identity."""
+        payload = {"method": method, "run_id": run.run_id, "status": run.status,
+                   "result": run.result.model_dump(mode="json")}
+        event_id = "method-" + run.run_id
+        async with self.engine.begin() as connection:
+            ticket = await connection.scalar(select(triage_tickets.c.ticket_id).where(
+                triage_tickets.c.tenant_id == tenant_id, triage_tickets.c.project_id == project_id,
+                triage_tickets.c.ticket_id == ticket_id).with_for_update())
+            if ticket is None:
+                raise ValueError("Ticket not found")
+            existing = (await connection.execute(select(investigation_events).where(
+                investigation_events.c.tenant_id == tenant_id, investigation_events.c.project_id == project_id,
+                investigation_events.c.event_id == event_id))).mappings().first()
+            if existing:
+                if existing["ticket_id"] != ticket_id or existing["payload"]["method"] != method:
+                    raise ValueError("The recorded run already belongs to another methodology")
+                return {**existing["payload"], "created_at": existing["occurred_at"]}
+            investigation_id = await connection.scalar(select(triage_investigations.c.investigation_id).where(
+                triage_investigations.c.tenant_id == tenant_id, triage_investigations.c.project_id == project_id,
+                triage_investigations.c.ticket_id == ticket_id))
+            await connection.execute(insert(investigation_events).values(
+                tenant_id=tenant_id, project_id=project_id, ticket_id=ticket_id,
+                investigation_id=investigation_id, event_id=event_id,
+                event_type="investigation.methodology", actor_type="USER", actor_id=actor_id,
+                summary=f"Recorded {method.replace('_', ' ')} investigation", payload=payload, occurred_at=run.created_at))
+        return {**payload, "created_at": run.created_at}
+
+    async def get_tool_proposal(self, tenant_id, project_id, proposal_id):
+        async with self.engine.connect() as connection:
+            row = (await connection.execute(select(tool_proposals).where(
+                tool_proposals.c.tenant_id == tenant_id, tool_proposals.c.project_id == project_id,
+                tool_proposals.c.proposal_id == proposal_id))).mappings().first()
+        return dict(row) if row else None
+
+    async def import_run(self, principal, run, ticket, bundles, connector_selections=None):
+        """Atomically project authentic run evidence; repeat imports do not duplicate records."""
+        tenant, project, ticket_id = principal.tenant_id, principal.project_id, str(ticket["key"])
+        if len(ticket_id) > 128 or not str(ticket.get("summary") or "").strip():
+            raise ValueError("Recorded ticket has no valid identity or summary")
+        now = time.time()
+        def timestamp(value):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed.timestamp() if parsed.tzinfo else None
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                return None
+        source_fields = {
+            "summary": str(ticket["summary"])[:512], "description": str(ticket.get("description") or ""),
+            "priority": str(ticket.get("priority") or "UNKNOWN")[:16], "status": str(ticket.get("status") or "Unknown")[:64],
+            "reporter": str(ticket["reporter"])[:128] if ticket.get("reporter") else None,
+            "environment": str(ticket["environment"])[:64] if ticket.get("environment") else None,
+            "labels": ticket.get("labels") or [],
+        }
+        source_metadata = {
+            "source_run_id": run.run_id, "source_run_created_at": run.created_at,
+            "source_created_at": timestamp(ticket.get("created")),
+            "source_resolved_at": timestamp(ticket.get("resolved")),
+        }
+        scope = {"tenant_id": tenant, "project_id": project, "ticket_id": ticket_id}
+        async with self.engine.begin() as connection:
+            # Serializes concurrent imports and local transitions on an existing ticket.
+            row = (await connection.execute(select(triage_tickets).where(
+                triage_tickets.c.tenant_id == tenant, triage_tickets.c.project_id == project,
+                triage_tickets.c.ticket_id == ticket_id).with_for_update())).mappings().first()
+            if row is None:
+                created = False
+                try:
+                    async with connection.begin_nested():
+                        await connection.execute(insert(triage_tickets).values(**scope,
+                            **source_fields, custom_fields=source_metadata,
+                            assignee=str(ticket["assignee"])[:128] if ticket.get("assignee") else None,
+                            created_at=source_metadata["source_created_at"] if source_metadata["source_created_at"] is not None else now,
+                            updated_at=now))
+                        created = True
+                except IntegrityError:
+                    row = (await connection.execute(select(triage_tickets).where(
+                        triage_tickets.c.tenant_id == tenant, triage_tickets.c.project_id == project,
+                        triage_tickets.c.ticket_id == ticket_id).with_for_update())).mappings().first()
+                    if row is None:
+                        raise
+                if created:
+                    await connection.execute(insert(triage_queue_stays).values(**scope,
+                        stay_id="stay-" + uuid.uuid4().hex, entered_at=now, created_at=now,
+                        reason="Added from recorded investigation"))
+            inv = (await connection.execute(select(triage_investigations).where(
+                triage_investigations.c.tenant_id == tenant, triage_investigations.c.project_id == project,
+                triage_investigations.c.ticket_id == ticket_id))).mappings().first()
+            investigation_id = inv["investigation_id"] if inv else "inv-" + uuid.uuid4().hex
+            if inv is None:
+                await connection.execute(insert(triage_investigations).values(**scope,
+                    investigation_id=investigation_id, auto_triage_run_id=run.run_id,
+                    auto_triage_summary=run.result.model_dump(mode="json") if run.result else {},
+                    created_at=now, updated_at=now))
+            imported = await connection.scalar(select(investigation_events.c.event_id).where(
+                investigation_events.c.tenant_id == tenant, investigation_events.c.project_id == project,
+                investigation_events.c.event_id == "import-" + run.run_id))
+            if imported:
+                return {"ticket_id": ticket_id, "investigation_id": investigation_id, "run_id": run.run_id}
+            newest = row is None or run.created_at >= ((row["custom_fields"] or {}).get("source_run_created_at") or 0)
+            if row is not None and newest:
+                await connection.execute(update(triage_tickets).where(
+                    triage_tickets.c.tenant_id == tenant, triage_tickets.c.project_id == project,
+                    triage_tickets.c.ticket_id == ticket_id).values(
+                    **source_fields, custom_fields={**(row["custom_fields"] or {}), **source_metadata}, updated_at=now))
+            for bundle in bundles:
+                await connection.execute(insert(investigation_evidence).values(**scope,
+                    investigation_id=investigation_id, evidence_id=bundle.evidence_id,
+                    source=bundle.source.connector, query_ref=bundle.run_id,
+                    summary=f"Recorded {bundle.source.system} evidence", payload_json=bundle.model_dump(mode="json"),
+                    confidence=0, status="CANDIDATE", created_at=now))
+            for index, finding in enumerate(run.result.findings if run.result else []):
+                await connection.execute(insert(investigation_findings).values(**scope,
+                    investigation_id=investigation_id, finding_id=f"fnd-{run.run_id}-{index}",
+                    statement=finding.summary, confidence=0, status="PROPOSED",
+                    evidence_refs=finding.evidence_ids, created_at=now))
+            for index, question in enumerate(run.result.follow_up_questions if run.result else []):
+                await connection.execute(insert(tool_proposals).values(**scope,
+                    investigation_id=investigation_id, proposal_id=f"prop-{run.run_id}-{index}",
+                    capability=run.capability, title="Follow-up investigation", rationale="Saved follow-up question from the recorded investigation",
+                    generated_query=question, current_query=question,
+                    parameters={"connector_selections": {name: selection.model_dump(mode="json")
+                        for name, selection in (connector_selections or {}).items()}}, created_at=now, updated_at=now))
+            if inv and newest:
+                await connection.execute(update(triage_investigations).where(
+                    triage_investigations.c.investigation_id == investigation_id).values(
+                    auto_triage_run_id=run.run_id, auto_triage_summary=run.result.model_dump(mode="json") if run.result else {}, updated_at=now))
+            await connection.execute(insert(investigation_events).values(**scope,
+                event_id="import-" + run.run_id, investigation_id=investigation_id,
+                event_type="investigation.imported", actor_type="USER", actor_id=principal.subject,
+                summary="Recorded investigation added to project triage", payload={"run_id": run.run_id}, occurred_at=now))
+        return {"ticket_id": ticket_id, "investigation_id": investigation_id, "run_id": run.run_id}

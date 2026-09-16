@@ -1,3 +1,4 @@
+import { RunConnectorSelectors, useRunConnectorSelections } from '../../../components/RunConnectorSelectors';
 import React, { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Play, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { fetchStudioTrace, streamStudioRun, StudioTrace, StudioTraceEvent } from '../harnessApi';
@@ -13,6 +14,7 @@ function display(value: unknown): string {
 }
 
 export const Playground: React.FC<PlaygroundProps> = ({ harness, capability, onTrace }) => {
+  const connectorScope = useRunConnectorSelections(capability);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,12 +25,19 @@ export const Playground: React.FC<PlaygroundProps> = ({ harness, capability, onT
   const traceRef = useRef<StudioTrace | null>(null);
   const traceFetchRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const attemptRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const runningRef = useRef(false);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const run = async (value?: string) => {
     const prompt = (value ?? input).trim();
-    if (!prompt || running) return;
+    if (!prompt || runningRef.current || !connectorScope.ready) return;
+    runningRef.current = true;
+    const connectorSelections = connectorScope.selections;
+    const fingerprint = JSON.stringify({ capability, prompt, connectorSelections });
+    if (attemptRef.current?.fingerprint !== fingerprint) attemptRef.current = { fingerprint, key: crypto.randomUUID() };
+    const attempt = attemptRef.current;
     setInput(''); setError(null); setRunning(true); setEvents([]); setRunId(null); traceRef.current = null; traceFetchRef.current = null; onTrace?.(null);
     setMessages(current => [...current, { id: `user-${Date.now()}`, role: 'user', content: prompt, timestamp: new Date().toLocaleTimeString() }]);
     const controller = new AbortController(); abortRef.current = controller;
@@ -47,21 +56,22 @@ export const Playground: React.FC<PlaygroundProps> = ({ harness, capability, onT
           }
         }
         if (event.type === 'complete') {
+          attemptRef.current = null;
           const summary = data.summary || data.result || data.reason || data.message || (data.status ? `Run ${String(data.status).toLowerCase()}.` : 'Run complete.');
           if (summary) setMessages(current => [...current, { id: `assistant-${Date.now()}`, role: 'assistant', content: display(summary), timestamp: new Date().toLocaleTimeString() }]);
         }
-        if (event.type === 'error') setError(String(data.message || data.detail || 'Run failed'));
-      }, controller.signal);
+        if (event.type === 'error') { attemptRef.current = null; setError(String(data.message || data.detail || 'Run failed')); }
+      }, controller.signal, { connectorSelections, idempotencyKey: attempt.key });
       if (receivedRunId) {
         try { const trace = await fetchStudioTrace(receivedRunId); traceRef.current = trace; setEvents(trace.events || []); onTrace?.(trace); } catch (cause) { setError(cause instanceof Error ? `Trace unavailable: ${cause.message}` : 'Trace unavailable'); }
       }
     } catch (cause) {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Run failed');
-    } finally { setRunning(false); abortRef.current = null; }
+      if (!controller.signal.aborted) { setError(cause instanceof Error ? cause.message : 'Run failed'); setInput(current => current || prompt); }
+    } finally { runningRef.current = false; setRunning(false); abortRef.current = null; }
   };
 
   const stop = () => abortRef.current?.abort();
-  const clear = () => { setMessages([]); setEvents([]); setRunId(null); setError(null); onTrace?.(null); };
+  const clear = () => { if (runningRef.current) return; attemptRef.current = null; setMessages([]); setEvents([]); setRunId(null); setError(null); onTrace?.(null); };
 
   return (
     <div className="hs-playground">
@@ -74,8 +84,9 @@ export const Playground: React.FC<PlaygroundProps> = ({ harness, capability, onT
         {showTrace && runId && events.length === 0 && !running && <div className="hs-playground-empty">Trace unavailable for this historical run.</div>}
         {showTrace && events.length > 0 && <div className="hs-trace-list"><div className="hs-trace-title">Execution trace <span>{events.length} events{runId ? ` · ${runId}` : ''}</span></div>{events.map((event, index) => <div className="hs-trace-event" key={`${event.sequence}-${index}`}><span className="hs-trace-sequence">{event.sequence}</span><span className="hs-trace-kind">{event.kind}</span><span className="hs-trace-node">{event.node_id || 'runtime'}</span>{event.timestamp && <time>{String(event.timestamp)}</time>}<details><summary>details</summary><pre>{display(event.details || event)}</pre></details></div>)}</div>}
       </div>
-      <div className="hs-playground-chips"><button type="button" onClick={() => void run('Summarize the latest incident evidence and identify unresolved questions.')}>Summarize evidence</button><button type="button" onClick={() => void run('Build an evidence-backed incident timeline.')}>Build timeline</button></div>
-      <form className="hs-playground-form" onSubmit={event => { event.preventDefault(); if (!running) void run(); }}><textarea value={input} onChange={event => setInput(event.target.value)} placeholder="Ask the active harness…" rows={2} disabled={running} />{running ? <button type="button" className="btn btn-primary" onClick={stop}><Square size={14} /><span>Stop</span></button> : <button type="submit" className="btn btn-primary" disabled={!input.trim()}><Play size={14} /><span>Run</span></button>}</form>
+      <RunConnectorSelectors state={connectorScope} disabled={running} />
+      <div className="hs-playground-chips"><button type="button" disabled={running || !connectorScope.ready} onClick={() => void run('Summarize the latest incident evidence and identify unresolved questions.')}>Summarize evidence</button><button type="button" disabled={running || !connectorScope.ready} onClick={() => void run('Build an evidence-backed incident timeline.')}>Build timeline</button></div>
+      <form className="hs-playground-form" onSubmit={event => { event.preventDefault(); if (!running) void run(); }}><textarea value={input} onChange={event => setInput(event.target.value)} placeholder="Ask the active harness…" rows={2} disabled={running} />{running ? <button type="button" className="btn btn-primary" onClick={stop}><Square size={14} /><span>Stop</span></button> : <button type="submit" className="btn btn-primary" disabled={!input.trim() || !connectorScope.ready}><Play size={14} /><span>Run</span></button>}</form>
     </div>
   );
 };

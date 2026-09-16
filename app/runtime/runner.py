@@ -492,6 +492,19 @@ class ExecutionRunner:
             )
         if len(request.text) > self.settings.max_input_chars:
             raise ValueError("Prompt exceeds configured input limit")
+        request_hash = content_hash({
+            "request": request.model_dump(mode="json"),
+            "capability": capability_id,
+            "mode": self.settings.mode,
+        })
+        existing = await self.store.find_idempotent_run(principal, idempotency_key, request_hash)
+        if existing is not None:
+            if existing.chat_id:
+                await self.store.require_chat(existing.chat_id, principal)
+            if on_created:
+                await on_created(existing)
+            await self._save_chat_output(existing, principal)
+            return existing
         async with self._run_slot():
             capability = preliminary.capability
             files = (
@@ -634,6 +647,7 @@ class ExecutionRunner:
                 chat_id=chat_id,
                 incident_id=request.incident_id,
                 attachment_ids=request.attachment_ids,
+                connector_selections=request.connector_selections,
             )
             contract = RunContract(
                 tenant_id=principal.tenant_id,
@@ -658,18 +672,12 @@ class ExecutionRunner:
             response, created = await self.store.create_run(
                 contract,
                 idempotency_key,
-                content_hash(
-                    {
-                        "request": request.model_dump(mode="json"),
-                        "capability": capability_id,
-                        "mode": self.settings.mode,
-                    }
-                ),
+                request_hash,
                 time.time() + effective_settings.run_timeout_seconds,
             )
-            if on_created:
-                await on_created(response)
             if not created:
+                if on_created:
+                    await on_created(response)
                 await self._save_chat_output(response, principal)
                 return response
             started = time.perf_counter()
@@ -699,11 +707,13 @@ class ExecutionRunner:
                     if span.is_recording()
                     else None
                 )
-                await self.store.update_run(
-                    contract.run_id, principal, stage="preflight", trace_id=trace_id
-                )
                 try:
                     async with asyncio.timeout(effective_settings.run_timeout_seconds):
+                        if on_created:
+                            await on_created(response)
+                        await self.store.update_run(
+                            contract.run_id, principal, stage="preflight", trace_id=trace_id
+                        )
                         response = await self._execute_contract(
                             contract,
                             capability,
@@ -765,8 +775,10 @@ class ExecutionRunner:
                             cancelled=response.status == "CANCELLED"
                         ))
                     finally:
-                        await self._close_run_connectors(contract.run_id)
-                        self.tasks.pop(contract.run_id, None)
+                        try:
+                            await self._close_run_connectors(contract.run_id)
+                        finally:
+                            self.tasks.pop(contract.run_id, None)
                 record_run_metrics(
                     span,
                     status=response.status,
@@ -967,11 +979,7 @@ class ExecutionRunner:
             raise ValueError("ADK did not produce a structured final response")
         evidence = await self.store.list_by_run(contract.run_id, principal)
         valid_ids = {item.evidence_id for item in evidence}
-        if any(
-            not set(finding.evidence_ids).issubset(valid_ids)
-            for finding in final.findings
-        ):
-            raise ValueError("Synthesis cited unknown evidence")
+        final.validate_evidence(valid_ids)
         if not evidence and final.outcome == "FINDINGS":
             raise ValueError("Findings require recorded evidence")
         limitations = list(

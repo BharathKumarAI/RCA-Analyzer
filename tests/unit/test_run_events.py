@@ -101,6 +101,7 @@ class RunEventStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sorted(record["sequence"] for record in records), list(range(1, 33))
         )
+        self.assertFalse(self.events._run_locks)
 
     async def test_rejects_unknown_run(self):
         with self.assertRaises(PermissionError):
@@ -193,6 +194,59 @@ class RunEventStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("event: run", body)
         self.assertIn("event: progress", body)
         self.assertIn("event: trace", body)
+        self.assertIn("event: complete", body)
+
+    async def test_stream_waits_for_terminal_cleanup_events(self):
+        from app.api.schemas import RunExecutionRequest
+
+        state = SimpleNamespace(store=self.store, run_events=self.events,
+                                settings=SimpleNamespace(progress_poll_seconds=0.001))
+        request = SimpleNamespace(app=SimpleNamespace(state=state))
+        cleanup_finished = asyncio.Event()
+        release_cleanup = asyncio.Event()
+        response_id = self.run.run_id
+
+        class Runner:
+            async def execute(self, principal, request, capability, key, *, on_created):
+                await on_created(response_id)
+                result = await state.store.update_run(response_id, principal, status="CANCELLED")
+                # Keep cleanup pending while the stream observes the terminal row.
+                asyncio.get_running_loop().call_later(0.03, release_cleanup.set)
+                await release_cleanup.wait()
+                await state.run_events.append(response_id, principal, "tool", "tool_cancelled", {})
+                cleanup_finished.set()
+                return result
+
+        state.runner = Runner()
+        response = await _stream_run(request, self.principal, RunExecutionRequest(prompt="Investigate"), None)
+        body = "".join([chunk async for chunk in response.body_iterator])
+        self.assertTrue(cleanup_finished.is_set())
+        self.assertIn('"kind":"tool_cancelled"', body)
+        self.assertLess(body.index('"kind":"tool_cancelled"'), body.index("event: complete"))
+
+    async def test_active_replay_polls_at_configured_interval(self):
+        from app.api.schemas import RunExecutionRequest
+
+        state = SimpleNamespace(store=self.store, run_events=self.events,
+                                settings=SimpleNamespace(progress_poll_seconds=0.01))
+        request = SimpleNamespace(app=SimpleNamespace(state=state))
+        response_id = self.run.run_id
+
+        class Runner:
+            async def execute(self, principal, request, capability, key, *, on_created):
+                existing = await state.store.get_run(response_id, principal)
+                await on_created(existing)
+                return existing
+
+        async def advance_run(delay):
+            self.assertEqual(delay, state.settings.progress_poll_seconds)
+            await state.store.update_run(response_id, self.principal, status="SUCCEEDED")
+
+        state.runner = Runner()
+        response = await _stream_run(request, self.principal, RunExecutionRequest(prompt="Investigate"), "existing")
+        with patch("app.api.routes.runs.asyncio.sleep", side_effect=advance_run) as sleep:
+            body = "".join([chunk async for chunk in response.body_iterator])
+        self.assertTrue(sleep.called)
         self.assertIn("event: complete", body)
 
 

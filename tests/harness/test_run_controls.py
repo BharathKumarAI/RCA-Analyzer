@@ -1,12 +1,16 @@
 """Run budgets and cancellation stop actual ADK execution."""
 
 import asyncio
+import json
+import sqlite3
 import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.fast_api_app import create_app
+from app.runtime.run_contract import RunRequest
 from tests.support import FixtureModel, connectors, settings_for
 
 
@@ -54,7 +58,7 @@ class RunControlsTests(unittest.TestCase):
                 pending = pool.submit(
                     client.post,
                     "/api/v1/runs",
-                    headers=token(),
+                    headers={**token(), "Idempotency-Key": "active-investigation"},
                     json={"prompt": "Investigate", "incident_id": "SAMSON-101"},
                 )
                 deadline = time.monotonic() + 3
@@ -63,6 +67,19 @@ class RunControlsTests(unittest.TestCase):
                     active = client.get("/api/v1/runs", headers=token()).json()
                     time.sleep(0.02)
                 self.assertTrue(active)
+                replay = client.post(
+                    "/api/v1/runs",
+                    headers={**token(), "Idempotency-Key": "active-investigation"},
+                    json={"prompt": "Investigate", "incident_id": "SAMSON-101"},
+                )
+                self.assertEqual(replay.status_code, 200, replay.text)
+                self.assertEqual(replay.json()["run_id"], active[0]["run_id"])
+                conflict = client.post(
+                    "/api/v1/runs",
+                    headers={**token(), "Idempotency-Key": "active-investigation"},
+                    json={"prompt": "Changed investigation"},
+                )
+                self.assertEqual(conflict.status_code, 409, conflict.text)
                 rejected = client.post(
                     "/api/v1/runs", headers=token(), json={"prompt": "Another run"}
                 )
@@ -74,3 +91,38 @@ class RunControlsTests(unittest.TestCase):
                 self.assertEqual(
                     pending.result(timeout=3).json()["status"], "CANCELLED"
                 )
+
+    def test_cancel_during_creation_callback_finalizes_saved_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings, _ = settings_for(directory)
+            with TestClient(create_app(settings, connectors=connectors())) as client:
+                runner = client.app.state.runner
+
+                async def cancel_on_created(_response):
+                    raise asyncio.CancelledError()
+
+                response = client.portal.call(
+                    runner.execute, settings.principals["analyst"], RunRequest(text="Investigate"),
+                    "incident_triage", None, cancel_on_created,
+                )
+                self.assertEqual(response.status, "CANCELLED")
+                self.assertFalse(runner.tasks)
+                self.assertEqual(runner.run_limiter._value, runner._run_limit)
+
+    def test_connector_selection_reaches_resolution_and_persisted_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings, token = settings_for(directory, mode="live")
+            with TestClient(create_app(settings, connectors=connectors())) as client:
+                runner = client.app.state.runner
+                selected = {"itsm": {"instance_id": "jira_prod", "environment_id": "prod"}}
+                with patch.object(runner, "_connectors_for_run", wraps=runner._connectors_for_run) as resolve:
+                    response = client.post("/api/v1/runs", headers=token(), json={
+                        "prompt": "Investigate", "connector_selections": selected,
+                    })
+                self.assertEqual(response.status_code, 200, response.text)
+                actual = resolve.await_args.args[3]
+                self.assertEqual({key: value.model_dump() for key, value in actual.items()}, selected)
+                with sqlite3.connect(f"{directory}/runs.db") as connection:
+                    saved = connection.execute("SELECT contract_json FROM runs WHERE run_id = ?",
+                                               (response.json()["run_id"],)).fetchone()[0]
+                self.assertEqual(json.loads(saved)["request"]["connector_selections"], selected)

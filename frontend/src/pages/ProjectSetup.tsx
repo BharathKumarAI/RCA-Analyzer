@@ -1473,7 +1473,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
                             return true;
                           })
                           .map(tmpl => {
-                            const isBlocked = tmpl.availability === 'disabled_by_policy' || tmpl.system_name === 'oracle';
+                            const isBlocked = tmpl.availability === 'disabled_by_policy';
                             return (
                               <div
                                 key={tmpl.template_id || tmpl.system_name}
@@ -1550,7 +1550,7 @@ export const ProjectSetup: React.FC<{ onNewInvestigation?: () => void; onOvervie
                             const matchingTmpl = connectorTemplates.find(
                               t => t.system_name === conn.system_name || t.template_id === conn.template_id
                             );
-                            const isBlocked = conn.system_name === 'oracle' || matchingTmpl?.availability === 'disabled_by_policy';
+                            const isBlocked = matchingTmpl?.availability === 'disabled_by_policy';
                             return (
                               <div
                                 key={conn.instance_id}

@@ -10,6 +10,8 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
+    RCA_MODE=live \
+    RCA_DATABASE_CONFIGURATION=true \
     PORT=8000
 
 WORKDIR /app
@@ -34,4 +36,6 @@ COPY migrations ./migrations
 USER appuser
 
 EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=4)"
 CMD ["uvicorn", "app.fast_api_app:app", "--host", "0.0.0.0", "--port", "8000"]

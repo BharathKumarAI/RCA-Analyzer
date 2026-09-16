@@ -45,7 +45,8 @@ export interface SreMetrics {
   tickets_resolved: number;
   tickets_active: number;
   sla_compliance_rate: number | null;
-  ongoing_breaches: number;
+  ongoing_breaches: number | null;
+  sla_evaluated_tickets?: number;
   priority_breakdown: Record<'P1' | 'P2' | 'P3' | 'P4', number>;
   analyst_validation: {
     confirmed: number;

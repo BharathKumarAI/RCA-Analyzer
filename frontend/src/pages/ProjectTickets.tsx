@@ -16,10 +16,11 @@ import type { FocusQueueItem, LiveBoardResponse } from '../types/triage';
 import { TicketDetailPanel } from '../components/TicketDetailPanel';
 
 interface ProjectTicketsProps {
+  canEdit?: boolean;
   projectKey?: string;
 }
 
-export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ projectKey = 'DEFAULT' }) => {
+export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ canEdit = false, projectKey = 'DEFAULT' }) => {
   const [boardData, setBoardData] = useState<LiveBoardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +122,7 @@ export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ projectKey = 'DE
               >
                 {projectKey} • OPERATIONS
               </span>
-              <span className="badge badge-teal">Live Jira Two-Way Sync</span>
+              <span className="badge badge-teal">Saved project tickets</span>
               <span className="badge badge-magenta">SLA Governed</span>
             </div>
             <h1
@@ -323,7 +324,7 @@ export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ projectKey = 'DE
                           display: 'flex',
                           alignItems: 'center',
                           gap: '6px',
-                          color: isBreached ? 'var(--accent-rose)' : 'var(--accent-teal)',
+                          color: sla.risk_state === 'UNKNOWN' ? 'var(--ink-secondary)' : isBreached ? 'var(--accent-rose)' : 'var(--accent-teal)',
                           fontWeight: 700,
                         }}
                       >
@@ -338,7 +339,7 @@ export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ projectKey = 'DE
 
                     <td style={{ padding: '12px 16px' }}>
                       <span className="badge badge-magenta" style={{ gap: '4px' }}>
-                        <Zap size={10} /> 89% RCA
+                        <Zap size={10} /> Review findings
                       </span>
                     </td>
 
@@ -362,6 +363,7 @@ export const ProjectTickets: React.FC<ProjectTicketsProps> = ({ projectKey = 'DE
       {/* Slide-out Ticket Detail Drawer */}
       {selectedTicketId && (
         <TicketDetailPanel
+          canEdit={canEdit}
           ticketId={selectedTicketId}
           onClose={() => setSelectedTicketId(null)}
           onTicketUpdated={loadData}

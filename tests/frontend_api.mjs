@@ -11,6 +11,7 @@ const api = await import(`data:text/javascript;base64,${Buffer.from(output).toSt
 assert.equal(api.getSessionToken(), null);
 assert.equal(storage.has('rca_auth_token'), false);
 let calls = [];
+let expectedSelections;
 globalThis.fetch = async (path, init = {}) => {
   calls.push({ path, init });
   if (path.endsWith('/invalid')) return responseError(422, [{ loc: ['body', 'prompt'], msg: 'String should have at least 1 character' }]);
@@ -18,7 +19,7 @@ globalThis.fetch = async (path, init = {}) => {
   const body = init.body && !(init.body instanceof FormData) ? JSON.parse(init.body) : undefined;
   if (path === '/api/v1/me') return response({ subject: 'operator@example.test', roles: ['OPERATOR'], tenant_id: 't1', project_id: 'p1' });
   if (path.startsWith('/api/v1/runs?')) return response([]);
-  if (path === '/api/v1/runs') { assert.deepEqual(body, { capability: 'incident_triage', prompt: 'Inspect', incident_id: 'INC-1', chat_id: 'chat_' + 'b'.repeat(32), attachment_ids: ['att_1'] }); return response({ run_id: 'run_SUCCEEDED', capability: 'incident_triage', status: 'SUCCEEDED', created_at: 10, updated_at: 12 }); }
+  if (path === '/api/v1/runs') { assert.deepEqual(body, { capability: 'incident_triage', prompt: 'Inspect', incident_id: 'INC-1', chat_id: 'chat_' + 'b'.repeat(32), attachment_ids: ['att_1'], ...(expectedSelections ? { connector_selections: expectedSelections } : {}) }); return response({ run_id: 'run_SUCCEEDED', capability: 'incident_triage', status: 'SUCCEEDED', created_at: 10, updated_at: 12 }); }
   if (path === '/api/v1/agent-configurations') return response([{ draft_id: 'draft_1', author_subject: 'operator@example.test', content_hash: 'sha256:' + 'a'.repeat(64), status: 'PENDING', created_at: 10, definition: { id: 'agent_one', version: '1.0.0', name: 'Agent One', description: 'test', instruction: 'inspect', capability: 'incident_triage', model_profile: 'balanced-investigation', tools: ['itsm.get_ticket'] } }]);
   if (path.endsWith('/approve')) { assert.deepEqual(body, { expected_hash: 'sha256:' + 'a'.repeat(64), reason: 'reviewed' }); return response({ draft_id: 'draft_1', status: 'APPROVED', content_hash: 'sha256:' + 'a'.repeat(64), created_at: 10, author_subject: 'operator@example.test', definition: { id: 'agent_one', version: '1.0.0', name: 'Agent One', description: '', instruction: '', capability: 'incident_triage' } }); }
   if (path.endsWith('/revoke')) { assert.deepEqual(body, { reason: 'retired' }); return response({ draft_id: 'draft_1', status: 'REVOKED', content_hash: 'sha256:' + 'a'.repeat(64), created_at: 10, author_subject: 'operator@example.test', definition: { id: 'agent_one', version: '1.0.0', name: 'Agent One', description: '', instruction: '', capability: 'incident_triage' } }); }
@@ -56,6 +57,9 @@ for (const status of ['BLOCKED', 'PARTIAL', 'CANCELLED', 'SIMULATED', 'FAILED'])
 await api.uploadInvestigationFiles([new File(['log'], 'incident.log')], 'chat_' + 'b'.repeat(32));
 const triggered = await api.triggerRun('incident_triage', 'Inspect', 'INC-1', ['att_1'], 'chat_' + 'b'.repeat(32));
 assert.equal(triggered.id, 'run_SUCCEEDED');
+expectedSelections = { jira: { instance_id: 'support-east', environment_id: 'production' }, splunk: { instance_id: 'logs-primary' } };
+await api.triggerRun('incident_triage', 'Inspect', 'INC-1', ['att_1'], 'chat_' + 'b'.repeat(32), expectedSelections);
+assert.deepEqual(JSON.parse(calls.at(-1).init.body).connector_selections, expectedSelections);
 await assert.rejects(() => api.fetchRun('invalid'), error => error.status === 422 && error.message === 'body.prompt: String should have at least 1 character');
 await assert.rejects(() => api.fetchRun('network'), error => error.status === 0 && error.message === 'offline');
 await assert.rejects(() => api.fetchAuditLogs(), error => error.status === 403 && error.message === 'denied');
